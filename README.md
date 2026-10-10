@@ -346,9 +346,11 @@ node scripts/verify.mjs --only icons # 只跑某一道
 | [React](https://react.dev/) | 界面库 | MIT |
 | [Vite](https://vitejs.dev/) | 构建工具 | MIT |
 | [Node.js](https://nodejs.org/) | 构建 / 运行环境 | MIT |
+| [7-Zip](https://www.7-zip.org/) | 便携安装器解压随包负载 | LGPL |
 | [FFmpeg](https://ffmpeg.org/)（可选） | 成片导出 | LGPL / GPL |
 
 各组件遵循其自身的开源许可证。FFmpeg 默认不随包分发，是否随包由打包者决定。
+7-Zip 的 `7za` 命令行工具（21.07 x64）随仓库提交，供便携安装器在安装阶段解压随包负载。
 
 ---
 
