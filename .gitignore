@@ -1,1 +1,60 @@
-# 占位，稍后由初始提交覆盖
+node_modules/
+dist/
+dist-electron/
+dist-renderer/
+dist-win/
+dist-installer/
+# 中间产物绕行目录：输出目录被占用时用 --app-out / --installer-out 落到带后缀的目录
+dist-win*/
+dist-installer*/
+release/
+_site/
+_vitebuild/
+.vite/
+
+# 安装器主程序数据包：由 packages/installer/scripts/pack-payload.mjs 生成，体积大不入库
+# （payload/bin/7za.exe 与 resources/7za.exe 是必须随包提交的资产，不在此列）
+packages/installer/payload/app.7z
+
+# ffmpeg 随包目录：README.txt 入库说明怎么拿，二进制本身不入库
+# （不入库的真正原因是许可证 —— GPL/LGPL 的二进制不该进 MIT 仓库，
+#   能不能随**安装包**分发由打包者决定，见 tools/fetch-ffmpeg.mjs）
+packages/desktop/resources/ffmpeg/*.exe
+packages/desktop/resources/ffmpeg/*.zip
+packages/desktop/resources/ffmpeg/*.7z
+
+# 运行期数据（导出临时文件、用户数据目录）
+packages/desktop/exports/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# 环境与密钥（本版不需要任何环境变量即可运行，这里只是防止误提交）
+.env
+.env.local
+.env.*.local
+
+# 排查产物（本仓库根目录下的侦察/调试文件）
+_probe_*
+_smoke*
+_srv*
+_tmp_*
+*.log
+npm-debug.log*
+
+# 侦察/取证目录：README 里说明方法，产物不入库
+_recon/
+_evidence/
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# vite 运行期临时文件
+vite.config.mjs.timestamp-*
+
+# 内部过程记录（工作日志 / 探针残留）不入库
+.workbuddy/

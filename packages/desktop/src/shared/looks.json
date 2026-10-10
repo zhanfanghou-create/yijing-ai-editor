@@ -1,0 +1,83 @@
+{
+  "$comment": [
+    "滤镜与转场的参数表 —— 唯一真源。",
+    "",
+    "为什么是 JSON 而不是 .js：这份表要被两处消费，而两处的模块体系不同 ——",
+    "  渲染层（Vite/ESM）要拿它算 CSS filter 做**预览**；",
+    "  主进程（render.js 是 CommonJS）要拿它算 ffmpeg filter 做**导出**。",
+    "JSON 两边都能原生读，不必为了复用去改主进程的模块制式，也不会出现“两份表各自漂移”。",
+    "",
+    "滤镜参数的可映射性（这是本表能被信任的前提）：",
+    "  CSS 的 brightness/contrast/saturate/grayscale/sepia 与 ffmpeg 的对应写法逐一等价，",
+    "  详见 src/main/looks.js 的注释（brightness 用 colorchannelmixer 做**乘性**增益，",
+    "  与 CSS 的乘性 brightness 同义；sepia 用同一组标准矩阵，两侧数值完全一致）。",
+    "  唯一条目是 cool：hue 旋转在 CSS 与 ffmpeg 里用的是两套不同的近似矩阵，",
+    "  色相偏移小、肉眼一致，但严格说不是逐像素相等，所以它标了 approx:true。",
+    "  预览里它看起来是什么样，导出后基本就是什么样；如需绝对一致请勿使用该项。"
+  ],
+  "filters": [
+    {
+      "key": "none",
+      "label": "原片",
+      "hint": "不做调色",
+      "params": { "brightness": 1, "contrast": 1, "saturate": 1, "grayscale": 0, "sepia": 0, "hue": 0 }
+    },
+    {
+      "key": "bright",
+      "label": "明亮",
+      "hint": "整体提亮，暗部更通透",
+      "params": { "brightness": 1.12, "contrast": 1.04, "saturate": 1.05, "grayscale": 0, "sepia": 0, "hue": 0 }
+    },
+    {
+      "key": "vivid",
+      "label": "鲜艳",
+      "hint": "对比与饱和双升，适合商品与风景",
+      "params": { "brightness": 1.02, "contrast": 1.16, "saturate": 1.34, "grayscale": 0, "sepia": 0, "hue": 0 }
+    },
+    {
+      "key": "soft",
+      "label": "柔和",
+      "hint": "压对比、提亮，人像友好",
+      "params": { "brightness": 1.09, "contrast": 0.9, "saturate": 0.93, "grayscale": 0, "sepia": 0, "hue": 0 }
+    },
+    {
+      "key": "warm",
+      "label": "暖调",
+      "hint": "偏暖黄，适合生活与美食",
+      "params": { "brightness": 1.04, "contrast": 1.05, "saturate": 1.08, "grayscale": 0, "sepia": 0.32, "hue": 0 }
+    },
+    {
+      "key": "cool",
+      "label": "冷调",
+      "hint": "偏冷蓝，适合科技与夜景（近似映射）",
+      "approx": true,
+      "params": { "brightness": 1.0, "contrast": 1.06, "saturate": 1.06, "grayscale": 0, "sepia": 0, "hue": -14 }
+    },
+    {
+      "key": "mono",
+      "label": "黑白",
+      "hint": "去色并提对比",
+      "params": { "brightness": 1.04, "contrast": 1.16, "saturate": 1, "grayscale": 1, "sepia": 0, "hue": 0 }
+    },
+    {
+      "key": "retro",
+      "label": "复古",
+      "hint": "降饱和 + 棕调，胶片感",
+      "params": { "brightness": 0.99, "contrast": 1.1, "saturate": 0.86, "grayscale": 0, "sepia": 0.58, "hue": -6 }
+    }
+  ],
+  "transitions": [
+    { "key": "none", "label": "无", "hint": "硬切，不占用时长", "ffmpeg": null, "defaultDuration": 0 },
+    { "key": "fade", "label": "淡入淡出", "hint": "最通用的过渡", "ffmpeg": "fade", "defaultDuration": 0.6 },
+    { "key": "dissolve", "label": "溶解", "hint": "颗粒化溶解，观感更柔和", "ffmpeg": "dissolve", "defaultDuration": 0.6 },
+    { "key": "wipeleft", "label": "左擦除", "hint": "从右往左推开", "ffmpeg": "wipeleft", "defaultDuration": 0.5 },
+    { "key": "slideleft", "label": "左滑入", "hint": "后一段整体左移盖住前一段", "ffmpeg": "slideleft", "defaultDuration": 0.5 },
+    { "key": "slideup", "label": "上滑入", "hint": "适合竖屏转场", "ffmpeg": "slideup", "defaultDuration": 0.5 },
+    { "key": "circleopen", "label": "圆形展开", "hint": "从中心圆形展开", "ffmpeg": "circleopen", "defaultDuration": 0.7 }
+  ],
+  "limits": {
+    "$comment": "转场时长的可用区间（秒）。上限不只是审美：xfade 要求 d 小于相邻两段的长度，太大会被自动夹住。",
+    "minDuration": 0.2,
+    "maxDuration": 2.5
+  }
+}

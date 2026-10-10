@@ -1,0 +1,25 @@
+{
+  "name": "@yijing/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "艺镜AI剪辑 · 桌面客户端（Electron + React）",
+  "author": "YiJing AI",
+  "main": "src/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "clean": "node ../../tools/clean-dist.mjs packages/desktop/dist-renderer",
+    "prebuild": "npm run clean",
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --config electron-builder.yml"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11"
+  }
+}

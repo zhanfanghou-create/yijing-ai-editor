@@ -1,0 +1,582 @@
+/* ==========================================================================
+   艺镜AI剪辑 · 安装程序样式
+   --------------------------------------------------------------------------
+   版式严格对齐参考安装器的逐像素实测值，请勿凭手感改动：
+
+     窗口          650 × 360（收起「安装设置」）/ 650 × 560（展开）
+     外框          1px #e6e6e6，内容区纯白
+     标题栏        44px，品牌 logo 左 20 上 13 高 25，最小化中心 (605,20)，关闭中心 (628,20)
+     应用图标      72 × 72，水平居中，上 64
+     产品名        上 144 高 30（18px #333）
+     主按钮        左 226 上 219，200 × 40，胶囊，纯色 #1695f7
+     协议行        上 319 高 20，复选框左 30（20×20），文字左 60，右侧按钮右 30
+     设置区        上 359 高 201，底色 #f7f7f7
+       标签① 上 17    下拉框 上 41   300 × 28   边框 #cccccc
+       标签② 上 89    路径框 上 113  470 × 28   边框 #cccccc
+                      浏览键 上 113  110 × 28   边框 #d8d8d8（左 510）
+   ========================================================================== */
+
+:root {
+  --border: #e6e6e6;
+  --panel: #f7f7f7;
+  --text: #000000;
+  --text-2: #333333;
+  --text-3: #666666;
+  --muted: #9d9d9d;
+  --check: #8a8a8a;
+  --field: #cccccc;
+  --field-2: #d8d8d8;
+  --blue: #1695f7;
+  --blue-hover: #0f88e8;
+  --danger: #e5484d;
+
+  --win-w: 650px;
+  --win-h: 360px;
+  --win-h-expanded: 560px;
+  --titlebar-h: 44px;
+  --settings-top: 359px;
+  --settings-h: 201px;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #ffffff;
+  color: var(--text);
+  font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', system-ui,
+    -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------ 窗口外框 */
+
+.window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+/* 边框用叠加层绘制，使内部绝对定位坐标与截图像素 1:1 对应（不受 border 占位影响） */
+.window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  pointer-events: none;
+  z-index: 90;
+}
+
+/* ------------------------------------------------------------------ 标题栏 */
+
+.titlebar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--titlebar-h);
+  z-index: 20;
+  -webkit-app-region: drag;
+}
+
+.brand {
+  position: absolute;
+  left: 20px;
+  top: 13px;
+  height: 25px;
+  display: flex;
+  align-items: center;
+}
+
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  margin-right: 5px;
+  display: block;
+  -webkit-user-drag: none;
+}
+
+.brand-name {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--text);
+  line-height: 25px;
+  white-space: nowrap;
+}
+
+.win-btn {
+  position: absolute;
+  top: 5px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.12s, color 0.12s;
+}
+
+.win-btn.min {
+  left: 590px;
+}
+.win-btn.close {
+  left: 613px;
+}
+
+.win-btn:hover {
+  background: #efefef;
+  color: #4a4a4a;
+}
+.win-btn.close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+.win-btn:focus-visible {
+  outline: 1px solid var(--blue);
+}
+
+/* ------------------------------------------------------------------ 主区 */
+
+.app-icon {
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  width: 72px;
+  height: 72px;
+  margin-left: -36px;
+  display: block;
+  -webkit-user-drag: none;
+}
+
+.app-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 144px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--text-2);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 主按钮：200 × 40 胶囊，位置固定 */
+.btn-primary {
+  position: absolute;
+  left: 226px;
+  top: 219px;
+  width: 200px;
+  height: 40px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--blue);
+  color: #ffffff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s;
+  display: grid;
+  place-items: center;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--blue-hover);
+}
+.btn-primary:active:not(:disabled) {
+  background: #0d7ad3;
+}
+.btn-primary:disabled {
+  background: #bfe0fb;
+  cursor: not-allowed;
+}
+.btn-primary:focus-visible {
+  outline: 2px solid #7cc4fb;
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ 协议行 */
+
+.agree {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  top: 319px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.checkbox {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1px solid var(--muted);
+  border-radius: 2px;
+  background: #ffffff;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  color: var(--check);
+}
+
+.checkbox svg {
+  opacity: 0;
+  display: block;
+}
+
+.checkbox[aria-checked='true'] svg {
+  opacity: 1;
+}
+
+.checkbox:focus-visible {
+  outline: 2px solid #7cc4fb;
+  outline-offset: 1px;
+}
+
+.agree-text {
+  margin-left: 10px;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: 14px;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.link:hover {
+  color: var(--blue);
+}
+
+.agree-right {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 20px;
+}
+
+button.text-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 20px;
+}
+
+button.text-btn:hover:not(:disabled) {
+  color: var(--blue);
+}
+
+button.text-btn:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.hint {
+  font-size: 14px;
+  color: var(--text-3);
+  line-height: 20px;
+}
+
+.hint.warn {
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------------------ 安装进度 */
+
+.progress {
+  position: absolute;
+  left: 226px;
+  top: 236px;
+  width: 200px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--blue);
+  transition: width 0.25s ease;
+}
+
+.stage-text {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 252px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-3);
+  line-height: 1;
+}
+
+/* 主区内的居中副标题（完成 / 失败态） */
+.app-sub {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 176px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--text-3);
+  line-height: 1;
+}
+
+/* ------------------------------------------------------------------ 设置展开区 */
+
+.settings {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--settings-top);
+  height: var(--settings-h);
+  background: var(--panel);
+  box-shadow: 0 -1px 0 0 var(--border);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.settings-label {
+  position: absolute;
+  left: 30px;
+  height: 14px;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.settings-label.lang {
+  top: 17px;
+}
+.settings-label.path {
+  top: 89px;
+}
+
+/* 下拉框 / 输入框共用外观。注意：.field 自身不定位，
+   一律由外层 .field-wrap 负责摆位，避免两层同时 position:absolute 导致偏移叠加。 */
+.field {
+  display: block;
+  width: 100%;
+  height: 28px;
+  border: 1px solid var(--field);
+  border-radius: 2px;
+  background: #ffffff;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 26px;
+  padding: 0 8px;
+  outline: none;
+}
+
+.field:focus {
+  border-color: var(--blue);
+}
+
+select.field {
+  padding-right: 24px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.field-wrap.select {
+  position: absolute;
+  left: 30px;
+  top: 41px;
+  width: 300px;
+  height: 28px;
+  color: #4a4a4a;
+}
+
+.field-wrap.select .chev {
+  position: absolute;
+  right: 13px;
+  top: 12px;
+  pointer-events: none;
+}
+
+.field-wrap.path {
+  position: absolute;
+  left: 30px;
+  top: 113px;
+  width: 470px;
+  height: 28px;
+}
+
+.field-wrap.path input {
+  user-select: text;
+  cursor: text;
+}
+
+.browse-btn {
+  position: absolute;
+  left: 510px;
+  top: 113px;
+  width: 110px;
+  height: 28px;
+  border: 1px solid var(--field-2);
+  border-radius: 2px;
+  background: #ffffff;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.browse-btn:hover {
+  background: #f2f2f2;
+  border-color: #c0c0c0;
+}
+.browse-btn:active {
+  background: #e8e8e8;
+}
+.browse-btn:focus-visible {
+  outline: 2px solid #7cc4fb;
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ 协议全文浮层 */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.34);
+  z-index: 60;
+  display: grid;
+  place-items: center;
+}
+
+.dialog {
+  width: 560px;
+  height: 330px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog-head {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dialog-head .spacer {
+  flex: 1 1 auto;
+}
+
+.dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
+}
+
+.dialog-foot {
+  flex: 0 0 auto;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+}
+
+.dialog-btn {
+  height: 28px;
+  min-width: 78px;
+  padding: 0 16px;
+  border: 1px solid var(--field);
+  border-radius: 2px;
+  background: #ffffff;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.dialog-btn:hover {
+  background: #f2f2f2;
+}
+
+.dialog-btn.primary {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.dialog-btn.primary:hover {
+  background: var(--blue-hover);
+}

@@ -1,0 +1,83 @@
+appId: com.yijing.aieditor
+productName: YiJingAIEditor
+copyright: (c) 2026 艺镜 AI 团队
+
+directories:
+  buildResources: build
+  output: dist-win
+
+asar: true
+compression: maximum
+
+# 本应用没有任何生产依赖（依赖全部在 renderer 构建期被打进 dist-renderer），
+# 因此不需要 electron-builder 去 spawn npm 做 rebuild / 依赖安装。
+# 关掉这两步既省时间，也避免它在本机 npm 环境下卡死（ERR_ELECTRON_BUILDER_CANNOT_EXECUTE）。
+npmRebuild: false
+buildDependenciesFromSource: false
+nodeGypRebuild: false
+
+files:
+  - src/main/**/*
+  - src/preload/**/*
+  # ⚠️ src/shared/ 必须随包 —— 主进程侧有 5 个模块在**运行期** require 它：
+  #    looks.js → shared/looks.json
+  #    subtitles.js → shared/textStyles.json, shared/textOverrides.js
+  #    render.js → shared/pip.json, shared/speed.js, shared/adjust.js,
+  #                shared/effects.js, shared/aspect.js
+  #    mcp-server.js → shared/aspect.js, shared/effects.js
+  #    渲染层是构建期被打进 dist-renderer 的，**看不见**这份运行期依赖 ——
+  #    所以漏掉它开发模式一切正常，装出来的 exe 里一导出就崩（MODULE_NOT_FOUND）。
+  - src/shared/**/*
+  - dist-renderer/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/node_modules/**/{test,__tests__,tests,example,examples,docs}/**'
+  # 取证/侦察目录：`_recon/`（参考截图、Chromium 会话残留，量级 GB）与 `_evidence/`（闸门日志）。
+  # 上面是**白名单**，理论上它们本来就进不来；这里显式再写一遍，是因为白名单一旦
+  # 被人图省事改成 `**/*`，这两个目录会**立刻**混进安装包 —— 显式排除在那种情况下仍然生效。
+  # 来源：2026-10-02 PM 审查 P1-3（_recon 实测 3,675.6MB / _evidence 152.4MB）。
+  - '!_recon/**/*'
+  - '!_evidence/**/*'
+  # 占位素材清单 PLACEHOLDERS.json 原先也在这里显式排除。它随「全部图形资产改为自建」
+  # 一起删除了（图标 / 配图 / 素材缩略图现在都由 tools/ 下的脚本程序生成），
+  # 这条排除项留着只是指向一个不存在的文件。
+
+# ffmpeg 随包目录（**可选**）。
+# 目录本身常驻仓库（里面有 README.txt 说明怎么拿 ffmpeg），所以这里的 from 一定存在。
+# 里面**有** ffmpeg.exe 时随包带走、没有就只有一个 README —— 不影响打包。
+# ⚠️ 为什么不是"构建时自动下载"：ffmpeg 是 LGPL/GPL，本项目是 MIT，
+#    默认把 GPL 二进制打进 MIT 发行物会让许可证说不清。决定权留在打包者手上，
+#    见 tools/fetch-ffmpeg.mjs 的说明。
+extraResources:
+  - from: resources/ffmpeg
+    to: ffmpeg
+    filter:
+      - '**/*'
+
+extraMetadata:
+  name: YiJingAIEditor
+  description: 艺镜AI剪辑 · AI 视频创作与剪辑工作台
+
+win:
+  target:
+    - target: dir
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: YiJingAIEditor-${version}-Windows-${arch}.${ext}
+  requestedExecutionLevel: asInvoker
+
+mac:
+  category: public.app-category.video
+  target:
+    - target: dir
+      arch:
+        - x64
+        - arm64
+  icon: build/icon.ico
+
+linux:
+  target:
+    - dir
+  category: AudioVideo
+  icon: build/icon.ico

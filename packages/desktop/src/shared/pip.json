@@ -1,0 +1,19 @@
+{
+  "_": "画中画（叠加轨）参数表。渲染层算 CSS 位置、主进程算 ffmpeg overlay 坐标，都从这一份推 —— 两边各写一份必然对不上，而\"预览里在右下、成片里跑到中间\"正是最难查的那一类（两边单独看都对）。",
+  "margin": 0.03,
+  "defaultSize": 30,
+  "minSize": 10,
+  "maxSize": 60,
+  "defaultAnchor": "right-bottom",
+  "anchors": [
+    { "key": "left-top", "label": "左上", "fx": 0, "fy": 0 },
+    { "key": "top", "label": "上中", "fx": 0.5, "fy": 0 },
+    { "key": "right-top", "label": "右上", "fx": 1, "fy": 0 },
+    { "key": "left", "label": "左中", "fx": 0, "fy": 0.5 },
+    { "key": "center", "label": "正中", "fx": 0.5, "fy": 0.5 },
+    { "key": "right", "label": "右中", "fx": 1, "fy": 0.5 },
+    { "key": "left-bottom", "label": "左下", "fx": 0, "fy": 1 },
+    { "key": "bottom", "label": "下中", "fx": 0.5, "fy": 1 },
+    { "key": "right-bottom", "label": "右下", "fx": 1, "fy": 1 }
+  ]
+}

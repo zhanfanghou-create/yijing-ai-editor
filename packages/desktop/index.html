@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <!-- 桌面端不加载任何远程资源，CSP 直接收紧到只允许自身、后端接口与本地素材协议 -->
+    <!-- yjai-media: 是主进程注册的本地素材协议（见 src/main/index.js）。
+         三个位置都要放行，少一个就会出现「素材导入了却是黑的」这类静默失败：
+           img-src / media-src —— <img>/<video> 取流
+           connect-src        —— fetch/XHR 读本地字节（上传给生成接口、算校验都靠它） -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yjai-media: http: https:; media-src 'self' blob: yjai-media: http: https:; connect-src 'self' yjai-media: http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:"
+    />
+    <title>艺镜AI剪辑</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/renderer/main.jsx"></script>
+  </body>
+</html>

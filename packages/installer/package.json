@@ -1,0 +1,24 @@
+{
+  "name": "@yijing/installer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "艺镜AI剪辑 · 安装引导程序（Electron + React）",
+  "author": "艺镜 AI 团队",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "pack:payload": "node scripts/pack-payload.mjs",
+    "dist": "npm run build && electron-builder --config electron-builder.yml --win portable"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11"
+  }
+}

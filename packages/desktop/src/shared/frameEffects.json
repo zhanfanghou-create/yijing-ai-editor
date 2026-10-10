@@ -1,0 +1,84 @@
+{
+  "$comment": [
+    "画面特效表 —— 「特效」页里本机就能生效的那一组。",
+    "",
+    "⚠️ 边界先说清楚，别后面有人以为抄漏了：",
+    "  参考客户端的特效页（View_Effects.qml → Effects_Materials.qml）是**素材中心**页，",
+    "  特效素材（缩略图 + 效果资源）由服务端下发，本机装的是壳。",
+    "  所以这里是一组**本项目自建、纯 CSS 实现**的画面特效：加完立刻在预览里动起来，",
+    "  不需要联网、不需要下载素材、也不需要等导出。",
+    "  将来要接别的特效来源，作为**同一个特效列表的另一个来源**追加即可。",
+    "",
+    "kind 只有两种，这是被一条硬约束逼出来的（不是偷懒）：",
+    "  · transform → 挂 .canvas-frame 本身（画面位移/缩放）",
+    "  · overlay   → 挂 .canvas-fx 覆盖层（叠在画面上的闪光/故障/扫描线/漏光/暗角）",
+    "",
+    "  ⚠️ **没有 filter 类**。原因：预览的调色也是写在 .canvas-frame 的 `filter` 上的",
+    "  （Stage.jsx 的 previewStyle），而 CSS 动画的优先级**高于内联样式** ——",
+    "  一旦有一个 @keyframes 去动 .canvas-frame 的 filter，它就会把调色整个顶掉，",
+    "  用户看到的是「加了滤镜又加了特效，结果滤镜没了」，而且没有任何报错。",
+    "  所以闪光/故障/扫描这类需要改像素的效果一律改走覆盖层（半透明色 + 混合模式），",
+    "  由 check-frame-effects 闸门用静态契约钉住：@keyframes 里不许出现 filter 动 .canvas-frame。",
+    "",
+    "durationMs 是动画一轮的时长；循环次数由 CSS 决定（全部 infinite），",
+    "因为特效在参考里也是持续作用的，不是播一次就停。"
+  ],
+  "fallback": "none",
+  "effects": [
+    {
+      "key": "none",
+      "label": "无特效",
+      "kind": "none",
+      "hint": "不加任何画面特效"
+    },
+    {
+      "key": "fx-shake",
+      "label": "画面抖动",
+      "kind": "transform",
+      "durationMs": 420,
+      "hint": "整幅画面小幅高频位移，用于撞击与强调"
+    },
+    {
+      "key": "fx-pulse",
+      "label": "心跳缩放",
+      "kind": "transform",
+      "durationMs": 1100,
+      "hint": "缓慢的缩放呼吸，适合铺垫情绪"
+    },
+    {
+      "key": "fx-flash",
+      "label": "闪光灯",
+      "kind": "overlay",
+      "durationMs": 900,
+      "hint": "白色闪光快速跳动，做出闪光灯/电压不稳的观感"
+    },
+    {
+      "key": "fx-glitch",
+      "label": "故障色偏",
+      "kind": "overlay",
+      "durationMs": 700,
+      "hint": "红青错位的横条扫过，赛博/故障风"
+    },
+    {
+      "key": "fx-scan",
+      "label": "扫描线",
+      "kind": "overlay",
+      "durationMs": 1600,
+      "hint": "横向细线自上而下滚动，监视器质感"
+    },
+    {
+      "key": "fx-lightleak",
+      "label": "漏光扫过",
+      "kind": "overlay",
+      "durationMs": 2200,
+      "hint": "一条暖光斜着扫过画面，胶片漏光"
+    },
+    {
+      "key": "fx-vignette",
+      "label": "暗角呼吸",
+      "kind": "overlay",
+      "durationMs": 2600,
+      "hint": "四角压暗并缓慢呼吸，视线更聚焦"
+    }
+  ]
+}

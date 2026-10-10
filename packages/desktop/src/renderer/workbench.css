@@ -1,0 +1,2516 @@
+/**
+ * 艺镜AI剪辑 · 剪辑工作台
+ *
+ * 尺寸与配色全部从参考客户端工作台截图（1920×1032 客户区）逐像素量出，
+ * 不用目测值。量取方式见 tools/png-probe.py。
+ *
+ * 复刻原图坐标 → 本文件数值的对照（原图含 8px 抓图边框，已统一减去）：
+ *   菜单栏        y   0..35   高 35   底 #0E0E13
+ *   功能标签行    y  35..79   高 44   底 #303033
+ *   主体          y  79..694  高 616
+ *   时间线工具条  y 695..732  高 38   底 #303033
+ *   时间线轨道区  y 733..1031 高 299  底 #14141C
+ *
+ *   左栏（二级列表） x    0..157  宽 158  底 #1A1A20  右分隔 1px #000
+ *   中栏（素材）     x  158..796  宽 639  底 #1A1A20
+ *   播放器           x  797..1477 宽 680  底 #14141C
+ *   信息面板         x 1478..1911 宽 433  底 #1A1A20
+ *   面板间的 5px 空隙由 #0E0E13 透出（参考实测 x805..809 / x1481..1485）
+ */
+
+:root {
+  /* 行高（实测） */
+  --wb-menu-h: 35px;
+  --wb-tabs-h: 44px;
+  --wb-tlbar-h: 32px;
+  /* 左栏宽（实测：内容区从 x=8 起，右分隔线落在 x=157 → 150px） */
+  --wb-tree-w: 150px;
+  /* 参考窗口在左/右/下各有一条 8px 的 #0E0E13 内框（顶部被同色菜单栏吃掉看不出来），
+     可用内容因此是 1904×1024 而不是 1920×1032 */
+  --wb-frame: 8px;
+  /* 底色（实测） */
+  --wb-deep: #0e0e13;
+  --wb-deep2: #14141c;
+  --wb-bar: #303033;
+  --wb-panel: #1a1a20;
+  --wb-card: #26262b;
+  --wb-text: #e8e8e9;
+  --wb-muted: #9a9aa0;
+  --wb-faint: #6c6c72;
+
+  /**
+   * 强调色：选中态 / 页签 / 子页签 / 开关 / 取色环 / 输入聚焦框 / 时间码 —— 全部走这里。
+   *
+   * ⚠️ 从前这一栏里**并行着两套强调色**：
+   *   · 品牌紫 #c36bf5 / #b86be4 / #c473f2 / #ce76ff —— 功能标签、右栏页签、比例 chip；
+   *   · 青色 #00C1CD —— 子页签选中、分节圆点、开关、取色环、聚焦框、播放条时码。
+   *   结果是「子页签选中是青、它上级的页签选中是紫」，同一栏里像两个产品。
+   *   现在只留紫系一套：`--wb-accent` 主强调、`--wb-accent-hi` 亮一档（下划线 / 强调字形）、
+   *   `--wb-accent-deep` 深一档（渐变末端 / 拖放高亮）。
+   *
+   * ⚠️ 青色**只保留在轨道身份色** `--clip-overlay`（styles.css）—— 那是"这条轨是叠加轨"
+   *   的语义色，必须与视频蓝 / 音频绿 / 字幕紫拉得开，不能跟着 UI 强调色走。
+   */
+  --wb-accent: var(--violet);
+  --wb-accent-hi: var(--violet-bright);
+  --wb-accent-deep: var(--violet-deep);
+  --wb-accent-glow: rgba(195, 107, 245, 0.22);
+}
+
+/* ============================== 骨架 ============================== */
+
+.app.is-editor {
+  display: grid;
+  /* 可用高 1024 = 35 菜单 + 44 标签 + 剩余（主体）+ 时间线。
+     时间线高由 --wb-tl-h 决定：默认跟窗口高走（约 32%），拖过分隔条后固定 px；
+     主体吃剩余空间（1fr），不再写死 616:329 —— 四块区域现在都可拖。 */
+  --wb-tl-h: clamp(140px, 32vh, 70vh);
+  grid-template-rows: var(--wb-menu-h) var(--wb-tabs-h) minmax(0, 1fr) var(--wb-tl-h);
+  padding: 0 var(--wb-frame) var(--wb-frame);
+  background: var(--wb-deep);
+}
+
+/* ============================== 菜单栏 ============================== */
+
+.wb-menu {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* 项目名要做「窗口居中」⇒ 得有定位上下文 */
+  position: relative;
+  height: var(--wb-menu-h);
+  /* 右侧不留内边距：那三个窗口键一直顶到框右沿（x1911）
+     ⚠️ 但**底部要留 2px**：实测顶栏里所有"盒子类"元素（导出底板、四个图标、
+     三个窗口键、品牌徽章）的**几何中心都在 y16.5**，而不是 35 的一半 17.5。
+     35 − 2 = 33 的内容框中心正好 16.5。少了这 2px，整条右簇会统一低 1px ——
+     逐像素比对时表现成一整排 1px 亮边（底板实测 y4..31 vs y3..30）。
+     ⚠️ 菜单项文字要单独补回 1px（见 `.wb-menu-items button` 的 padding-top），
+     因为 CJK 墨迹在行盒里天生偏高半个像素，参考那边文字墨迹中心是 y17 而不是 16.5。 */
+  padding: 0 0 2px;
+  background: var(--wb-deep);
+  /* ⚠️ 元素是 `className="wb-menu topbar"`，styles.css 里那条
+     `.topbar { border-bottom: 1px solid var(--line) }` 一直在生效（--line = #464651）。
+     参考的顶栏是满 35px 的 #0E0E13（y0..34），标签栏从 y35 开始，中间不该有分隔线。
+     · 原来写 `border-bottom: 1px solid #000` 只是"盖住"它 ⇒ y34 变成**纯黑缝** rgb(0,0,0)；
+     · 把这行删掉则是**撤掉覆盖层**，--line 立刻露出来 ⇒ y34 变 rgb(70,70,81)。
+     两种都错，正确做法是把边框压成 0。
+     ⚠️ 而且单写 `.wb-menu { border-bottom: 0 }` **压不住它** —— 实测运行期 computed 仍是
+     `1px solid rgb(70,70,81)`：两条规则特异性相同（都是单类），胜负看源码顺序，
+     这里不能赌顺序，直接**提高特异性**（双类）。
+     教训：同名元素挂两套类时，"删掉我的声明"不等于"没有这条样式"。 */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.wb-menu button,
+.wb-menu input,
+.wb-menu a {
+  -webkit-app-region: no-drag;
+}
+
+/* 压掉 styles.css 那条 .topbar 的底边框。
+   双类选择器（0,2,0）才能稳赢 `.topbar`（0,1,0），不依赖样式表加载顺序。 */
+.wb-menu.topbar {
+  border-bottom: 0;
+}
+
+/* 宽度对齐参考：参考的品牌块到「文件」左沿是 x=152，我们品牌文字更短，
+   所以用 min-width 把整块撑到同样宽度，后面三个菜单项才会落在同一个位置 */
+.wb-menu-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  /* 宽度实测：参考「文件」墨迹左沿 x=156，扣掉 brand 与 items 之间 16px 的 gap
+     和 items 按钮自身 6px 内边距 ⇒ brand 到 x=134 结束 ⇒ min-width 126（从 x=8 起）。
+     之前写 128 会让整条菜单项右移 2px。 */
+  min-width: 126px;
+  height: 26px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
+.wb-menu-brand:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wb-menu-logo {
+  /* 实测参考的徽章底板是 24×24、落在 x8..31 y5..28（圆角 ~4px） */
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  flex: none;
+  display: block;
+  overflow: hidden;
+  /* 品牌紫底板。参考底板实测自上而下 #2c1772 → #1d0c48，亮度和色相都接近我们的主色 */
+  background: linear-gradient(180deg, #5b2ce2 0%, #2a1172 100%);
+}
+
+.wb-menu-logo img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  /* 图形自带的近黑底色在 screen 下等价于透明，亮色图形原样保留 */
+  mix-blend-mode: screen;
+}
+
+.wb-menu-brand b {
+  font-size: 13px;
+  font-weight: 700;
+  /* 实测参考品牌名最亮像素是纯 #ffffff（我们原来继承 --wb-text=#e8e8e9，偏灰一档） */
+  color: #ffffff;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+}
+
+.wb-menu-items {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.wb-menu-items > button,
+.wb-menu-items > .wb-menu-drop > .wb-menu-trigger {
+  height: 24px;
+  /* 实测参考三个菜单项的墨迹左沿是 156 / 192 / 228 ⇒ **节距 36**。
+     文字墨迹本身 24px 宽，所以按钮 = 24 + 2×6 内边距 = 36，gap 保持 0。
+     之前写 9px ⇒ 按钮 44 宽、节距 44（我们实测 161/205/249），越往右偏得越多。
+     ⚠️ padding-top 1px 是给 `.wb-menu` 那条 padding-bottom:2px 做的补偿：
+     内容框中心从 17.5 抬到 16.5 后，按钮整体上移 1px，而参考的文字墨迹中心其实是 y17
+     （CJK 墨迹在行盒里天生偏高 0.5px），所以文字要单独压回来 1px。
+     实测结果：墨迹盒 x156..179(w24) y12..22(h11) —— 与参考逐像素一致。 */
+  padding: 1px 6px 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  /* 实测参考「文件」墨迹盒 w24 h11、最亮像素 #919493（lum 147）——
+     是**灰字**，不是白字。rgba(255,255,255,.55) 叠在底色 #0e0e13 上正好 ≈ #939393。
+     字号 12px 才得到 h11/w24（13px 实测 h12/w26，整排还多偏 2px）。 */
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wb-menu-items > button:hover,
+.wb-menu-items > .wb-menu-drop > .wb-menu-trigger:hover,
+.wb-menu-items > .wb-menu-drop > .wb-menu-trigger.open {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* --------------------------- 顶栏下拉（文件 / 帮助） --------------------------- */
+
+/*
+ * ⚠️ 这几个类**必须**用 `.wb-menu-items > .wb-menu-drop ...` 的前缀，
+ * 不能只写 `.wb-menu-item`：`styles.css` 里有一条全局的
+ * `button { padding: 1px 6px }`，而 `.wb-menu-items button` 那条菜单项规则
+ * 会同时命中下拉里的条目（它们也在 `.wb-menu-items` 里）——
+ * 不加前缀的话，下拉条目会继承「高 24、透明底、12px 灰字」，
+ * 打开一看是一排挤在一起的灰字，而不是一张菜单。
+ */
+.wb-menu-drop {
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+
+.wb-menu-items > .wb-menu-drop > .wb-menu-trigger.open {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.wb-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  /* 顶栏是最上层的一条，但下面还有 .wb-tabs-row / .workbench 两段，
+     不给 z-index 的话下拉会被它们盖住（点得开、看不见） */
+  z-index: 60;
+  min-width: 196px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #1c1c22;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  -webkit-app-region: no-drag;
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-group {
+  padding: 6px 9px 3px;
+  color: rgba(255, 255, 255, 0.34);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-item:disabled {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-menu-items > .wb-menu-drop .wb-menu-item-hint {
+  flex: none;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+/* 硬件加速那一行：左开关右状态/重启提示 */
+.hw-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hw-row .notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-muted-sm {
+  color: var(--wb-muted);
+  font-size: 11.5px;
+}
+
+/* 关于弹窗：键值两列 */
+.about-rows {  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.about-key {
+  flex: none;
+  width: 68px;
+  color: var(--wb-muted);
+}
+
+.about-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--wb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-menu-title {
+  /* ⚠️ 项目名是**窗口居中**，不是「品牌区与右簇之间的居中」。
+     实测参考的项目名墨迹是 x917..999（中心 958 ≈ 窗口中心 960）；
+     我们原来是 flex:1 撑在中间，中心落在 x825 —— 偏了 133px，整图横向差异投影里
+     那一段（x793..855，峰值 64）就是它。
+     ⇒ 脱离文档流、按窗口左右 50% 定位；右簇用 margin-left:auto 自己顶到右边。 */
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  transform: translateX(-50%);
+  width: min(320px, 34%);
+  text-align: center;
+  color: var(--wb-muted);
+  /* 12px：参考那条项目名 13 个字符墨迹 83px 宽 ≈ 每字 6.4px，与 12px 的等宽数字前进量相符 */
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 16px;
+}
+
+.wb-menu-actions {
+  display: flex;
+  align-items: center;
+  /* 项目名已脱离文档流 ⇒ 右簇要靠 auto 外边距自己顶到最右 */
+  margin-left: auto;
+  /* 右簇内部空档统一 8px：之前在单个按钮上各加 margin-left(8/4)，
+     叠出 15px / 11px 两条明显偏大的缝，整簇因此左移。改成一个统一的 8px。 */
+  gap: 8px;
+}
+
+.wb-menu-actions .wb-icon {
+  /* ⚠️ width 24 不是随手定的：参考四个图标按钮的**节距是 32**（字形中心
+     x1405.5 / 1437.5 / 1469.5 / 1501.5），配合 8px 的 gap ⇒ 按钮正好 24 宽。
+     我们原来 26 宽 ⇒ 节距 34，四格累计下来最左边那个偏 5px。
+     ⚠️ padding 必须显式写 0：styles.css 有一条全局 `button { padding: 1px 6px }`，
+     会把 26 宽的内容盒挤成 14 宽，而图标 svg 大到 24 ⇒ 溢出后位置不再居中，
+     四个图标于是各偏各的（实测 −5 / −1 / +1 / +2，毫无规律）。 */
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  display: grid;
+  place-items: center;
+}
+
+.wb-menu-actions .wb-icon:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 礼盒那个入口是金色描边，与其余同色系图标不同（实测参考 #FFD68C） */
+.wb-menu-actions .wb-icon.is-gift {
+  color: #ffd68c;
+}
+
+/* 账号 / 付费两块底板（.wb-login / .wb-buy）随那一版的功能一起删掉了 ——
+   开源版顶栏只有「导出」一块底板 + 窗口三键，样式不留空壳。 */
+
+/* 导出：左侧 #261A3F → 右侧 #301B3D 的深紫渐变 + 紫字。
+   注意参考那份截图里时间线是空的，导出处于**禁用态**（深紫底、灰紫字、低对比）；
+   有内容时才该是亮紫实底。所以「深紫」是 :disabled 的样子，不是常态。
+   底板实测 x1706..1805 = **100 宽**，内芯 图标墨迹 x1735..1748(w14)、文字 x1754..1776 ⇒
+   12px 字号 + 26px 内边距 + 18px 图标（18 + 6 + 24 + 52 = 100）。 */
+.wb-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 26px;
+  border: 0;
+  border-radius: 9px;
+  background: linear-gradient(to right, #261a3f, #301b3d);
+  color: var(--wb-accent);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.wb-export:hover:not(:disabled) {
+  background: linear-gradient(to right, var(--wb-accent), var(--wb-accent-deep));
+  color: #fff;
+}
+
+/* ⚠️ 这条是**必需**的，不是可有可无的收尾：
+   styles.css 里有一条全局 `button:disabled { opacity: 0.45 }`，把整块导出按钮
+   （底板 + 图标 + 文字）一起打了 45% 透明 —— 实测底板被冲成 #191326（参考 #261a3f）、
+   字形峰值只有 lum 83（参考 128）。禁用态要的是「低对比但颜色准」，不是「整体变透明」。
+   所以这里显式 opacity:1 再给一个实测色 #7f768c（参考图标峰值 #7f768c lum 128、
+   文字峰值 #7b7087 lum 123 —— 是个去饱和的灰紫，不是我们的品牌紫 #8372fe）。 */
+.wb-export:disabled {
+  opacity: 1;
+  color: #7f768c;
+  cursor: default;
+}
+
+/* 窗口三键。实测（参考 x1828..1843 / 1859..1876 / 1894..1905）：
+   三个字形中心在 x1835.5 / 1867.5 / 1899.5 ⇒ **节距 32**，不是我们原来的 35。
+   32×3 = 96，右沿落在 x1916（比顶栏内容右沿 1912 多 4px —— 参考那边的窗口键
+   比内容区更靠外一点），所以 margin-right 给 −4。
+   margin-left 6 不是随手填的：它让「导出」右沿正好落在 x1806（实测已验证）。 */
+.wb-winbtns {
+  display: flex;
+  align-items: center;
+  margin-left: 6px;
+  margin-right: -4px;
+}
+
+.wb-winbtns button {
+  /* padding 必须显式写 0 —— 同上，全局 `button { padding: 1px 6px }` 会把内容盒
+     从 32 挤到 20，而字形 svg 宽到 27 ⇒ 溢出后居中失效（实测最大化字形偏右 3px） */
+  width: 32px;
+  height: var(--wb-menu-h);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #cfcfd4;
+  display: grid;
+  place-items: center;
+}
+
+.wb-winbtns button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.wb-winbtns button.danger:hover {
+  background: #e03b3b;
+  color: #fff;
+}
+
+/* ============================== 功能标签行 ==============================
+   注意：这一行不只放功能标签 —— 参考实测里「播放器」和「信息」两个
+   列标题也在这 44px 内（它们各自列的位置上），所以整条是与主体区
+   **同构**的七列 grid（四块内容列 + 三条缝列），列宽由同一组变量驱动，
+   拖分隔条时列头跟着内容一起平移。 */
+
+/* 缝列宽。分隔条把手就坐在缝里，宽 5px 与参考实测一致（x805..809）。 */
+.app {
+  --wb-gutter: 5px;
+  /* 三列弹性默认值 —— App 运行期会按用户拖拽整列覆写（minmax(0, Nfr)） */
+  --wb-center-col: minmax(0, 639fr);
+  --wb-player-col: minmax(0, 676fr);
+  --wb-info-col: minmax(0, 439fr);
+}
+
+.wb-tabs-row {
+  display: grid;
+  grid-template-columns:
+    var(--wb-tree-w) var(--wb-gutter) var(--wb-center-col) var(--wb-gutter)
+    var(--wb-player-col) var(--wb-gutter) var(--wb-info-col);
+  height: var(--wb-tabs-h);
+  background: var(--wb-bar);
+  align-items: stretch;
+}
+
+/* 缝就是独立的 grid 列（背景同 --wb-deep），不再用 border 画 ——
+   原来的 border-left 5px 方案没法在缝里放把手。 */
+
+.wb-tabs {
+  grid-column: 1 / span 3;
+  display: flex;
+  align-items: stretch;
+  /* 参考实测：首个页签槽与内容区左沿对齐（x8），槽宽 = 文字墨迹宽 + 20 */
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 播放器 / 信息 两列的标题，与标签同一行 */
+.wb-colhead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--wb-tabs-h);
+  padding: 0 12px;
+  color: var(--wb-text);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.wb-colhead.player {
+  grid-column: 5;
+  /* 参考实测：「播放器」墨迹起于 x817（面板左沿 802）⇒ 左内缩 15；色 #C5C5C5 */
+  padding-left: 15px;
+  color: #c5c5c5;
+}
+
+.wb-colhead.info {
+  grid-column: 7;
+  /* 参考实测：信息标题坐在一块 48×36 的深色页签上，贴行底、左内缩 9px，
+     文字为选中紫 #B86BE4，页签底部有一条 2px 亮紫下划线 */
+  padding-left: 9px;
+}
+
+/* 右栏的页签条：每枚都是一个**真按钮**（信息 / 字幕）。
+   ⚠️ 从前这里是一枚 `::before` 画的假页签 + 一个 `<b>`，字幕只能挂在片段信息块
+      下面另起一行 —— 看着像"信息里的一块内容"。改成同级页签后，字幕片段右栏
+      顶部就是 [信息][字幕]，点哪枚出哪屏。 */
+.wb-coltabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 100%;
+  min-width: 0;
+  /* 栏被拖窄时宁可切掉尾巴，也不许溢出去压住左边的播放器标题
+     （与功能标签那排 `.wb-tabs` 同一口径） */
+  overflow: hidden;
+}
+
+.wb-coltab {
+  position: relative;
+  height: 36px;
+  min-width: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  align-self: flex-end;
+  /* ⚠️ 必须 flex:none + nowrap：页签是 flex 项，默认会被压缩到内容宽以下，
+     于是「信息」两个字换行成竖排（实测被压成 24px 宽）。 */
+  flex: none;
+  white-space: nowrap;
+}
+
+.wb-coltab.on {
+  background: var(--wb-panel);
+  color: var(--wb-accent);
+  /* 下划线用 inset 阴影而不是 border —— 真加 2px border 会让这枚比旁边那枚矮 2px */
+  box-shadow: inset 0 -2px 0 var(--wb-accent-hi);
+}
+
+.wb-colhead .wb-grow {
+  flex: 1;
+}
+
+/* ⚠️ 只作用于列标题里的**直接子按钮**（画面设置那枚 24×24 图标键）。
+   从前写成 `.wb-colhead button`（后代选择器），特异性 0-1-1 > `.wb-coltab` 的 0-1-0，
+   把页签也一起压成 24×24 —— 「信息」两个字换行成竖排就是它干的。 */
+.wb-colhead > button {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: grid;
+  place-items: center;
+}
+
+.wb-colhead > button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--wb-text);
+}
+
+/* 参考实测（02b 参考图，逐像素量）：
+   · 槽宽不是固定值，而是「文字宽 + 左右各 10px」，九个槽依次压到 x461
+   · 竖排：图标墨迹 y41..56（16px）→ 缝 5px → 文字墨迹 y62..74（13px）
+     ⇒ padding-top 6 / gap 5 / 字高 14px；整行 44px，余 3px 落在底部
+   · 字宽证据：「媒体文件」墨迹 53px（我们 12px 字只有 49px）⇒ 参考字号 14px
+   · 未选中：图标 ≈ #DCDCDE、文字 ≈ #D6D6D7；选中：图标+文字同为紫 #C36BF5 */
+.wb-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #d6d6d7;
+  /* 参考墨迹宽「媒体文件」54px（13.5px 时本机渲染成 56px，偏宽会逐槽累积） */
+  font-size: 13px;
+  line-height: 1;
+  transition: color 0.14s ease;
+}
+
+.wb-tab svg {
+  width: 19px;
+  height: 19px;
+  color: #dcdcde;
+  flex: none;
+}
+
+.wb-tab:hover {
+  color: #fff;
+}
+
+.wb-tab:hover svg {
+  color: #fff;
+}
+
+.wb-tab.active {
+  color: var(--wb-accent);
+}
+
+.wb-tab.active svg {
+  color: var(--wb-accent);
+}
+
+.wb-tabs-grow {
+  flex: 1;
+}
+
+/* ============================== 主体四栏 ============================== */
+
+.workbench {
+  display: grid;
+  grid-template-columns:
+    var(--wb-tree-w) var(--wb-gutter) var(--wb-center-col) var(--wb-gutter)
+    var(--wb-player-col) var(--wb-gutter) var(--wb-info-col);
+  min-height: 0;
+  background: var(--wb-deep);
+}
+
+/* 内容元素显式认列（列序里插了缝，不能靠自然流填充） */
+.workbench .wb-tree {
+  grid-column: 1;
+}
+
+.workbench .wb-media {
+  grid-column: 3;
+}
+
+.workbench .wb-player {
+  grid-column: 5;
+}
+
+.workbench .wb-info {
+  grid-column: 7;
+}
+
+/* 顶栏那颗「侧栏」字形图标切的就是这里：折叠后左栏整列宽度归零。
+   用 grid 列宽归零 + 隐藏，而不是 `display:none` 掉整列 ——
+   后者会让后面三列的 fr 重新分配（中栏突然变宽），折叠反而比不折叠更乱。 */
+.workbench.is-rail-hidden {
+  grid-template-columns:
+    0 var(--wb-gutter) var(--wb-center-col) var(--wb-gutter)
+    var(--wb-player-col) var(--wb-gutter) var(--wb-info-col);
+}
+
+.workbench.is-rail-hidden .wb-tree {
+  display: none;
+}
+
+/* 树列已归零，它的分隔条没有可调的东西，一并藏掉 */
+.workbench.is-rail-hidden .wb-splitter[data-splitter='tree'] {
+  display: none;
+}
+
+/* ============================== 分隔条 ==============================
+   坐在各区域之间的缝里（竖条 = 缝列、横条 = 时间线上边框）。
+   平时完全透明（视觉就是一条深色缝），hover/拖拽时亮起一条细线，
+   光标随方向变 col-resize / row-resize。 */
+
+.wb-splitter {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+  user-select: none;
+  z-index: 6;
+  transition: background 0.12s ease;
+}
+
+/* 竖条：填满整列（grid-row 1 / -1），宽即缝宽 5px */
+.wb-splitter.is-v {
+  grid-row: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  cursor: col-resize;
+  outline: none;
+}
+
+/* 竖条按 data-splitter 认列 */
+.wb-splitter[data-splitter='tree'] {
+  grid-column: 2;
+}
+
+.wb-splitter[data-splitter='center'] {
+  grid-column: 4;
+}
+
+.wb-splitter[data-splitter='info'] {
+  grid-column: 6;
+}
+
+/* 横条：坐在时间线 6px 上边框上（-3px 起、高 6px，正好盖住缝） */
+.wb-splitter.is-h {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -3px;
+  height: 6px;
+  cursor: row-resize;
+  outline: none;
+}
+
+/* 悬停 / 聚焦 / 拖拽中：亮一条细线（色同选中紫，宽 2px 居中） */
+.wb-splitter:hover,
+.wb-splitter:focus-visible,
+.wb-splitter.is-dragging {
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(50% - 1px),
+    rgba(206, 118, 255, 0.65) calc(50% - 1px),
+    rgba(206, 118, 255, 0.65) calc(50% + 1px),
+    transparent calc(50% + 1px),
+    transparent 100%
+  );
+}
+
+.wb-splitter.is-h:hover,
+.wb-splitter.is-h:focus-visible,
+.wb-splitter.is-h.is-dragging {
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(50% - 1px),
+    rgba(206, 118, 255, 0.65) calc(50% - 1px),
+    rgba(206, 118, 255, 0.65) calc(50% + 1px),
+    transparent calc(50% + 1px),
+    transparent 100%
+  );
+}
+
+/* 拖拽中给 body 一个全局口径：光标锁定、禁止选中文本。
+   类挂在 .app 上（Splitter 的宿主），离开工作台也生效。 */
+.app.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.app.is-resizing .wb-splitter.is-h {
+  cursor: row-resize;
+}
+
+/* 折叠态里的那颗图标要看得出来是「已收起」 */
+.wb-menu-actions .wb-icon.is-off {
+  color: var(--wb-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ------------------------------ 左栏：二级列表 ------------------------------ */
+
+.wb-tree {
+  background: var(--wb-panel);
+  border-right: 1px solid #000;
+  min-height: 0;
+  overflow-y: auto;
+  /* 参考实测：标签行底 y79、根卡片顶 y88 → 中间是 9px 留白（不是 8px） */
+  padding: 9px 0 10px;
+  /* 用 flex+stretch 让 <button> 也吃满整栏宽度：
+     button 的 width:auto 是 shrink-to-fit，光靠 margin 撑不到底 */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.wb-node {
+  flex: none;
+}
+
+/* 参考里的左栏分两种行：
+   · plain —— 纯文字行（本地/下载/录制/我的预设/我的角色），无底色，行距 38px
+   · card  —— 卡片行（AI视频…智能剪辑），底色 #27272D，圆角 6，高 32px、间距 4px
+   根项「素材」本身也是一张卡。这些数字都是逐像素量出来的，不要凭感觉调。
+   行距 38 的证据：同一列上「我的预设 / 我的角色」两行字形中心相差 38px
+   （参考图 x55→y259..267 与 y297..305、x70→y261..268 与 y299..306，两次独立命中）。 */
+.wb-node {
+  display: flex;
+  align-items: center;
+  /* 3px 也是量的：参考卡片内图标框落在 x20..36、文字起于 x39 */
+  gap: 3px;
+  height: 32px;
+  margin: 0 8px;
+  /* 参考实测：卡片 x16..148，图标从 x20 起 → 左内缩 4px */
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: #27272d;
+  /* 参考实测文字峰值 rgb(206,207,207) = #cecfcf（普通行与卡片行都是这个色）。
+     我们原先用 --wb-text(#e8e8e9)，实测峰值 232 —— 明显偏亮，
+     整栏看上去"泛白"。三个普通行（下载/我的预设/我的角色）与三个卡片行
+     （AI视频/AI图片/AI更换）各测一遍，参考都在 202~206 这一档。 */
+  color: #cecfcf;
+  font-size: 12.5px;
+  text-align: left;
+  white-space: nowrap;
+  position: relative;
+}
+
+.wb-node > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-node:hover {
+  background: #2f2f36;
+}
+
+.wb-node.active {
+  background: #34343c;
+  /* 选中项的字色与根卡片**同一个紫**（参考实测两边 top1% 都是 rgb(196,115,242)）。
+     这里原先只改了底色、没改字色，于是"选中"和"没选中"靠一层很淡的灰区分，
+     而参考是靠**紫字**。 */
+  color: var(--wb-accent);
+}
+
+/* 参考实测：根项文字 top1% rgb(196,115,242)（#c473f2）、单点最大 rgb(201,118,225)。
+   原值 #b76be2 是更早一次量的，本次连同"选中项同色"一起复测后上修。
+   （图标另算：#ce76ff，两边单点最大都命中这个值，未改。） */
+.wb-node.root {
+  color: var(--wb-accent);
+  font-weight: 550;
+  /* 参考实测：根卡片底 y119、首个纯文字行起 y122 → 2px */
+  margin-bottom: 2px;
+}
+
+.wb-node.root svg {
+  color: var(--wb-accent-hi);
+}
+
+/* 纯文字行 */
+.wb-node.plain {
+  height: 38px;
+  margin: 0;
+  /* 参考实测：纯文字行文字墨迹起于 x40、与卡片行文字同一竖线
+     （按钮左沿在 x8 ⇒ 左内缩 31px） */
+  padding-left: 31px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wb-node.plain:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ⚠️ 参考里纯文字行的选中态**没有底色**，只有紫字。
+   证据：参考「本地」（选中）与「下载」（未选中）两行的行底色实测都是
+   rgb(26,26,32) = #1a1a20（面板底色），逐像素相同；而「本地」的字色是
+   rgb(196,114,243)。所以这里把背景去掉、只留字色 ——
+   原值 rgba(255,255,255,0.07) 会凭空多出一层灰底。 */
+.wb-node.plain.active {
+  background: transparent;
+  color: var(--wb-accent);
+}
+
+/* 卡片行 */
+.wb-node.card + .wb-node.card {
+  margin-top: 4px;
+}
+
+/* 纯文字行块 → 卡片块：参考实测 1px（纯文字行 5×38 正好压在 y122..311，
+   卡片块起于 y313） */
+.wb-node.plain + .wb-node.card {
+  margin-top: 1px;
+}
+
+/* 「素材库 → 智能剪辑」之间参考留了 9px（其余卡片间只有 4px），是分组分隔 */
+.wb-node.card.gap-before {
+  margin-top: 9px;
+}
+
+.wb-node.card svg {
+  color: #e9e9ea;
+  flex: none;
+}
+
+/* NEW 角标：贴在卡片右上角、略微出界（参考实测 x128..151 / y310..321，
+   卡片 x16..148 / y313..344 → 右 -3px、上 -3px、高 12px），底色是紫→品红渐变 */
+.wb-node .wb-tag {
+  font-size: 8.5px;
+  line-height: 12px;
+  height: 12px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.wb-node .wb-tag.new {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  margin: 0;
+  background: linear-gradient(90deg, #d46bfa, #fb25d8);
+  color: #fff;
+}
+
+/* 参考实测渐变：#04A2CC（青）→ #0F5ECC（蓝），高 14px、紧贴文字（无额外左边距） */
+.wb-node .wb-tag.free {
+  margin-left: 0;
+  height: 14px;
+  line-height: 14px;
+  background: linear-gradient(90deg, #04a2cc, #0f5ecc);
+  color: #fff;
+}
+
+.wb-node .wb-caret {
+  margin-left: auto;
+  color: #8a8a92;
+  transition: transform 0.16s ease;
+}
+
+.wb-node .wb-caret.open {
+  transform: rotate(180deg);
+}
+
+.wb-node .wb-count {
+  margin-left: auto;
+  color: var(--wb-faint);
+  font-size: 11px;
+}
+
+/* -------------------------- 中栏：视频增强预设 -------------------------- */
+
+/* 版式逐像素量自 _evidence/ref-ui/02c-剪辑工作台-1920x1032.png：
+   卡片 200x122、两列间隙 15px、行节距 162px（卡 122 + 名字 11 + 名字行 12 + 行距 17）；
+   小标题 12.5px、在首张卡上方 16px。
+   ⚠️ 卡片正中间那条 **1px 白色竖线**是参考自己画的"前后对比"分隔线，图片本身不带：
+      实测两张卡的最亮列都落在卡的 50%（亮度 138 / 126，邻列只有 107 / 77）。
+      所以画在 ::after 上、叠在图片之上；换成真素材后这行不要删。 */
+.enh {
+  padding: 16px 16px 26px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.enh::-webkit-scrollbar {
+  display: none;
+}
+
+.enh-sec + .enh-sec {
+  margin-top: 26px;
+}
+
+.enh-sec-title {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--wb-text);
+}
+
+/* 小标题右侧的「N 项」计数 —— 只在分组能力面板里出现（那边的标题是能力名，
+   需要让人一眼看到这一档有几张卡）。「视频增强」面板不传这个节点，不受影响。 */
+.enh-sec-title .enh-sec-count {
+  float: right;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wb-text-dim, #8b8b95);
+}
+
+.enh-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 200px);
+  column-gap: 15px;
+  row-gap: 17px;
+}
+
+.enh-card {
+  width: 200px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.enh-art {
+  position: relative;
+  display: block;
+  width: 200px;
+  height: 122px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #202026;
+}
+
+.enh-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/**
+ * ⚠️ 这条分隔线**只属于「视频增强」**（`EnhancePanel` 的 `.enh-grid.is-enhance`），
+ *    不是 `.enh-art` 的通用装饰。
+ *
+ *    2026-09-24 修正：原来写成 `.enh-art::after`，于是 `RefArtCards` 渲染的
+ *    **每一张**参考配图卡（图片增强 10 张、数字人 10 张、自动字幕 4 张、口播 7 张、
+ *    AI 图片 5 张、智能剪辑 2 张、视频模型 6 张、背景 12 张）中间都被画了一道白线。
+ *    参考里那条线是「视频增强」卡片的**前后对比**语义（实测两张卡最亮列都落在卡的 50%），
+ *    其它页的卡片是单张预览，没有这条线。
+ *
+ *    为什么之前没被发现：`.enh-art` 同时服务两类卡片，而"多了一条 1px 白线"
+ *    在缩略截图里几乎看不出来 —— 正是本项目反复吃亏的「构建绿、E2E 绿、看截图才发现」。
+ *    所以现在按**语义来源**收窄，而不是按"看起来像不像"。
+ */
+.enh-grid.is-enhance .enh-art::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.enh-name {
+  display: block;
+  margin-top: 11px;
+  font-size: 11px;
+  line-height: 12px;
+  color: #cecfcf;
+}
+
+.enh-card:hover .enh-name {
+  color: #fff;
+}
+
+.enh-card.active .enh-art {
+  box-shadow: 0 0 0 2px var(--wb-accent);
+}
+
+.enh-card.active .enh-name {
+  color: var(--wb-accent);
+}
+
+/* ------------------- 背景图库：参考是另一套卡片规格 -------------------
+ * 规格逐条取自参考 `MediaPanel_BKMaterials.qml`：
+ *   · `itemWidth: 130` / `itemHeight: 75`（第 110~111 行，ComPreviewItemWrapper）
+ *   · `titleTextVisible: false`（第 105 行）—— **卡片上不显示名字**，
+ *     所以整个 130x75 都是图，没有 `.enh-name` 那一行；
+ *   · 间距 16 / 左内边距 8：参考那一页没有走 `Com_Materials` 那套
+ *     `viewLeftMargin/viewTopMargin` 属性，而是用 ColumnLayout 的
+ *     8px 空矩形 + `Layout.leftMargin: 8` 顶出来的（第 47~95 行）。
+ *
+ * ⚠️ 为什么是"修饰类"而不是另起一套 `.bg-grid`/`.bg-card`：
+ *    同一个视觉语言两处实现，迟早一处改了另一处没改，看起来就是"两个软件的卡片"
+ *    （这条规矩写在 `SidePanels.jsx` 的 `RefArtCards` 注释里）。
+ *    卡片骨架（圆角、hover、active、img 的 object-fit）全部复用 `.enh-*`，
+ *    这里只覆盖**尺寸**这一件事。
+ *
+ * ⚠️ 130 是**列宽定值**，不是 `minmax(...,1fr)`：参考是固定 itemWidth 的分页网格，
+ *    拉伸列宽会让卡片比例不再是 130:75。
+ */
+.enh-grid.is-bg {
+  grid-template-columns: repeat(auto-fill, 130px);
+  column-gap: 16px;
+  row-gap: 16px;
+}
+
+.enh-card.is-bg {
+  width: 130px;
+}
+
+.enh-card.is-bg .enh-art {
+  width: 130px;
+  height: 75px;
+  border-radius: 6px;
+}
+
+/* ------------------------------ 中栏：素材 ------------------------------ */
+
+.wb-media {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-panel);
+}
+
+/* 空态时中栏顶部什么都不放（与参考一致）；只有已有素材时才补一条极细工具行，
+   因为那时没有 dropzone，必须另给一个可见的导入入口 */
+.wb-mediabar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 11px;
+  flex: none;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+}
+
+.wb-mediabar .wb-grow {
+  flex: 1;
+}
+
+.wb-media-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 空态：参考里是固定 358×206 的卡片、在素材区正中，中间一个紫色「导入」按钮 */
+.wb-dropzone {
+  width: 358px;
+  height: 206px;
+  margin: auto;
+  flex: none;
+  border: 1px solid #56565b;
+  border-radius: 8px;
+  background: #36363b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 20px;
+}
+
+.wb-dropzone.drag {
+  border-color: var(--wb-accent);
+  background: #23202f;
+}
+
+.wb-dropzone small {
+  color: var(--wb-faint);
+  font-size: 12.5px;
+}
+
+/* 参考实测：按钮 x942..1080（138 宽）×34 高、圆角约 6px（不是胶囊），
+   底色是紫→品红的横向渐变，图标是「圆角方块里的加号」 */
+.wb-import {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #8b6bf5, #d94be8);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.wb-import:hover {
+  filter: brightness(1.08);
+}
+
+.wb-import svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 素材网格（有素材时） */
+.wb-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(134px, 1fr));
+  gap: 8px;
+  padding: 11px;
+  align-content: start;
+}
+
+/* ---------------------------- 中栏底部 AI 工具 ---------------------------- */
+
+.wb-tools {
+  flex: none;
+  padding: 0 11px 11px;
+}
+
+.wb-tools-split {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 11px;
+  color: var(--wb-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wb-tools-split::before,
+.wb-tools-split::after {
+  content: '';
+  height: 1px;
+  background: #33333a;
+  flex: 1;
+}
+
+.wb-tools-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.wb-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 72px;
+  border: 1px solid #33333a;
+  border-radius: 7px;
+  background: #26262b;
+  color: var(--wb-text);
+  font-size: 12.5px;
+}
+
+.wb-tool:hover {
+  border-color: #4a4a55;
+  background: #2d2d34;
+}
+
+.wb-tool svg {
+  width: 22px;
+  height: 22px;
+  color: #d3d3da;
+}
+
+/* ------------------------------ 播放器 ------------------------------ */
+
+.wb-player {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-deep2);
+}
+
+.wb-player-head .wb-grow {
+  flex: 1;
+}
+
+.wb-player-head button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: grid;
+  place-items: center;
+}
+
+.wb-player-head button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--wb-text);
+}
+
+.wb-player-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+  container-type: size;
+  overflow: hidden;
+}
+
+/* ⚠️ 形状同样走 `--canvas-ar`，不许写死 16/9（理由见 styles.css 的 .canvas-frame）。
+   这里只覆盖"面板内不画阴影与边框"这两条，形状不碰。 */
+.wb-player-stage .canvas-frame {
+  box-shadow: none;
+  border: 0;
+}
+
+/* 播放条三区 grid（参考 z-playerctl.png）：左时码 / 中播放键 / 右功能键。
+   用 grid 而不是「grow 撑开」—— flex 的左右两半宽度不等时播放键会偏心，
+   参考里播放键是**真居中**的。 */
+.wb-transport {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 40px;
+  padding: 0 14px;
+  color: var(--wb-muted);
+}
+
+.wb-transport-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wb-transport-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+/* 双值时码是**强调色的数据位**（参考实测是青色 #00C1CD；2026-10-10 Jason 要求
+   全局配色统一到品牌紫，所以这里跟 `--wb-accent` 走，不再是孤立的一抹青） */
+.wb-transport .wb-time {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--wb-accent);
+  white-space: nowrap;
+}
+
+.wb-transport .wb-time b {
+  color: var(--wb-accent);
+  font-weight: 500;
+}
+
+/* 2026-10-08：帧序号小角标（.wb-frame）已删除 —— 播放条改用帧号时码 HH:MM:SS:FF，
+   帧号本身就在末段里，单挂一个「90f」是参考客户端没有的东西。样式一并清掉，不留死规则。 */
+
+/* 全屏预览：浏览器全屏后画布要真的铺满，不能还留着面板内的 padding 与圆角。
+   ⚠️ 这条既是"原生全屏已生效"的样式，也是**兜底铺满**的样式 ——
+   App.jsx 的 toggleFullscreen 会复核 requestFullscreen 到底有没有落地，
+   没落地就把 fullscreen 置真、走渲染层铺满。所以这里必须自己把播放器
+   变成整窗覆盖层，不能假设浏览器一定接管了。
+   （原生全屏时元素本来就是全屏元素，fixed+inset:0 与之一致，不会打架。） */
+.wb-player[data-fullscreen='1'] {
+  position: fixed;
+  inset: 0;
+  /* 盖住顶栏/标签行/左栏：它们都 < 70 */
+  z-index: 70;
+  background: #0b0b10;
+}
+
+.wb-player[data-fullscreen='1'] .wb-player-stage {
+  padding: 0;
+}
+
+.wb-player[data-fullscreen='1'] .wb-player-stage .canvas-frame {
+  border-radius: 0;
+}
+
+/* --------------------------- 播放条右端的 chip --------------------------- */
+
+/**
+ * 比例 chip + 展开面板。
+ *
+ * 参考客户端的播放器底条右端就是这种形制：一个显示当前值的 chip（「16:9」），
+ * 点开才展开选项。以前这里是**单独一行**的比例栏 —— 那一行会一直占掉 30px，
+ * 画布矮一截，而且参考里根本没有那一行。
+ *
+ * ⚠️ 展开面板是**绝对定位**的，不参与这条 40px 高控制条的布局 ——
+ *    否则一展开就把播放条顶高、画布跟着抖，而抖动是不报错的。
+ */
+.wb-chip-wrap {
+  position: relative;
+  flex: none;
+  margin-left: 6px;
+}
+
+.wb-chip {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #33333a;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.wb-chip:hover,
+.wb-chip.on {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--wb-text);
+  border-color: #4a4a55;
+}
+
+.wb-chip-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  /* ⚠️ 必须给**定宽**：这是绝对定位的 shrink-to-fit 盒子，而里面的按钮是
+     `minmax(0,1fr)` 的网格列 —— 不定宽时它会缩成一条 46px 的窄带，
+     七个比例挤成竖排（看着像"比例菜单坏了"）。 */
+  width: 208px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #33333a;
+  border-radius: 8px;
+  background: #1b1b21;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* 逐通道增益的 SVG 定义容器（色温/色调/亮度/美白，见 Stage.jsx 的 GradeDefs）。
+   ⚠️ 只放 <defs>、本身不占位；**不能写 display:none** —— 那样在部分绘制路径上
+      会取不到 filter 定义，而 filter 一旦引用不到 id，整串声明会被判无效
+      （连 looks 的调色一起消失）。0×0 + absolute 最稳。 */
+.canvas-grade-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 边框色用 #33333a —— 与 .wb-timeline、.wb-tltracks 等处同一口径（实测过的分隔线色） */
+.wb-aspect-btn {
+  flex: none;
+  min-width: 38px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #33333a;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.wb-aspect-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--wb-text);
+}
+
+/* 当前比例：与界面其它"选中态"同一套紫色（.wb-tab.active 是 #c36bf5） */
+.wb-aspect-btn.on {
+  background: var(--wb-accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.wb-transport-btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.wb-transport-btns button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: grid;
+  place-items: center;
+}
+
+.wb-transport-btns button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--wb-text);
+}
+
+.wb-transport-btns button.play {
+  width: 30px;
+  background: transparent;
+  color: var(--wb-text);
+}
+
+/* 右区功能键（逐帧 / 全屏）：与 .wb-transport-btns 同形制。
+   ⚠️ 用 `>` 直接子代：比例 chip 也是 button，但它住在 .wb-chip-wrap 里，
+      不加子代选择器会被这里压成 26×26 的方块（chip 的胶囊形就没了）。 */
+.wb-transport-right > button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: grid;
+  place-items: center;
+}
+
+.wb-transport-right > button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--wb-text);
+}
+
+.wb-transport-right > button.on {
+  color: var(--wb-accent);
+}
+
+/* ------------------------------ 信息面板 ------------------------------ */
+
+.wb-info {
+  background: var(--wb-panel);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 同样没有自己的头部 —— 「信息」标题在标签行里 */
+.wb-info-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 参考实测：首行「名字」标签落在 y≈103（面板顶 79 → 内缩约 14px），左内缩 14px */
+  padding: 14px 14px 12px;
+}
+
+/* 参考的「名字 / 帧率 / 导入方式」用「标签在上、值在下」的竖排形式，
+   字段之间靠留白分隔（标签到标签约 58px），不画分隔线 */
+.wb-field {
+  margin-bottom: 18px;
+}
+
+.wb-field > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--wb-faint);
+  font-size: 11.5px;
+}
+
+.wb-field > strong {
+  display: block;
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-field > .wb-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #33333a;
+  border-radius: 5px;
+  background: #202027;
+  color: var(--wb-text);
+  outline: none;
+  font-size: 12.5px;
+}
+
+.wb-field > .wb-input:focus {
+  border-color: var(--wb-accent-deep);
+}
+
+/* 「名字」在参考里就是一行普通白字，所以去掉输入框的框与底色；
+   只在悬停/聚焦时给一点底色，兼顾可编辑性 */
+.wb-field > .wb-input.plain {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  font-size: 13px;
+}
+
+.wb-field > .wb-input.plain:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wb-field > .wb-input.plain:focus {
+  background: #202027;
+  box-shadow: 0 0 0 1px var(--wb-accent-deep);
+}
+
+.wb-field > .wb-input.name {
+  font-size: 13px;
+}
+
+/* ---------------------- 检查器：分节 / 控件 ----------------------
+ *
+ * 形制照参考客户端的右栏：一排同级页签（画在列标题里，见 `.wb-coltab`）
+ * → 子页签 pill（选中反白）→ 若干个「分节」（左侧一个小圆点 + 节标题 + 右端重置）。
+ * 控件的排布是「左边滑杆、右边数值」，与参考一致。
+ *
+ * ⚠️ 从前这里还有一套 `.wb-insptabs / .wb-insptab`（图标在上、文字在下的页签行），
+ *    画在片段信息**下面** —— 于是「画面/音频/…」看着像"信息里的一块内容"。
+ *    现在它们与「信息」同处列标题那一行（真源 `inspectorTabsFor`），这套样式已删。
+ */
+
+.wb-insp-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 10px;
+}
+
+.wb-inspbody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 子页签 pill 行（画面 → 基础 / 美颜美体；调整 → 滤镜 / 调节 等） */
+.wb-subpills {
+  display: flex;
+  gap: 6px;
+  padding: 2px;
+  border-radius: 7px;
+  background: #1c1c22;
+}
+
+.wb-subpills.tight {
+  background: transparent;
+  padding: 0;
+}
+
+.wb-subpill {
+  flex: 1;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.wb-subpills.tight .wb-subpill {
+  flex: none;
+  min-width: 54px;
+  border: 1px solid #33333a;
+}
+
+.wb-subpill:hover {
+  color: var(--wb-text);
+}
+
+/* 选中反白（参考的 pill 选中态是浅底 + 深字，这里用**白字压紫底**同义表达；
+   ⚠️ 底从青色换成品牌紫后文字必须跟着换 —— 原来的深青字 #08282b 落在紫底上
+   对比度只有 2.5:1，等于看不清。） */
+.wb-subpill.on,
+.wb-subpills.tight .wb-subpill.on {
+  background: var(--wb-accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 一节：小圆点 + 标题 + 右端重置 */
+.wb-inspsect {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.wb-inspsect-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wb-text);
+  font-size: 12px;
+}
+
+.wb-inspsect-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--wb-accent);
+}
+
+.wb-inspsect-head .wb-grow {
+  flex: 1;
+}
+
+.wb-inspsect-reset {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.wb-inspsect-reset:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--wb-text);
+}
+
+/* 数值输入（参考的 spinner 形制） */
+.wb-numrow {
+  display: flex;
+  gap: 8px;
+}
+
+.wb-num {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wb-muted);
+}
+
+.wb-num > span {
+  flex: none;
+}
+
+.wb-num > input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #33333a;
+  border-radius: 5px;
+  background: #1c1c22;
+  color: var(--wb-text);
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.wb-num > input:focus {
+  outline: none;
+  border-color: var(--wb-accent);
+}
+
+.wb-num > em {
+  flex: none;
+  font-style: normal;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.wb-num.wide {
+  align-items: center;
+}
+
+.wb-num.wide > select {
+  flex: 1;
+  height: 26px;
+}
+
+.wb-insphint {
+  margin: 0;
+  color: var(--wb-faint);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.wb-insphint.total {
+  margin-top: 16px;
+}
+
+/* 滤镜选择：小胶囊网格 */
+.wb-lookgrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.wb-lookchip {
+  height: 26px;
+  border: 1px solid #33333a;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.wb-lookchip:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--wb-text);
+}
+
+.wb-lookchip.on {
+  background: var(--wb-accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* 字幕颜色：取色器 + 快捷色板 */
+.wb-colorrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.wb-colorrow input[type='color'] {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #33333a;
+  border-radius: 5px;
+  background: #1c1c22;
+  cursor: pointer;
+}
+
+.wb-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #4a4a55;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.wb-swatch.on {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * 开关（抠像 / 描边 / 阴影的启用位）。
+ * 形制照参考：左标签、右一个小滑块。`aria-pressed` 是真值来源，闸门读它。
+ */
+.wb-switchrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  font-size: 11.5px;
+  color: var(--wb-text, #d7d7de);
+}
+
+.wb-switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid #3a3a44;
+  background: #26262e;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.wb-switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #8a8a96;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.wb-switch.on {
+  background: var(--wb-accent-glow);
+  border-color: var(--wb-accent);
+}
+
+.wb-switch.on i {
+  transform: translateX(16px);
+  background: var(--wb-accent);
+}
+
+/* 取色行（键色 / 描边色 / 阴影色）：与字幕那行同一形制 */
+.wb-colorfield {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 11.5px;
+  color: var(--wb-text, #d7d7de);
+}
+
+.wb-colorfield span {
+  min-width: 52px;
+  color: var(--wb-muted, #9a9aa6);
+}
+
+.wb-colorfield input[type='color'] {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #33333a;
+  border-radius: 5px;
+  background: #1c1c22;
+  cursor: pointer;
+}
+
+.wb-colorfield em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--wb-muted, #9a9aa6);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================== 时间线 ============================== */
+
+.wb-timeline {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* 主体与工具条之间那 6px 深色缝（参考 y695..700 实测 #0E0E13）用**上边框**做：
+     写 padding-top 是没用的（内边距在元素内部，会被自己的 background 盖住，看着一点缝都没有）；
+     改成网格里单独占一行也不行 —— DOM 只有四个子元素，时间线会落进那 6px 那行把自己挤扁。
+     边框画在背景之上，位置又与元素同生命周期，最稳。 */
+  border-top: 6px solid var(--wb-deep);
+  background: var(--wb-deep2);
+  /* 顶缝里的水平分隔条以这里为定位上下文 */
+  position: relative;
+}
+
+/* 全屏时间线（工具栏最右那个键）：把整块工作台让给时间线。
+   用 fixed 覆盖层，而**不是**去改 .workbench 的网格列 —— 改网格必须条件渲染，
+   那会让 Inspector / Timeline 双双重建：播放状态、拖拽中的 dragRef、隐藏轨集合全丢。
+   覆盖层不动 DOM 结构，最稳。上边界 = 菜单栏 + 标签行（79px），所以标签行仍可点，
+   用户能随时切回去。 */
+.wb-timeline.is-full {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: calc(var(--wb-menu-h) + var(--wb-tabs-h));
+  bottom: 0;
+  z-index: 40;
+  /* 覆盖层自己贴到视口底，上面那 6px 深色缝就不该再占高度 */
+  border-top: 0;
+}
+
+.wb-tlbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--wb-tlbar-h);
+  padding: 0 8px;
+  background: var(--wb-bar);
+}
+
+.wb-tlbar button {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #d6d6dc;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.wb-tlbar button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* 禁用态必须**看得出来**。
+   实测参考空时间线：撤销/重做/清空/分割 这几个不可用项的墨迹峰值是 #59595c（lum 90），
+   可用的（音量/设置/缩放）是 #eaeaea（lum 234）—— 差 2.6 倍。
+   我们原来没有 :disabled 规则，disabled 的按钮和可用的一模一样亮，空态下整条工具条像全都可用。
+   ⚠️ 这里**用 color 调，不要用 opacity**：实测 `opacity: 0.55` 反而把峰值从 123 抬到 141
+   （opacity 会先把按钮提成合成层、按满色栅格化再整体压透明度，细描边的抗锯齿峰值反而变高）。
+   取值推导：参考禁用峰值 90 ÷ 我们的描边峰值覆盖率 0.452 ⇒ 声明的颜色取 #7d7d82，
+   实测峰值落在 ~83，与参考的 90 同档。 */
+.wb-tlbar button:disabled {
+  color: #7d7d82;
+  cursor: default;
+}
+
+/* 强调项（AI 工具 / 字幕）：参考里是**纯紫色字形 #ce76ff、不带底框**
+   —— 沿 y716 横扫，那两处只有 22px 宽的紫段（字形本身），
+   没有比字形更宽的底色段。我们上一版给的是 `rgba(107,87,255,.2)` 填充
+   （段宽 64px），整条工具条上多出两块紫底，是这里最扎眼的一处色差。 */
+.wb-tlbar button.on {
+  color: var(--wb-accent-hi);
+  background: transparent;
+}
+
+.wb-tlbar button.on:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wb-tlbar svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wb-tlbar .wb-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 5px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* 音量滑杆：参考在时间线工具栏右端（白杆白块），74px 定宽 ——
+   曾经它住在播放条（.wb-transport .wb-vol），对齐参考后搬到这里 */
+.wb-tlbar .wb-vol {
+  width: 74px;
+  flex: none;
+}
+
+.wb-tlbar .wb-grow {
+  flex: 1;
+}
+
+.wb-tlbar input[type='range'] {
+  width: 96px;
+}
+
+.wb-tlbody {
+  flex: 1;
+  min-height: 0;
+  /* 参考：工具条与轨道区之间留 2px（y733..734）
+     左栏实测 99px，右分隔线落在 x=107，轨道区从 x=108 起
+     ⚠️ 这 2px 必须用**边框**画，不能用 margin-top：margin 区域露出的是父级
+     （.wb-timeline）的底色 #14141c，而参考那两行是 #0E0E13（实测 y733..734）——
+     margin 版看着"有缝"，缝的颜色却和参考差一档。边框画在背景之上、又参与 border-box
+     占位，换过来后整体高度与之前完全一致。 */
+  border-top: 2px solid var(--wb-deep);
+  display: grid;
+  /* 参考的轨道头列实测约 130px（z-trackheads.png），右缘 1px 分隔线 ——
+     99px 时代塞的是「文字 + 4 个开关」，文字被挤成一字一行（竖排乱码样）；
+     参考的轨头根本**没有文字**，纯图标行 130px 绰绰有余。 */
+  grid-template-columns: 130px minmax(0, 1fr);
+}
+
+.wb-tllabels {
+  position: relative;
+  border-right: 1px solid #23232a;
+  overflow: hidden;
+}
+
+/* 空态左栏：参考里没有轨道标签，只有一个悬浮小卡片（三条工具图标），
+   实测 x12..107 / y845..905 —— 换算到本容器是 left:4px、top:110px、96×60 */
+.wb-tlcard {
+  position: absolute;
+  left: 4px;
+  top: 110px;
+  width: 96px;
+  height: 60px;
+  border-radius: 8px;
+  background: #23232a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #a7a7aa;
+}
+
+.wb-tlcard svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 轨道头 = 纯图标行（参考 z-trackheads.png）：轨类型图标 + 锁/眼/喇叭/S，
+   **没有文字标签** —— 99px 时代写「视频轨」三个字，列宽一紧就被挤成一字一行。
+   图标灰 #808080（参考实测），hover 变白。 */
+.wb-tllabel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 52px;
+  padding: 0 10px;
+  border-bottom: 1px solid #1c1c22;
+  color: var(--wb-faint);
+  font-size: 12px;
+}
+
+/* 轨类型图标（▭ / ♪ / Tt）：比开关键大一档，也更亮一档 —— 参考里它是
+   这一行的"身份位"，开关是"操作位"，两级灰阶把它俩分开 */
+.wb-tllabel .wb-tltype {
+  display: grid;
+  place-items: center;
+  color: var(--wb-muted);
+  margin-right: 3px;
+}
+
+.wb-tllabel .wb-tllabel-tools {
+  display: flex;
+  gap: 3px;
+}
+
+.wb-tllabel .wb-tllabel-tools button {
+  width: 19px;
+  height: 19px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-faint);
+  display: grid;
+  place-items: center;
+}
+
+.wb-tllabel .wb-tllabel-tools button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--wb-text);
+}
+
+.wb-tllabel .wb-tllabel-tools button.off {
+  color: #ff5c5c;
+}
+
+.wb-tltracks {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* ⚠️ 这里曾经有 `border-right: 49px solid #191921`，注释写"参考留了 49px 滚动条槽"。
+     实测**没有这个槽**：沿 y760/880/1010 横扫参考的 x1840..1911，全是轨道底色 #14141c；
+     只有紧贴虚线右沿的**一个像素**是 #191921（x1863，那是虚线的抗锯齿）。
+     把 1 个像素误读成 49px 的槽，会在时间线右侧多出一条 49px 的亮带。
+     删掉它之后由 .wb-tlempty 的 right:49px 接手同样的内缩（见下）。 */
+}
+
+/* 空态下参考不画标尺、也不画轨道条纹，整片 #14141C */
+.wb-timeline.is-empty .wb-tlruler,
+.wb-timeline.is-empty .wb-tllane,
+.wb-timeline.is-empty .playhead {
+  display: none;
+}
+
+.wb-tlruler {
+  position: relative;
+  height: 22px;
+  border-bottom: 1px solid #1c1c22;
+  background: var(--wb-deep2);
+}
+
+.wb-tlruler .tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  padding-left: 5px;
+  color: var(--wb-faint);
+  font-size: 9.5px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.wb-tllane {
+  position: relative;
+  height: 52px;
+  border-bottom: 1px solid #1c1c22;
+  background: #16161c;
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent calc(var(--beat, 60px) - 1px),
+    rgba(255, 255, 255, 0.05) calc(var(--beat, 60px) - 1px),
+    rgba(255, 255, 255, 0.05) var(--beat, 60px)
+  );
+}
+
+.wb-tllane:nth-of-type(even) {
+  background-color: #191920;
+}
+
+/* 时间线空态：参考是一整块虚线圆角矩形（实测 x156..1862 / y768..990，
+   换算到轨道区就是上下各 33px、左右各 49px 的内缩），框内没有底色，
+   只比周围亮一点点，所以这里不能给 background。
+   ⚠️ 左右都是 49px：右内缩以前是靠 .wb-tltracks 的 49px 边框"顺带"做出来的，
+   那个边框是误读（参考没有滚动条槽），所以改成这里直接写 right:49px —— 右沿仍落在 x1862。 */
+.wb-tlempty {
+  position: absolute;
+  left: 49px;
+  right: 49px;
+  top: 33px;
+  bottom: 33px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--wb-faint);
+  font-size: 12.5px;
+  pointer-events: none;
+}
+
+/* 虚线框本身用 SVG 描边画，不用 `border: 1px dashed`。
+   实测参考沿 y=768 横扫：段长 8~10、间隙 6~7 ⇒ **约 9 实 / 6.5 空**，颜色 #424248。
+   ⚠️ Chromium 在 1px 边框下只画 3 实 / 2 空的**密点线**（我们上一版就是这样），
+   肉眼是"细点线"而参考是"长虚线" —— 这是 `border-style:dashed` 表达不出来的，
+   只能换画法。inset 0.5px 让 1px 描边正好压在元素边界上（描边以路径为中心）。
+   ⚠️ 别配 `stroke-dasharray` 到 border 上、也别用 border-image：前者没有这个属性，后者不吃 border-radius。
+   ⚠️ **尺寸必须显式给 width/height**：`<svg>` 是**替换元素**，`width:auto` 时用**内在尺寸**
+   （300×150），只写 `inset` 是拉不开它的 —— 实测踩过：虚线只画在左上角 300×150 一小块，
+   x600 处整条没有线。`calc(100% - 1px)` 才是"四周各内缩 0.5px"的正确写法。
+   `overflow: visible` 也必须给：描边以路径为中心，路径压在视口边界上，外半边会被 SVG 默认的
+   overflow:hidden 裁掉，线就只剩一半亮度。 */
+.wb-tlempty-dash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.wb-tlempty-dash rect {
+  /* ⚠️ 那半个像素必须落在 **SVG 用户坐标系**里，不能靠 svg 盒子的小数定位。
+     踩过：写 `left:0.5px; top:0.5px` 时，运行期量到的 svg 盒确实是 (156.5, 768.5, 1706×222)，
+     但**画出来整条线沉了半像素** —— y768 和 y769 各 50% 亮度（实测 #2b2b32 / #2b2b32），
+     而参考是 y768 单行满强度 #424248。原因是 svg 属替换元素，Chromium 会把它的盒原点
+     吸附到整数设备像素上，0.5 被吃掉。把 0.5 放进 x/y、盒原点保持整数，描边中心才真落在像素中心。
+     `width/height: calc(100% - 1px)` 是 SVG2 的几何属性走 CSS（Chromium 支持）；
+     若哪天不生效，会回退到属性上的 100%，只是重新变回半像素双行，不会更差。 */
+  x: 0.5px;
+  y: 0.5px;
+  width: calc(100% - 1px);
+  height: calc(100% - 1px);
+  fill: none;
+  stroke: #424248;
+  stroke-width: 1;
+  stroke-dasharray: 9 6.5;
+}
+
+.wb-tlempty .wb-import {
+  pointer-events: auto;
+}
+
+/* ============================== 造型工具（与旧主题共用） ============================== */
+
+/* 工作台里的弹窗沿用 styles.css 的 .mask/.modal，这里只压一下层级 */
+.app.is-editor .mask {
+  z-index: 90;
+}
+
+/* ============================== 时间线右键菜单 ============================== */
+
+/**
+ * 定位用 fixed，坐标直接取 pointer 事件的 clientX/clientY：
+ * 挂在 `.wb-timeline` 里、但轨道区自己会横向滚动，用 absolute 会被一起卷走。
+ * 层级压在所有面板之下、弹窗（.mask 的 80/90）之上以外的常规层 ——
+ * 只要它比时间线内容高就够，不需要盖住弹窗。
+ */
+.wb-ctxmenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 186px;
+  padding: 5px;
+  border: 1px solid #3a3a44;
+  border-radius: 9px;
+  background: #23232a;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wb-ctxmenu-title {
+  padding: 5px 9px 6px;
+  border-bottom: 1px solid #33333c;
+  margin-bottom: 3px;
+  color: var(--wb-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-ctxmenu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #dcdce2;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.wb-ctxmenu button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.wb-ctxmenu button.danger {
+  color: #ff8a8a;
+}
+
+.wb-ctxmenu button.danger:hover {
+  background: rgba(255, 92, 92, 0.16);
+  color: #ffb0b0;
+}
+
+/* 键位提示统一推到右侧，与参考的"右对齐快捷键"一致 */
+.wb-ctxmenu button kbd {
+  margin-left: auto;
+}
+
+.wb-ctxmenu-sep {
+  height: 1px;
+  margin: 3px 6px;
+  background: #33333c;
+}
+
+/* ============================== 快捷键设置页 ============================== */
+
+/* `kbd` 在右键菜单与设置页共用一套样式，所以放全局（两种底色都是深色） */
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid #4a4a55;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: #2b2b33;
+  color: #d8d8de;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 15px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.wb-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wb-keys-group-title {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.wb-keys-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line-soft, rgba(255, 255, 255, 0.06));
+}
+
+.wb-keys-row:last-child {
+  border-bottom: 0;
+}
+
+.wb-keys-row.capturing {
+  border-radius: 7px;
+  background: rgba(131, 114, 254, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(131, 114, 254, 0.45);
+}
+
+.wb-keys-row.readonly {
+  opacity: 0.75;
+}
+
+.wb-keys-label {
+  flex: none;
+  width: 132px;
+  color: var(--text);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-keys-label em {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.wb-keys-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wb-key-slot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.wb-key-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.wb-key-chip:hover {
+  border-color: rgba(131, 114, 254, 0.55);
+  background: rgba(131, 114, 254, 0.12);
+}
+
+.wb-key-chip.static {
+  cursor: default;
+}
+
+.wb-key-chip.static:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* 冲突键位：红色描边 + 红字，和参考里会报「冲突」的那件事对上 */
+.wb-key-chip.conflict kbd {
+  border-color: #ff5c5c;
+  color: #ffb0b0;
+  background: rgba(255, 92, 92, 0.16);
+}
+
+.wb-key-chip.empty {
+  padding: 3px 9px;
+  border: 1px dashed #4a4a55;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+/* 取消绑定：默认藏起来，悬停该格才出现，避免一排 × 把面板弄乱 */
+.wb-key-drop {
+  width: 15px;
+  height: 15px;
+  margin-left: 1px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+}
+
+.wb-key-slot:hover .wb-key-drop,
+.wb-key-drop:focus-visible {
+  opacity: 1;
+}
+
+.wb-key-drop:hover {
+  background: rgba(255, 92, 92, 0.2);
+  color: #ffb0b0;
+}
+
+.wb-key-add,
+.wb-key-reset {
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.wb-key-add:hover,
+.wb-key-reset:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+/* 「＋」在未悬停时也保持低调，但别和键位格抢视线 */
+.wb-key-add {
+  color: #6c6c72;
+}
+
+.wb-keys-hint {
+  padding: 3px 9px;
+  border: 1px dashed rgba(131, 114, 254, 0.6);
+  border-radius: 6px;
+  color: var(--violet-bright);
+  font-size: 11.5px;
+}
+
+.wb-keys-count {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}

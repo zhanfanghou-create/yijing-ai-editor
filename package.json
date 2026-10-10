@@ -1,0 +1,28 @@
+{
+  "name": "yijing-ai-editor",
+  "private": true,
+  "version": "1.0.0",
+  "description": "YiJing AI Editor / 艺镜剪辑 — 纯本地的开源视频剪辑客户端（Electron + React + 本机 ffmpeg）",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "desktop:dev": "npm run dev -w @yijing/desktop",
+    "desktop:build": "npm run build -w @yijing/desktop",
+    "desktop:dist": "npm run dist -w @yijing/desktop",
+    "dev": "node scripts/dev-all.mjs",
+    "verify": "node scripts/verify.mjs",
+    "check:modules": "node tools/check-node-modules.mjs node_modules",
+    "check:modules:selftest": "node tools/check-node-modules.selftest.mjs",
+    "e2e:media": "node tools/media-import-e2e.mjs",
+    "ffmpeg:fetch": "node tools/fetch-ffmpeg.mjs",
+    "installer:build": "node packages/installer/scripts/build-installer.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

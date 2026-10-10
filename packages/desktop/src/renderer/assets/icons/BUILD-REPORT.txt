@@ -1,0 +1,57 @@
+自绘图标构建报告
+可映射角色 49，未找到 6（IconSplit IconMagnet IconFilter IconRatio IconZoomOut IconLock）
+生成的组件 49 个（其中剥掉底板的 0 个）
+
+【逐项】
+  IconPlay           high    viewBox=0 0 24 24        剥板=0  IconPlay.svg
+  IconPause          high    viewBox=0 0 24 24        剥板=0  IconPause.svg
+  IconSkipBack       high    viewBox=0 0 24 24        剥板=0  IconSkipBack.svg
+  IconSkipForward    high    viewBox=0 0 24 24        剥板=0  IconSkipForward.svg
+  IconUndo           high    viewBox=0 0 24 24        剥板=0  IconUndo.svg
+  IconRedo           high    viewBox=0 0 24 24        剥板=0  IconRedo.svg
+  IconScissors       high    viewBox=0 0 24 24        剥板=0  IconScissors.svg
+  IconTrash          high    viewBox=0 0 24 24        剥板=0  IconTrash.svg
+  IconPlus           high    viewBox=0 0 24 24        剥板=0  IconPlus.svg
+  IconClose          high    viewBox=0 0 24 24        剥板=0  IconClose.svg
+  IconCheck          high    viewBox=0 0 24 24        剥板=0  IconCheck.svg
+  IconSearch         high    viewBox=0 0 24 24        剥板=0  IconSearch.svg
+  IconSettings       high    viewBox=0 0 24 24        剥板=0  IconSettings.svg
+  IconRefresh        high    viewBox=0 0 24 24        剥板=0  IconRefresh.svg
+  IconMedia          high    viewBox=0 0 24 24        剥板=0  IconMedia.svg
+  IconMusic          high    viewBox=0 0 24 24        剥板=0  IconMusic.svg
+  IconCaption        high    viewBox=0 0 24 24        剥板=0  IconCaption.svg
+  IconText           high    viewBox=0 0 24 24        剥板=0  IconText.svg
+  IconFolder         high    viewBox=0 0 24 24        剥板=0  IconFolder.svg
+  IconLayers         high    viewBox=0 0 24 24        剥板=0  IconLayers.svg
+  IconWand           high    viewBox=0 0 24 24        剥板=0  IconWand.svg
+  IconClock          high    viewBox=0 0 24 24        剥板=0  IconClock.svg
+  IconExport         high    viewBox=0 0 24 24        剥板=0  IconExport.svg
+  IconDownload       high    viewBox=0 0 24 24        剥板=0  IconDownload.svg
+  IconUpload         high    viewBox=0 0 24 24        剥板=0  IconUpload.svg
+  IconFullscreen     high    viewBox=0 0 24 24        剥板=0  IconFullscreen.svg
+  IconVolume         high    viewBox=0 0 24 24        剥板=0  IconVolume.svg
+  IconVolumeOff      high    viewBox=0 0 24 24        剥板=0  IconVolumeOff.svg
+  IconEye            high    viewBox=0 0 24 24        剥板=0  IconEye.svg
+  IconEyeOff         high    viewBox=0 0 24 24        剥板=0  IconEyeOff.svg
+  IconZoomIn         high    viewBox=0 0 24 24        剥板=0  IconZoomIn.svg
+  IconGridView       high    viewBox=0 0 24 24        剥板=0  IconGridView.svg
+  IconListView       high    viewBox=0 0 24 24        剥板=0  IconListView.svg
+  IconMenu           high    viewBox=0 0 24 24        剥板=0  IconMenu.svg
+  IconChevronDown    high    viewBox=0 0 24 24        剥板=0  IconChevronDown.svg
+  IconChevronRight   high    viewBox=0 0 24 24        剥板=0  IconChevronRight.svg
+  IconUser           high    viewBox=0 0 24 24        剥板=0  IconUser.svg
+  IconAlert          high    viewBox=0 0 24 24        剥板=0  IconAlert.svg
+  IconInfo           high    viewBox=0 0 24 24        剥板=0  IconInfo.svg
+  IconCreateVideo    high    viewBox=0 0 24 24        剥板=0  IconCreateVideo.svg
+  IconDraft          high    viewBox=0 0 24 24        剥板=0  IconDraft.svg
+  IconTemplate       high    viewBox=0 0 24 24        剥板=0  IconTemplate.svg
+  IconToolbox        high    viewBox=0 0 24 24        剥板=0  IconToolbox.svg
+  IconAiVideo        high    viewBox=0 0 24 24        剥板=0  IconAiVideo.svg
+  IconAiImage        high    viewBox=0 0 24 24        剥板=0  IconAiImage.svg
+  IconVideoBoost     high    viewBox=0 0 24 24        剥板=0  IconVideoBoost.svg
+  IconImageBoost     high    viewBox=0 0 24 24        剥板=0  IconImageBoost.svg
+  IconLibrary        high    viewBox=0 0 24 24        剥板=0  IconLibrary.svg
+  IconSmartCut       high    viewBox=0 0 24 24        剥板=0  IconSmartCut.svg
+
+【说明/异常】
+  手绘定义 91 个（导出 48 个），自绘角色 49 个，合计角色 97

@@ -1,0 +1,66 @@
+appId: com.yijing.aieditor.installer
+productName: YiJingAIEditor-Setup
+copyright: (c) 2026 艺镜 AI 团队
+
+directories:
+  buildResources: build
+  output: dist-installer
+
+asar: true
+
+# 安装器同样没有生产依赖：不 spawn npm 做 rebuild / 依赖安装
+npmRebuild: false
+buildDependenciesFromSource: false
+nodeGypRebuild: false
+
+files:
+  - electron/**/*
+  - dist-renderer/**/*
+  - package.json
+  - '!**/*.map'
+  # 取证/侦察目录不进包（理由同 packages/desktop/electron-builder.yml 里那条注释）：
+  # 白名单之外再显式排除一遍，防有人把白名单改成 `**/*` 时它们混进来。
+  - '!_recon/**/*'
+  - '!_evidence/**/*'
+
+# payload（app.7z + 解压器）体积在百 MB 级，走 extraResources 直接落到 resources/payload，
+# 不进 asar。electron/payload.js 会优先探测 <resources>/payload。
+# 注意：files 列表刻意不含 payload/**/*，否则会与 extraResources 重复打包一份，包体翻倍。
+extraResources:
+  - from: payload
+    to: payload
+    filter:
+      - '**/*'
+      - '!trash-*'
+      - '!trash-*/**'
+  - from: resources
+    to: .
+    filter:
+      - license.txt
+      - icon.ico
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: YiJingAIEditor-Setup-Windows-x64.${ext}
+  legalTrademarks: ''
+  requestedExecutionLevel: asInvoker
+
+portable:
+  artifactName: YiJingAIEditor-Setup-Windows-x64.${ext}
+  unicode: true
+  requestExecutionLevel: user
+
+mac:
+  category: public.app-category.graphics-design
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: build/icon.ico
+  artifactName: YiJingAIEditor-Setup-macOS-${arch}.${ext}

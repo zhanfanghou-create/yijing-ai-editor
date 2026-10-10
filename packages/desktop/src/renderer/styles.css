@@ -1,0 +1,2417 @@
+/**
+ * 艺镜AI剪辑 · 客户端主题
+ *
+ * 配色令牌就是下面这一组，改色请只改这里（组件一律用 var()，不写字面量）：
+ *   应用底 / 时间线底 #1c1c1e    面板底 / 工具栏 #302f36
+ *   次级面板 / 卡片   #3e3d46    轨道交替底      #242428 / #29282d
+ *   分隔与边框        #464651    强调（选中/滑块）#c36bf5
+ *   视频 clip 蓝      #30538e（头栏 #12243a）  音频波形绿 #239152 / #4da674
+ *   紫 clip           #735caa（头栏 #221d38）  播放头     #ffffff
+ *
+ * ⚠️ 全应用**只有一个强调色**：`--violet`（#c36bf5，与工作台 `--wb-accent` 同值）。
+ *   2026-10-10 Jason 指出"好多标签用了蓝色" —— 那是工作台检查器里一套并行的青色
+ *   #00C1CD（子页签 / 分节圆点 / 开关 / 取色环 / 聚焦框 / 播放条时码）。
+ *   已全部收进品牌紫；这里原先的强调色 #8372fe 是与工作台并列的第二套紫，一并对齐。
+ *   青色只保留在**轨道身份色**（`--clip-overlay` #1f7f8c）：那条色是"这是叠加轨"的语义，
+ *   必须与视频蓝 / 音频绿 / 字幕紫拉得开，不跟着 UI 强调色走。
+ *   页面里那些蓝青绿渐变（首页模板封面、反馈卡插画）是**内容色**，同样不动。
+ *
+ * 布局按专业剪辑软件的惯例组织：左图标栏 / 中预览 / 右属性 / 底时间线。
+ */
+
+:root {
+  --bg: #1c1c1e;
+  --bg-deep: #161618;
+  --panel: #302f36;
+  --panel-2: #29282d;
+  --panel-3: #3e3d46;
+  --line: #464651;
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --text: #e8e8e9;
+  --muted: #9a9aa0;
+  --faint: #6c6c72;
+  --violet: #c36bf5;
+  --violet-bright: #ce76ff;
+  --violet-deep: #a855f7;
+  --green: #4da674;
+  --warning: #fab703;
+  --danger: #ff5c5c;
+
+  /* 时间线专用（参考软件 clip 的解剖结构：头栏 + 本体 + 波形） */
+  --clip-video: #30538e;
+  --clip-video-head: #12243a;
+  --clip-audio: #239152;
+  --clip-audio-head: #0d3921;
+  --clip-text: #735caa;
+  --clip-text-head: #221d38;
+  /* 叠加轨（画中画）：取青色一系，与视频蓝 / 音频绿 / 字幕紫都拉得开 */
+  --clip-overlay: #1f7f8c;
+  --clip-overlay-head: #0b2e34;
+
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+
+  --rail-w: 68px;
+  --left-w: 320px;
+  --right-w: 300px;
+  --timeline-h: 260px;
+  --topbar-h: 52px;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui, -apple-system,
+    'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/**
+ * 键盘焦点环 —— 商业软件的可达性底线。
+ *
+ * 用 **:focus-visible** 而不是 :focus：鼠标点击**不该**出现焦点框
+ * （那会在逐像素对齐过的按钮上凭空多一圈，把量好的视觉顶歪），
+ * 只有 Tab / 方向键导航时才亮。
+ *
+ * 用 outline 而不是 border / box-shadow：outline **不占布局**，
+ * 不会让对齐好的元素在获取焦点那一刻跳一格。
+ * 用 :where() 把特异性压到 0 —— 任何已有的 :focus 规则都能照旧生效，
+ * 这里只补"没人管过的那批控件"。
+ */
+:where(button, [role='button'], a[href], input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--violet-bright);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* ============================== 应用骨架 ============================== */
+
+.app {
+  position: relative; /* 拖拽导入遮罩的定位上下文 */
+  display: grid;
+  grid-template-rows: var(--topbar-h) 1fr;
+  height: 100%;
+  background: var(--bg);
+}
+
+/* 每个区域都要显式定位。
+   不要图省事只写行或只写列 —— `.inspector` 只写了 grid-row，
+   按 CSS Grid 的自动放置算法（第二步优先处理「行确定、列自动」的项），
+   它会抢在 `.stage` 前面占掉第 2 列，把预览区挤到第二行去。
+   （左侧原来还有一个 `.rail` 图标栏，同样只有 grid-row；界面改版后左栏换成
+   顶部九个功能标签，`.rail` 的规则与 components/Rail.jsx 一起删掉了。） */
+
+.stage {
+  grid-column: 2 / span 2;
+  grid-row: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--left-w) minmax(0, 1fr);
+}
+
+/* ============================== 顶栏 ============================== */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: var(--topbar-h);
+  padding: 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+
+.topbar button,
+.topbar input,
+.topbar select,
+.topbar a,
+.topbar .no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-text strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.brand-text small {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pill b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pill.is-good b {
+  color: var(--green);
+}
+
+.pill.is-warn b {
+  color: var(--warning);
+}
+
+.win-actions button {
+  width: 34px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.win-actions button:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.win-actions button.danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ============================== 通用面板 ============================== */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.pane + .pane {
+  border-left: 1px solid var(--line);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.pane-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pane-head span.kicker {
+  display: block;
+  color: var(--faint);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+}
+
+.pane-head .grow {
+  flex: 1;
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 13px;
+}
+
+.pane-body.is-flush {
+  padding: 0;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.section-title:not(:first-child) {
+  margin-top: 18px;
+}
+
+/* ============================== 控件 ============================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-3);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--violet), var(--violet-deep));
+  color: #fff;
+  font-weight: 550;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+  background: linear-gradient(135deg, var(--violet), var(--violet-deep));
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-3);
+  border-color: transparent;
+}
+
+.btn.danger {
+  border-color: rgba(255, 113, 139, 0.35);
+  color: var(--danger);
+}
+
+.btn.small {
+  height: 27px;
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+
+.btn.block {
+  width: 100%;
+}
+
+.field {
+  display: block;
+  margin-bottom: 11px;
+}
+
+.field > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.field > span em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 10.5px;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  outline: none;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--line-strong);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--faint);
+}
+
+.textarea {
+  height: auto;
+  min-height: 84px;
+  padding: 9px 10px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 分段控件 */
+.seg {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.seg button {
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.seg button:hover {
+  color: var(--text);
+}
+
+.seg button.active {
+  background: var(--violet);
+  color: #fff;
+}
+
+/* 开关 */
+.switch {
+  appearance: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: background 0.16s ease;
+  flex: none;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 99px;
+  background: var(--muted);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.switch:checked {
+  background: var(--violet);
+  border-color: transparent;
+}
+
+.switch:checked::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+/* ============================== 预览区 ============================== */
+
+.stage-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-deep);
+}
+
+/**
+ * 预览画布。
+ *
+ * ⚠️ 形状由 `--canvas-ar`（画面宽高比）决定，由 Stage.jsx 按当前比例写进内联样式；
+ *    这里**不许**再写 `16 / 9` 之类的死值 —— 写死了就是"比例能选、画布不变"。
+ *    兜底值 `--canvas-ar: 1.7778`（16:9）只是变量没到位时不至于塌成 0 高。
+ *
+ * ⚠️ `overflow: hidden` 是「窗口外不显示」的那一半：
+ *    字幕 / 画中画 / 画面特效都是画布内的绝对定位层，超出的部分靠它裁掉，
+ *    不靠每一层自己算边界 —— 层一多，各自算边界迟早漏一处。
+ */
+.canvas-frame {
+  --canvas-ar: 1.7778;
+  aspect-ratio: var(--canvas-ar);
+  width: min(100%, calc(100cqh * var(--canvas-ar)));
+  position: relative;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+/**
+ * 素材按**裁切**填满画布（`cover` 而不是 `contain`）。
+ *
+ * 为什么是裁：比例是"画布形状"，切到 1:1 时 16:9 的素材应当被裁掉左右、
+ * 铺满方框，而不是缩成中间一条、上下留两条黑边 —— 后者看着像"比例没生效"。
+ * 成片那侧同一口径：ffmpeg 用 `force_original_aspect_ratio=increase` + `crop`
+ * （见 shared/aspect.js 的 outputSizeFor 与 main/render.js）。
+ * ⚠️ 两边必须同一口径，否则"预览裁了、成片留黑边"，且两边单独看都没错。
+ */
+.canvas-frame img,
+.canvas-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.canvas-placeholder {
+  text-align: center;
+  color: var(--faint);
+  padding: 24px;
+  max-width: 380px;
+}
+
+.canvas-placeholder strong {
+  display: block;
+  color: var(--muted);
+  font-size: 13.5px;
+  margin-bottom: 6px;
+}
+
+.canvas-placeholder small {
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.canvas-badge {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  /* z-index 显式给到最上层：字幕叠加层（3）与特效覆盖层（4）都画在画布上，
+     角标是界面自己的信息，不能被内容盖住 */
+  z-index: 5;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(8, 10, 24, 0.78);
+  color: var(--muted);
+  font-size: 10.5px;
+  backdrop-filter: blur(6px);
+}
+
+.transport .timecode {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.transport .timecode b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.transport-buttons button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.transport-buttons button:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.transport-buttons button.play {
+  width: 36px;
+  height: 36px;
+  background: var(--violet);
+  color: #fff;
+}
+
+.transport-buttons button.play:hover {
+  filter: brightness(1.1);
+}
+
+.transport svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ============================== 媒体库 ============================== */
+
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 9px;
+  padding: 11px 13px;
+}
+
+.media-card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.14s ease;
+}
+
+.media-card:hover {
+  border-color: var(--line-strong);
+}
+
+.media-card.selected {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 2px rgba(131, 114, 254, 0.28);
+}
+
+.media-thumb {
+  aspect-ratio: 16 / 10;
+  background: #161618 center/cover no-repeat;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.media-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/**
+ * ⚠️ 这一条不能省。`<video>` 不像 `<img>`，它没有"填满容器"的默认行为：
+ * 不给宽高就按自身像素尺寸排布，1080p 的片子会撑破 16:10 的格子，
+ * 被 `.media-card` 的 `overflow:hidden` 裁掉一半 —— 表现出来正是"缩略图不对"。
+ * `object-fit: cover` 同时解决"窄画幅被拉扁"的像素比例问题。
+ */
+.media-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+
+.media-meta {
+  padding: 7px 8px;
+}
+
+.media-meta strong {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-meta small {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-card .media-actions {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  display: none;
+  gap: 3px;
+}
+
+.media-card:hover .media-actions {
+  display: flex;
+}
+
+.media-card .media-actions button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(8, 10, 24, 0.8);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}
+
+.media-card .media-actions button:hover {
+  color: var(--text);
+  background: var(--violet);
+}
+
+/* ============================== 属性栏 ============================== */
+
+.inspector .pane-body {
+  padding: 12px 13px;
+}
+
+.slider-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.slider-row > label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  grid-column: 1 / -1;
+}
+
+.slider-row > label em {
+  color: var(--text);
+  font-style: normal;
+}
+
+input[type='range'] {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--panel-3);
+  outline: none;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 99px;
+  background: var(--violet);
+  border: 2px solid var(--panel);
+  cursor: pointer;
+}
+
+.kv-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.kv-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 11.5px;
+}
+
+.kv-list > div:last-child {
+  border-bottom: 0;
+}
+
+.kv-list span {
+  color: var(--muted);
+}
+
+.kv-list strong {
+  color: var(--text);
+  font-weight: 550;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================== 时间线 ============================== */
+
+.timeline {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.timeline-head .zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.timeline-head input[type='range'] {
+  width: 110px;
+}
+
+.track-label b {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.track-label .track-tools button {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+
+.track-label .track-tools button:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.track-label .track-tools button.off {
+  color: var(--danger);
+}
+
+.tracks {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.track-ruler .tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--line-soft);
+  padding-left: 5px;
+  color: var(--faint);
+  font-size: 9.5px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+/* 轨道底色交替，与参考软件一致（#29282d / #242428） */
+.track-lane:nth-child(even) {
+  background-color: var(--panel-2);
+}
+
+.track-lane.disabled {
+  opacity: 0.4;
+}
+
+/* ------------------------------------------------------------------ 片段
+   解剖结构与参考软件一致：顶部一条深色头栏（图标 + 时长 + 名称）+ 下方本体，
+   音频类本体是绿色波形条。选中时描白边。 */
+
+.clip {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  border-radius: 6px;
+  border: 0;
+  background: var(--clip-video);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.clip.audio {
+  background: var(--clip-audio);
+}
+
+.clip.text {
+  background: var(--clip-text);
+}
+
+.clip.overlay {
+  background: var(--clip-overlay);
+}
+
+/* 头栏：深色半透明条，压在本体之上 */
+.clip::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 20px;
+  background: var(--clip-video-head);
+}
+
+.clip.audio::before {
+  background: var(--clip-audio-head);
+}
+
+.clip.text::before {
+  background: var(--clip-text-head);
+}
+
+.clip.overlay::before {
+  background: var(--clip-overlay-head);
+}
+
+/* 音频波形条：**没有**可解码素材时才用的装饰条。
+   有 url 的片段会画真波形（.clip-wave），那时这段是多余的 —— 而且它是 ::after，
+   按层叠顺序会画在真实子元素**之上**，留着就会把真波形整个盖住。 */
+.clip.audio:not([data-visual='1'])::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46%;
+  background: linear-gradient(180deg, rgba(77, 166, 116, 0.55), rgba(35, 145, 82, 0.9));
+  mask-image: repeating-linear-gradient(
+    90deg,
+    #000 0 1px,
+    transparent 1px 3px,
+    #000 3px 5px,
+    transparent 5px 6px
+  );
+}
+
+.clip.selected {
+  box-shadow: inset 0 0 0 2px #ffffff;
+}
+
+/**
+ * 两端修剪把手。
+ *
+ * 平时 `opacity: 0` —— 但**仍然可点**（opacity 不影响命中测试），
+ * 悬停到片段上才显形，这样一屏二十个片段不会长出四十根白条。
+ * `.clip` 自己已经是 `position:absolute; overflow:hidden`，把手贴在两端不会被画出去。
+ */
+.clip .clip-trim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 2;
+  opacity: 0;
+  cursor: ew-resize;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.45));
+}
+
+.clip .clip-trim.start {
+  left: 0;
+  border-radius: 6px 0 0 6px;
+}
+
+.clip .clip-trim.end {
+  right: 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.clip:hover .clip-trim,
+.clip.selected .clip-trim,
+.clip .clip-trim:active {
+  opacity: 0.85;
+}
+
+/* 拖动期间由把手自己 setPointerCapture，光标要一直是修剪形，
+   否则指针移出那 7px 后会退回 pointer，看着像"松手了" */
+.clip .clip-trim:active {
+  opacity: 1;
+}
+
+.clip .clip-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 20px;
+}
+
+.clip .clip-inner span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clip .clip-inner .clip-dur {
+  color: rgba(255, 255, 255, 0.78);
+  flex: none;
+}
+
+.clip .clip-ico {
+  flex: none;
+  display: inline-flex;
+  opacity: 0.9;
+}
+
+/* 头部名称与帧号时长之间的细分隔线（参考的「文件名 | 00:00:43:01」形制） */
+.clip .clip-hsep {
+  flex: none;
+  width: 1px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.32);
+}
+
+/* 停用的片段：留在原地（位置/时长不动），只是退出了预览与导出 ——
+   压透明度 + 去饱和，与"已停用"角标一起读得出状态 */
+.clip.is-disabled {
+  opacity: 0.45;
+  filter: saturate(0.4);
+}
+
+/* 锁定轨上的片段：结构操作被拒，光标不能再是"能拖"的手型 */
+.clip.in-locked {
+  cursor: default;
+}
+
+.clip .clip-name {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------- 片段本体的"内容可视化"
+   头栏（.clip::before，20px）下面那一整块用来放真实内容：
+   视频轨抽帧、音频轨波形、字幕轨文字、图片素材静帧。
+   下面这几条都围绕同一个前提：**这一层只是背景**，绝不吃指针事件 ——
+   片段自己要拖、两端要修剪，一旦这层收下 pointerdown，
+   表现就是"片段突然拖不动 / 修剪手柄点不到"，而且从 DOM 上看不出是谁挡的。 */
+
+.clip .clip-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 20px;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 视频轨：一排抽帧。横向平分，每帧 cover 自己那一格 */
+.clip .clip-strip {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+}
+
+.clip .clip-strip img {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 图片素材落在视频轨：整格铺满，圆角跟随片段底部 */
+.clip .clip-still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+/* 音频轨：真波形。固定位图 + CSS 拉伸 ⇒ 时间线缩放时不需要重画 */
+.clip .clip-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+/* 视频 / 叠加片段底部那条波形：参考客户端是贴底一条橙色细带（约 10px）。
+   与音频轨那个铺满整块的大波形区分开 —— 共用 .clip-wave 的拉伸策略，
+   这里只改定位与配色。画不出来时组件返回 null，片段保持原样。 */
+.clip .clip-wave-inline {
+  inset: auto 0 0 0;
+  height: 10px;
+  opacity: 0.92;
+}
+
+/* 音量包络线：高度映射片段音量（真实字段，不是装饰）。
+   线 + 右端一颗节点圆点，形制照参考的音频片段。 */
+.clip .clip-env {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid #ffb14d;
+  pointer-events: none;
+}
+
+.clip .clip-env::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  top: -3.5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffb14d;
+}
+
+/* 字幕轨：把正文直接铺在轨道上 */
+.clip .clip-textbody {
+  position: absolute;
+  inset: 0;
+  padding: 3px 7px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 1.3;
+  opacity: 0.95;
+  pointer-events: none;
+  /* 最多两行，超出裁掉 —— 轨道高度只有几十像素，撑开会把片段顶变形 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 有内容图形时给头栏文字加描边，避免和亮画面糊在一起 */
+.clip[data-visual='1'] .clip-inner .clip-name,
+.clip[data-visual='1'] .clip-inner .clip-dur {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* 播放头：白色细线 + 标尺上的圆角矩形手柄（可读作"抓手"，形制照参考） */
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ffffff;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: -5.5px;
+  width: 12px;
+  height: 16px;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================== 弹窗 ============================== */
+
+.mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 6, 16, 0.68);
+  backdrop-filter: blur(3px);
+  animation: fade 0.15s ease;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: rise 0.18s ease;
+}
+
+.modal.wide {
+  max-width: 720px;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(10px);
+    opacity: 0.5;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.modal > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 17px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal > header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.modal > header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.modal > header button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.modal > header button:hover {
+  color: var(--text);
+}
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 15px 17px;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 13px 17px;
+  border-top: 1px solid var(--line);
+}
+
+.modal-foot .error {
+  margin-right: auto;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* ============================== 杂项 ============================== */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.notice.warn {
+  border-color: rgba(255, 202, 106, 0.3);
+  color: var(--warning);
+}
+
+.notice.bad {
+  border-color: rgba(255, 113, 139, 0.3);
+  color: var(--danger);
+}
+
+.empty {
+  padding: 30px 16px;
+  text-align: center;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+/* 贴纸页分页（服务端素材超过一页时出现） */
+.pager-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.chip.good {
+  color: var(--green);
+  border-color: rgba(77, 166, 116, 0.3);
+}
+
+.chip.warn {
+  color: var(--warning);
+  border-color: rgba(255, 202, 106, 0.3);
+}
+
+.chip.bad {
+  color: var(--danger);
+  border-color: rgba(255, 113, 139, 0.3);
+}
+
+.chip.violet {
+  color: var(--violet-bright);
+  border-color: var(--line-strong);
+}
+
+.mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.list-item .grow strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.list-item .grow small {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.spin {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 99px;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.toast-wrap {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.toast {
+  max-width: 380px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: var(--shadow);
+  animation: rise 0.18s ease;
+}
+
+.toast.bad {
+  border-color: rgba(255, 113, 139, 0.45);
+}
+
+.toast.good {
+  border-color: rgba(77, 166, 116, 0.45);
+}
+
+/* ============================== 拖拽导入 ============================== */
+
+/* 悬停提示：不这么做的话用户拖到窗口上完全没反馈，不知道能不能松手 */
+.drop-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  /* 必须让遮罩不吃指针事件 —— 它一出现就盖在光标下，否则立刻触发 dragleave，
+     dragging 状态会自己闪断，遮罩反复出现消失。 */
+  pointer-events: none;
+  background: rgba(12, 12, 16, 0.62);
+  animation: rise 0.12s ease;
+}
+
+.app.is-dragging {
+  outline: 2px dashed var(--violet);
+  outline-offset: -6px;
+}
+
+.drop-card {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 26px 40px;
+  border: 1px dashed var(--violet);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.drop-card strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.drop-card small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ==========================================================================
+ * 参数面板（滤镜 / 转场 / 文字模板 / 我的预设）与轨道角标
+ *
+ * 这些面板是「功能标签的内容」——此前 文字/素材/转场/滤镜/数字人 五个标签
+ * 只有左栏节点、中栏一片空白。补上内容后需要一套与之匹配的可视语言：
+ * 卡片本身就是预览（滤镜直接吃 CSS filter、转场用两块交叠示意），
+ * 选中态用强调色描边 + 右上角对勾，一眼能看出"现在生效的是哪个"。
+ * ========================================================================== */
+
+/* 列表项在部分面板里是可点的（点一下 = 打开对应能力），按钮要抹掉浏览器默认样式 */
+.list-item.is-clickable {
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.list-item.is-clickable:hover {
+  border-color: var(--violet);
+  background: var(--panel-3);
+}
+
+.list-ico {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--violet-bright);
+  background: rgba(131, 114, 254, 0.14);
+}
+
+/* --------------------------- 预设卡片网格 --------------------------- */
+
+/*
+ * 规格**逐条取自参考客户端的 QML 源码**，不是目测：
+ *   Filter_Materials.qml       itemWidth: 100  itemHeight: 122
+ *   Transition_Materials.qml   itemWidth: 100  itemHeight: 122
+ * 这两个文件里被注释掉的旧版（`Com_Materials`）把间距也写全了，四个方向都在：
+ *   itemRowMargin: 16 / itemColumnMargin: 16  ⇒ 网格 gap
+ *   viewTopMargin: 8 / viewLeftMargin: 8 / viewRightMargin: 16  ⇒ 网格内边距
+ * 卡片高 122 = 预览图 100 + 标题行 22，与旧版写的 `100 + 16 + 22` 同源 ——
+ * 新版把"行距 16"并进了 gap，所以不再额外加。
+ *
+ * ⚠️ 列宽写**定值 100px**，不用 `minmax(..., 1fr)`：参考是固定列宽，卡片不随面板
+ * 宽度拉伸。中栏 639px 时正好排 5 列（639 − 8 − 16 = 615；5×100 + 4×16 = 564）。
+ * 用 1fr 会把卡片拉宽到一百多像素，参考里没有这种形态 —— 这正是"排版不像"的来源。
+ * 这条改动同时作用于滤镜、转场、文字三个面板（它们共用这个网格）。
+ */
+/*
+ * 能力页的模型卡（音色克隆 / 自动歌词 / 让图片唱歌 … 那几页共用）。
+ * 列宽**写定值**不用 minmax(…,1fr)：拉伸会改变卡片比例，与参考的固定 itemWidth 不符
+ * （同一条纪律见滤镜/转场卡片）。
+ * 卡片是「图标 + 模型名 + 单价」三段，比素材卡宽一些才放得下模型名。
+ */
+.cap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 168px);
+  gap: 12px;
+  padding: 8px 16px 8px 8px;
+  align-content: start;
+  justify-content: start;
+}
+
+.cap-card {
+  width: 168px;
+  min-height: 74px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--stroke, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--panel-3);
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow 0.12s, background 0.12s;
+}
+
+.cap-card:hover {
+  box-shadow: inset 0 0 0 1px var(--violet);
+  background: rgba(131, 114, 254, 0.12);
+}
+
+.cap-card strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.cap-card small {
+  font-size: 11px;
+  opacity: 0.68;
+}
+
+.cap-ico {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(131, 114, 254, 0.16);
+  color: var(--violet);
+  margin-bottom: 2px;
+}
+
+.look-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 100px);
+  gap: 16px;
+  padding: 8px 16px 8px 8px;
+  align-content: start;
+  justify-content: start;
+}
+
+.look-card {
+  /* 卡片内部只有「预览图 + 名字」两段，122 里 22 全给标题行，中间不留缝 */
+  width: 100px;
+  height: 122px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  /* ⚠️ 边框走 `box-shadow: inset`，**不能用 `border`**：
+     styles.css 顶部有一条全局 `* { box-sizing: border-box }`，1px 边框会从 100×122
+     里吃掉 2px ⇒ 预览图（100×100）+ 名字行（22）合计 122，超出可用的 120 会被
+     `overflow: hidden` 裁掉 —— 表现是"图右边少 2px、名字被压掉一截"，而且只有量
+     真实盒子才看得出来（截图上看不出是差 2px 还是差 1px）。
+     inset 阴影不参与布局，卡片内外都是 100×122，与参考 QML 的 itemWidth/itemHeight 对齐。 */
+  border: 0;
+  box-shadow: inset 0 0 0 1px transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: box-shadow 0.12s, background 0.12s;
+  overflow: hidden;
+}
+
+.look-card:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--violet);
+  background: var(--panel-3);
+}
+
+.look-card.active {
+  box-shadow: inset 0 0 0 1px var(--violet);
+  background: rgba(131, 114, 254, 0.12);
+}
+
+.look-card:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+/*
+ * 预览块：滤镜卡吃 CSS filter，转场卡用两块交叠的图形示意。
+ * 底色刻意做成中性灰阶渐变 —— 滤镜效果要在中性图上才看得准，
+ * 用彩色底会把"色偏"和"卡片底色"混在一起，反而分不出哪个滤镜变了什么。
+ */
+.look-preview {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  background: linear-gradient(135deg, #7d7d86 0%, #b6b6bd 45%, #5b5b64 100%);
+  overflow: hidden;
+}
+
+.look-card.active .look-preview::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--violet-bright);
+  border-radius: 6px;
+}
+
+.look-name {
+  /* 参考的卡片高 122 = 图 100 + 名字 22，名字紧贴图下方、左对齐 */
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding-left: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * ⚠️ 参考的滤镜/转场卡片**只有「图 + 名字」**，没有第三行 —— 卡片高 122 里
+ * 100 是图、22 是名字，没有给副标题留位置。原来的 `.look-hint`（转场时长、
+ * 滤镜的"近似"标记）在多出来的第三行里，会把卡片撑高到 137 并让整排错位。
+ * 那些信息已改走 `title` 悬停提示（见 SidePanels.jsx），所以这里不再留规则 ——
+ * 留着一个没人用的类会变成又一条死 CSS。
+ */
+
+/*
+ * 参考素材网格（滤镜/转场/特效三页共用）——卡图来自参考素材缓存（materials.js）。
+ * 参考中栏顶部是搜索框、下面组名一行，然后才是卡片网格；这三段在中栏里的顺序与
+ * 参考一致（实拍 page-filter2 / page-effect2）。
+ */
+.look-preview.is-photo {
+  background: var(--panel-3, #26262c);
+}
+
+.look-preview.is-photo img {
+  /* 图铺满卡宽（card-specs 闸门钉"图宽 == 卡宽"）——不要 padding/边框 */
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mat-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--panel-2, #1b1b20);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: var(--text-dim, #9a9aa2);
+  margin-bottom: 10px;
+}
+
+.mat-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.mat-search input::placeholder {
+  color: var(--text-dim, #9a9aa2);
+}
+
+.mat-search-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  cursor: pointer;
+}
+
+.mat-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 22px;
+}
+
+.mat-group-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text, #e8e8ea);
+}
+
+/* 转场卡的示意图形：两块画面交叠，名字一眼能对上效果 */
+.look-preview[class*='tr-']::before,
+.look-preview[class*='tr-']::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  width: 46%;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.look-preview[class*='tr-']::before {
+  left: 6%;
+}
+
+.look-preview[class*='tr-']::after {
+  right: 6%;
+}
+
+.look-preview.tr-none::before,
+.look-preview.tr-none::after {
+  width: 44%;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.look-preview.tr-fade::after {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.7));
+}
+
+.look-preview.tr-dissolve::after {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.85) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+.look-preview.tr-wipeleft::after,
+.look-preview.tr-slideleft::after {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.75) 60%, rgba(255, 255, 255, 0.2) 60%);
+}
+
+.look-preview.tr-slideup::after {
+  top: 22%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 45%, rgba(255, 255, 255, 0.75) 45%);
+}
+
+.look-preview.tr-circleopen::after {
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+/* --------------------- 样式卡（文字 / 字幕样式） --------------------- */
+
+/*
+ * 卡片规格逐条取自参考 QML 原文：
+ *   · 字幕样式 Subtitles_Materials.qml + PropertyPanel_SubtitleStyle.qml
+ *       → itemWidth 160 / itemHeight 80，行/列间距 16
+ *   · 文字样式 PropertyPanel_TextStyle.qml
+ *       → itemWidth 100 / itemHeight 100，行/列间距 16
+ *   · 内容边距 FsQuickTextStyle/root__2.qml
+ *       → 左 8 / 右 16 / 上 8 / 下 0；新版网格另有 anchors.topMargin 4、leftMargin 8
+ *     这里取「上 4 / 左 8 / 右 16 / 下 0」，即新版网格与旧版边距的交集。
+ *
+ * 两页尺寸不同，所以用修饰类分开，**不能共用一套列宽** —— 用 auto-fill 定宽列，
+ * 不写 minmax(...,1fr)：参考是固定列宽，拉伸会改比例（同一课在 .look-grid 上吃过）。
+ */
+.style-grid {
+  display: grid;
+  gap: 16px;
+  padding: 4px 16px 0 8px;
+  align-content: start;
+  justify-content: start;
+}
+
+.style-grid.is-subtitle {
+  grid-template-columns: repeat(auto-fill, 160px);
+}
+
+.style-grid.is-title {
+  grid-template-columns: repeat(auto-fill, 100px);
+}
+
+.style-card {
+  display: block;
+  padding: 0;
+  /* ⚠️ 与 .look-card 同一个坑：边框必须走 inset 阴影，不能走 border。
+     全局 `* { box-sizing: border-box }` 下 1px 边框会从定宽卡片里吃掉 2px，
+     预览块于是比卡片窄 2px，被 overflow: hidden 裁掉右边一条。 */
+  border: 0;
+  box-shadow: inset 0 0 0 1px transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  transition: box-shadow 0.12s, background 0.12s;
+}
+
+.style-grid.is-subtitle .style-card {
+  width: 160px;
+  height: 80px;
+}
+
+.style-grid.is-title .style-card {
+  width: 100px;
+  height: 100px;
+}
+
+.style-card:hover {
+  box-shadow: inset 0 0 0 1px var(--violet);
+  background: var(--panel-3);
+}
+
+.style-card.active {
+  box-shadow: inset 0 0 0 1px var(--violet);
+  background: rgba(131, 114, 254, 0.12);
+}
+
+/*
+ * 样式预览块 —— 卡片里那一小块"样式缩略图"。
+ *
+ * `container-type: size` 是**必须的**：样式参数的换算单位是 cqw，
+ * 而 cqw 参照的是最近的容器；少了它 cqw 会退化成视口单位，
+ * 整套比例会全部错掉，而且看起来只是"字太大/太小"，不像报错。
+ *
+ * 底色用与滤镜卡同一套中性灰阶渐变：样式要在可读的底色上看，
+ * 不能拿面板底色当画布（否则描边类样式在白底上根本分不出有没有生效）。
+ */
+.style-art {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  container-type: size;
+  background: linear-gradient(135deg, #6f6f79 0%, #a9a9b2 48%, #55555e 100%);
+  overflow: hidden;
+}
+
+/* ------------------- 预览画面上的叠加层 ------------------- */
+
+/*
+ * 字幕/文字叠加层：铺满画布、只做显示。
+ * pointer-events: none 不能省 —— 否则它会盖住画布，凡是在画布范围内的交互
+ * （点选、拖动）全部失效，表现是"点不动"的假故障。
+ */
+.canvas-overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.canvas-overlay {
+  position: absolute;
+  z-index: 3;
+}
+
+/*
+ * 画面层：时间线上的**一个片段**在这一帧的样子。
+ *
+ * ⚠️ 每层铺满画布、各占一个 z-index 档：
+ *    · 1 = 画面层（多段重叠时按 DOM 顺序叠，后摆的压住先摆的）
+ *    · 2 = 转场层（正在盖过来的后一段）/ 画中画
+ *    · 3 = 字幕  4 = 画面特效覆盖层  5 = 角标
+ * 以前整块预览只有**一个** <video>，跨片段时换的是它的 src ⇒ 每过一个接缝都要
+ * 重新加载 + 重新解码 ⇒ 接缝处必黑一帧。现在每个片段一层、提前挂载，
+ * "不可见"只是 `display: none`（元素还在 DOM 里、还在缓冲），切回来立刻就是连续的。
+ *
+ * ⚠️ 调色（filter）挂在**这一层**上，不再挂 .canvas-frame：转场交叠时前后两段
+ *    各有各的调色，挂在画布上会让后一段莫名套上前一段的滤镜（成片里是各转各的）。
+ *    缩放 / 不透明度挂在里面的媒体元素上，与 filter 分开 —— 同一个元素上
+ *    transform 会改变 filter 的作用域，分开最省心。
+ */
+.canvas-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+/*
+ * 转场层：交叠窗口里"正在盖过来的后一段"。
+ * 必须铺满画布并自行 overflow: hidden —— clip-path / transform 都要靠它裁边界，
+ * 否则滑入的那一层会在画布外露出来（画布本身也有 overflow: hidden，这里先裁更稳）。
+ */
+.canvas-xfade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  will-change: opacity, transform, clip-path;
+}
+
+.canvas-xfade img,
+.canvas-xfade video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 画面特效的覆盖层：闪光 / 故障 / 扫描线 / 漏光 / 暗角 */
+.canvas-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+/*
+ * ===================== 叠加轨（画中画）在预览里的盒子 =====================
+ *
+ * ⚠️ 2026-10-10 补：这两个类**此前一条样式都没有**。`.canvas-pip-layer` 是一个
+ *    默认 `display:inline` 的 span，而 `pipBoxCss()` 给内层写的是
+ *    `width / left / top / transform` —— `left/top` 对非定位元素、`width` 对
+ *    非替换的行内元素**统统不生效**。于是画中画在预览里既没宽度也不在锚点上，
+ *    只有**导出**那条链被闸门按像素钉住 ⇒ "成片里画中画在右下角、预览里不知道飘到哪"。
+ *    这正是「接对了一半」最典型的形态：数据真源、导出公式、预览公式三者都对，
+ *    缺的只是把样式落到 DOM 上。
+ *
+ * 尺寸单位用 cqw/cqh（画布宽高的百分之一），容器是 `.canvas-frame`
+ * （它带 `container-type: size`）—— 窗口缩放与全屏因此自动等比。
+ */
+.canvas-pip-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.canvas-pip {
+  position: absolute;
+  display: block;
+  overflow: hidden;
+}
+
+/*
+ * 画中画的高度由**素材自身比例**决定（导出侧是 `scale=w:-2`，同一口径），
+ * CSS 拿不到那个比例 ⇒ 只能让媒体自己撑高盒子：
+ * 媒体给 `width:100%` + `height:auto`，外包一层 `display:block` 的剪裁盒，
+ * 高度自然就等于媒体的高度。写成 `height:100%` 会把盒子压成 0。
+ */
+.canvas-pip-clip {
+  display: block;
+  width: 100%;
+}
+
+.canvas-pip-clip img,
+.canvas-pip-clip video {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+}
+
+/*
+ * 主画面层里那层"剪裁盒"（圆角 + 蒙版）。
+ * 铺满画布：父元素 `.canvas-layer` 是 `inset:0` 的绝对定位元素，
+ * 所以这里 `inset:0` 有确定高度可用；媒体在它里面照常按 `.canvas-frame img/video`
+ * 的 `width/height:100%` 铺满。
+ * ⚠️ filter 挂在外层 `.canvas-layer` 上、剪裁挂在**这里** —— CSS 的合成顺序是
+ *    filter → clip → mask，两者挤在同一个元素上会让描边被圆角切掉一圈。
+ */
+.canvas-clipbox {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+/* ------------------- 字幕/文字的入场动画 ------------------- */
+
+/*
+ * 全部 `both` 填充：动画结束后停在终态。
+ * 这样截图与闸门读到的是"播完之后"的稳定样子，而不是随机一帧 ——
+ * 否则同一份代码两次取值可能不同，断言只能靠等，最后变成 flaky。
+ */
+@keyframes style-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes style-slideup {
+  from { opacity: 0; transform: translateY(28%); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes style-pop {
+  0% { opacity: 0; transform: scale(0.72); }
+  62% { opacity: 1; transform: scale(1.06); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* 打字机：用 clip-path 从左往右揭。
+   不用改 width —— 改宽度会连带改排版，后面的字会一边打一边跳。 */
+@keyframes style-typewriter {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+@keyframes style-glow {
+  from { filter: brightness(1); }
+  to { filter: brightness(1.4); }
+}
+
+.style-anim-fade { animation: style-fade 280ms ease-out both; }
+.style-anim-slideup { animation: style-slideup 400ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.style-anim-pop { animation: style-pop 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.style-anim-typewriter { animation: style-typewriter 1.6s steps(12, end) both; }
+.style-anim-glow { animation: style-glow 1.6s ease-in-out infinite alternate; }
+
+/* --------------------------- 画面特效 --------------------------- */
+
+/*
+ * ⚠️ 这里**不允许**出现动 `.canvas-frame` 的 filter 的 @keyframes。
+ *    预览的调色写在 .canvas-frame 的内联 style 上，而 CSS 动画的优先级**高于内联样式**：
+ *    一旦有 @keyframes 去动它的 filter，调色会被整个顶掉，而且不报任何错 ——
+ *    用户看到的是"加了滤镜又加了特效，结果滤镜没了"。
+ *    所以"改像素"类效果一律做在 .canvas-fx 覆盖层上（半透明色 + 混合模式）。
+ *    这条约束由 tools/check-frame-effects.mjs 用静态契约钉住。
+ */
+@keyframes fx-shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-0.8%, 0.5%, 0); }
+  40% { transform: translate3d(0.7%, -0.6%, 0); }
+  60% { transform: translate3d(-0.5%, -0.4%, 0); }
+  80% { transform: translate3d(0.6%, 0.5%, 0); }
+}
+
+@keyframes fx-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+
+@keyframes fx-flash {
+  0%, 100% { opacity: 0; }
+  8% { opacity: 0.85; }
+  16% { opacity: 0.1; }
+  24% { opacity: 0.7; }
+  40% { opacity: 0; }
+}
+
+@keyframes fx-glitch {
+  0%, 100% { opacity: 0; transform: translateX(0); }
+  10% { opacity: 0.9; transform: translateX(-1.2%); }
+  22% { opacity: 0.25; transform: translateX(1%); }
+  38% { opacity: 0.75; transform: translateX(-0.6%); }
+  58% { opacity: 0; }
+}
+
+@keyframes fx-scan {
+  from { background-position: 0 0; }
+  to { background-position: 0 4px; }
+}
+
+@keyframes fx-lightleak {
+  from { background-position: -100% 0; }
+  to { background-position: 100% 0; }
+}
+
+@keyframes fx-vignette {
+  from { opacity: 0.45; }
+  to { opacity: 0.9; }
+}
+
+.canvas-frame.fx-shake { animation: fx-shake 420ms linear infinite; }
+.canvas-frame.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
+
+.canvas-fx.fx-flash {
+  background: #ffffff;
+  mix-blend-mode: screen;
+  animation: fx-flash 900ms linear infinite;
+}
+
+.canvas-fx.fx-glitch {
+  mix-blend-mode: screen;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 0, 80, 0.55) 0 2px, transparent 2px 6px),
+    repeating-linear-gradient(0deg, rgba(0, 220, 255, 0.5) 6px, transparent 6px 12px);
+  animation: fx-glitch 700ms steps(6, end) infinite;
+}
+
+.canvas-fx.fx-scan {
+  /* 1px 线 + 3px 间隙 = 4px 一格；位移正好走一格，循环处才看不出来 */
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.16) 0 1px, transparent 1px 4px);
+  background-size: 100% 4px;
+  animation: fx-scan 1600ms linear infinite;
+}
+
+.canvas-fx.fx-lightleak {
+  /* 用 background-position 扫而不是 transform：
+     transform 会把整层挪出画布边界，扫到两头就露边 */
+  background: linear-gradient(
+    78deg,
+    transparent 30%,
+    rgba(255, 196, 120, 0.5) 48%,
+    rgba(255, 236, 190, 0.25) 56%,
+    transparent 72%
+  );
+  background-size: 200% 100%;
+  mix-blend-mode: screen;
+  animation: fx-lightleak 2200ms ease-in-out infinite;
+}
+
+.canvas-fx.fx-vignette {
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.72) 100%);
+  animation: fx-vignette 2600ms ease-in-out infinite alternate;
+}
+
+/*
+ * 特效卡片的预览：底图保留（灰阶渐变），效果走一个内层元素。
+ * 用独立元素而不是 ::after —— `.look-preview::after` 已经被"选中描边"占着，
+ * 两个规则写在同一个伪元素上会互相叠加，将来任一边改动都会误伤另一边。
+ * 卡片用的是**同一套 @keyframes**，所以"卡片上在动"和"画面上在动"是同一个东西。
+ */
+.fx-demo-art {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* transform 类：先给一块可见的亮块，抖/缩才看得见 */
+.fx-demo-art.fx-shake,
+.fx-demo-art.fx-pulse {
+  background: rgba(255, 255, 255, 0.42);
+}
+.fx-demo-art.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
+
+.fx-demo-art.fx-flash {
+  background: #ffffff;
+  mix-blend-mode: screen;
+  animation: fx-flash 900ms linear infinite;
+}
+
+.fx-demo-art.fx-glitch {
+  mix-blend-mode: screen;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 0, 80, 0.55) 0 2px, transparent 2px 6px),
+    repeating-linear-gradient(0deg, rgba(0, 220, 255, 0.5) 6px, transparent 6px 12px);
+  animation: fx-glitch 700ms steps(6, end) infinite;
+}
+
+.fx-demo-art.fx-scan {
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.16) 0 1px, transparent 1px 4px);
+  background-size: 100% 4px;
+  animation: fx-scan 1600ms linear infinite;
+}
+
+.fx-demo-art.fx-lightleak {
+  background: linear-gradient(
+    78deg,
+    transparent 30%,
+    rgba(255, 196, 120, 0.5) 48%,
+    rgba(255, 236, 190, 0.25) 56%,
+    transparent 72%
+  );
+  background-size: 200% 100%;
+  mix-blend-mode: screen;
+  animation: fx-lightleak 2200ms ease-in-out infinite;
+}
+
+.fx-demo-art.fx-vignette {
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.72) 100%);
+  animation: fx-vignette 2600ms ease-in-out infinite alternate;
+}
+
+/* --------------------------- 子标签页 --------------------------- */
+
+.wb-subtabs {
+  display: flex;
+  gap: 6px;
+}
+
+.wb-subtabs button {
+  flex: 1;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.wb-subtabs button.active {
+  border-color: var(--violet);
+  background: rgba(131, 114, 254, 0.16);
+  color: var(--text);
+}
+
+/* --------------------------- 轨道角标 --------------------------- */
+
+/* 调色角标：贴在片段右下角，不参与布局（否则会改变 clip-inner 的宽度） */
+.clip-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  padding: 0 4px;
+  height: 13px;
+  line-height: 13px;
+  border-radius: 3px;
+  font-size: 9px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/*
+ * 转场角标：骑在两个片段的接缝上，所以 left 用接缝像素、再左移自身一半。
+ * 形制是**带文字的小圆角 chip**（转场名 + 时长），光一个图标读不出是哪种转场。
+ * pointer-events 必须为 none —— 它压在两个片段上方，
+ * 能收事件就等于把那一小段的两端修剪热区盖掉了，用户会发现"接缝附近拖不动"。
+ */
+.clip-transition {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  height: 14px;
+  padding: 0 6px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  line-height: 14px;
+  color: #fff;
+  background: var(--violet);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 3;
+}
+
+/* 预览画布上的调色角标 */
+.canvas-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+/* ---------- 使用指引弹窗（.guide 骨架） ---------- */
+
+.guide {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.guide-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  background: #2e2e34;
+  color: #cfd0d6;
+}
+
+.guide-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e8ea;
+}
+
+.guide-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.guide-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.guide-dot {
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+}
+
+.guide-dot.on {
+  width: 18px;
+  border-radius: 99px;
+  background: linear-gradient(135deg, var(--violet), var(--violet-deep));
+}
+
+.guide-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.guide-count {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.guide textarea.input {
+  resize: vertical;
+  min-height: 96px;
+  font-family: inherit;
+  line-height: 1.6;
+}

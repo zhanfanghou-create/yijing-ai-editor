@@ -1,0 +1,1237 @@
+/**
+ * 首页（创作中心）样式。
+ *
+ * 基准画布 1220x720，几处关键尺寸是逐像素量出来的，改之前先读注释里的实测值：
+ *
+ *   侧栏宽 236 / 底 #303033          主区底 #1A1A20 / 左右内边距 24
+ *   顶栏高 56                        品牌方块 50x50 / 落在 y53..103
+ *   导航项   高 48 / 项间距 56 / 选中底 #444447
+ *            图标墨迹 20x20 落 x42..61（纯白）；文字墨迹左沿 x80
+ *   工具卡   图标 48x48 底 #2C2C31    周期 112px / 标题带 42 / 文字带 23
+ *
+ * 装饰图一律用 CSS 渐变与内联 SVG 重绘，不用任何第三方位图素材。
+ * 左栏导航图标是自绘 SVG（见 ownIcons.jsx 与 MAPPING.json 里 set:'home' 的条目）。
+ */
+
+.home {
+  --h-bg: #1a1a20;
+  --h-rail: #303033;
+  --h-tile: #2c2c31;
+  --h-nav-on: #444447;
+  --h-login: #403748;
+  --h-text: #e8e8e9;
+  --h-muted: #9a9aa0;
+  --h-dim: #75757b;
+  --h-accent: #a855f7;
+
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--h-bg);
+  color: var(--h-text);
+  font-size: 13px;
+}
+
+/* ============================ 左侧栏 236px ============================ */
+
+.home-rail {
+  flex: 0 0 236px;
+  width: 236px;
+  background: var(--h-rail);
+  display: flex;
+  flex-direction: column;
+  /* 顶部 53px 是实测值：logo 方块落在 y 53..103，下面再留 18px 才到品牌文字行。
+     改这里等于整体挪动侧栏。底部 24px 是主区的安全边距。 */
+  padding: 53px 24px 24px;
+  overflow: hidden;
+}
+
+.home-brand {
+  /* 只包 logo 方块本身（50px），不要把品牌文字行往上顶 */
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 0 0 auto;
+}
+
+.home-brand-mark {
+  width: 50px;
+  height: 50px;
+  /* 圆角 11px = 源图那圈圆角等比缩到 50px（56/256*50）。
+     源图（ico/256X256.ico 解出的 PNG）自带圆角与深色底，
+     所以这里不再画渐变，只负责尺寸、裁切与投影。
+     保留一层同色兜底底：万一图没加载出来，也不会露出一个空洞。 */
+  border-radius: 11px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #14162a;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.42);
+}
+
+.home-brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.home-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.08;
+  min-width: 0;
+}
+
+.home-brand-text b {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.home-brand-text span {
+  font-size: 11.5px;
+  color: var(--h-muted);
+  letter-spacing: 0.6px;
+}
+
+.home-nav {
+  /* 上边距 **44**：品牌区底沿 168，首项要从 y=212 起。
+     ⚠️ 别用「212 - 167」去算 —— 那是 off-by-one（167 是品牌区最后一行本身），会整体低 1px。
+     项间距 **56 = 48 高 + 8 间隙**。
+     ⚠️ 少这个 gap 时每项只占 48，第 4 项已累计偏 24px；
+     而且选中项的底框会连成一整片（四项之间应当有 8px 的侧栏底色透出）。 */
+  margin-top: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.home-nav-item {
+  height: 48px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--h-text);
+  font-family: inherit;
+  /* 实测：参考「创作视频」墨迹宽 51（4 字）⇒ 字号 ≈ 13。
+     ⚠️ 这里**不要**用 flex gap 拉开图标与文字：参考里
+     「图标→文字」是 19px，而「文字→徽章」只有 5px —— 一个 gap 值表达不了两个间距，
+     写了 gap 会把「AI 模板」的 New 徽章一路推到 x146（参考 x127）。
+     两处间距分别由 svg 的 margin-right 与徽章的 margin-left 承担。 */
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.home-nav-item:hover {
+  background: #3a3a3f;
+}
+
+.home-nav-item[data-active='true'] {
+  background: var(--h-nav-on);
+  /* 参考里选中项的字比未选中白一档：未选中项墨迹峰值 229（≈ #E8E8E9），
+     选中项 250（≈ 白）。差异不大但方向清楚，且与「图标恒为纯白」一致。 */
+  color: #fff;
+}
+
+.home-nav-item svg {
+  flex: 0 0 auto;
+  /* 实测：参考的导航图标（4 个都是**实心填充 + 挖空细节**）实心区为纯白 rgb(255,255,255)，
+     未选中项也一样白。早先写 #d6d6da，整排图标都暗一档。 */
+  color: #fff;
+  /* 图标墨迹落 x42..61（左内边距 16 + 字形自身 2 的内缩）；
+     图标盒到 x64，再留 16 ⇒ 文字盒从 x80 起，与参考的文字墨迹左沿一致。 */
+  margin-right: 16px;
+}
+
+.home-nav-badge {
+  /* 实测：参考的 New 徽章底 **28x16、圆角约 5（不是胶囊）**，字是白色的。
+     盒尺寸直接钉住 —— 内容在 Home.jsx 里是固定字面量 "New"，
+     靠 padding + 字号凑尺寸会随字体渲染差异漂（我们上一版就是 36x17 的胶囊）。
+     margin-left 4：实测参考徽章左沿 x127、文字墨迹右沿 x121；我们文字墨迹右沿同为 121，
+     所以左边距给 4 才落在 127（给 5 会到 128，差 1px）。 */
+  margin-left: 4px;
+  min-width: 28px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.home-promo {
+  margin-top: auto;
+  flex: 0 0 auto;
+  /* 实测：参考的反馈卡是 y 606..695，正好 90 高；低沿离窗口底 24px（= 侧栏底部内边距） */
+  height: 90px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+  /* ⚠️ 这一串内边距是量出来的，别按"看着差不多"调。实测参考这格的两行字：
+       墨迹 x43..96（单字宽 26）、第一行 y622..649（墨高 28）、第二行 y654..681 ⇒ **行距 32**。
+     我们原来是 padding 15/16 + 字号 21/行高 1.22：单字宽只有 20、墨高 21、行距 26
+     —— 三处一起偏小约 1.3 倍，缩放到 6 倍放大图上一眼就能看出"我们的字比参考瘦一圈"。
+     字号取 28（墨高比 28/21=1.33 与字宽比 26/20=1.30 的折中），行高 32/28=1.143。
+     上内边距 5：实测墨迹上沿要落在卡高 16 处（y622）。先按 `半行距 + 0.176em` 估成 9，
+     重建后量到 626（低 4），所以实际取值是 9 − 4 = 5 —— 这类"估算 + 一轮实测回灌"比硬算准。
+     左内边距 18：参考墨迹左沿 x43、我们原来在 x41。 */
+  padding: 5px 18px 0;
+  font-family: inherit;
+  color: #fff;
+  /* 底色是**横向**渐变，不是斜向：在未被文字污染的两条剖面（y610 / y692）上各取 5 点，
+     实测 x28→#62DAE4、x45→#66D9E2、x62→#6BD9E2、x79→#75DBE4、x96→#82DFE7，
+     纵向基本不变。右半 40%（x≥100）被 feedback_art.png 整块盖住，所以渐变只锚到 40%。
+     ⚠️ 早期写成 160deg 的三段渐变：斜向会把右下角抬亮 6~8 级。 */
+  background-color: #63d9e3;
+  /* ⚠️ 路径是相对**本文件所在目录**（renderer/），不是相对 components/。
+     写成 `../assets/...` 时 Vite 只会打一条 "didn't resolve at build time" 的警告，
+     构建照样绿、CSS 照样出，但运行时这张图 404 —— 只有看截图才发现插画没了。 */
+  background-image: url('./assets/promo/feedback_art.png'),
+    linear-gradient(90deg, #62dae4 0%, #6bd9e2 20%, #75dbe4 29%, #7ddfe7 40%);
+  background-repeat: no-repeat, no-repeat;
+  background-position: right center, left top;
+  background-size: auto 100%, 100% 100%;
+  /* ⚠️ 参考这一格**没有外发光**：卡外 y696 起就是侧栏底色 #303033。
+     原来那层 `0 8px 20px` 的青光会一路渗到 y708，于是「卡片高度」会被量成 103 而不是 90，
+     而且它在网格差异图上正是那块最大的红。 */
+}
+
+/*
+ * 右半那张插画的来源：**参考客户端同一格的原图**，从参考首页截图 01-首页-1220x720.png
+ * 按 x100..211 × y606..695 原样裁出（云朵 / 胶片斜带 / ✦ / 😍 / 蓝色播放方块），无重采样。
+ * 左半刻意留空给下面的真文本 —— E2E 靠 `.home-promo` 的文本断言这一格没被换掉，
+ * 所以**不能**整张卡都用位图顶替。来源与复现见 assets/promo/SOURCE.md。
+ */
+
+.home-promo b {
+  display: block;
+  /* 字号/行高见上面 .home-promo 的注释：实测参考单字宽 26、墨高 28、行距 32 */
+  font-size: 28px;
+  line-height: 1.143;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-shadow: 0 1px 3px rgba(0, 60, 75, 0.28);
+}
+
+/* ==================== 广告位（后台配了图才走这一支） ==================== */
+
+/*
+ * ⚠️ 这一支的四个类名（-slot / -img / -text / -dots）曾经**一条 CSS 规则都没有**：
+ * 后台一配上图，这一格就是「裸 <img> 塞进 90 高的按钮」，底下还透出青色兜底底色。
+ * 构建不报错、E2E 也看不见（它只查节点在不在、文案对不对），
+ * 只有真的配一张图才会露出来。现在按参考同格的版式补齐。
+ */
+.home-promo-slot {
+  padding: 0;
+  background: #101018;
+}
+
+/* 整张卡的点击面。用内层 button 而不是把容器做成 button ——
+   容器里还要放翻页 chevron，button 嵌套 button 是非法的。 */
+.home-promo-hit {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  color: #fff;
+  text-align: left;
+}
+
+.home-promo-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 底部半透明胶囊：实测左内 25 / 右内 26 / 高 30 / 下沿离卡底 3，圆角取半高 */
+.home-promo-text {
+  position: absolute;
+  left: 25px;
+  right: 26px;
+  bottom: 3px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 11px 0 15px;
+  border-radius: 15px;
+  background: rgba(14, 12, 24, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* 参考胶囊里的标题是**斜体**（实测字高 10px ⇒ 字号 14），不是常规粗体 */
+.home-promo-text b {
+  min-width: 0;
+  font-size: 14px;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-promo-text em {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+  opacity: 0.78;
+}
+
+/* 分页圆点：实测 4 枚、节距 17、整组居中、压在胶囊下沿（y687..691）。
+   点压在图上，所以要带一层淡淡的暗描边，否则浅色广告图上会看不见。 */
+.home-promo-dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.home-promo-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.42);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.home-promo-dots i[data-on='true'] {
+  background: #fff;
+}
+
+/* 左右翻页 chevron：实测距卡左右各 3~4px、纵向中心在卡高一半偏上处 */
+.home-promo-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.home-promo-nav[data-dir='prev'] {
+  left: 4px;
+}
+
+.home-promo-nav[data-dir='next'] {
+  right: 4px;
+}
+
+/* chevron 只有右向那一枚，左向靠镜像 —— 别为它单画一个图标 */
+.home-promo-nav[data-dir='prev'] svg {
+  transform: scaleX(-1);
+}
+
+.home-promo-nav:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* ============================== 主区 ============================== */
+
+.home-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--h-bg);
+}
+
+.home-top {
+  height: 56px;
+  flex: 0 0 56px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  /* 节距 40：实测参考两枚圆钮、三枚窗口键的中心间距都是 40，配合 30 宽的圆钮
+     ⇒ gap = 10（原来 7 ⇒ 节距 37，整簇累计偏左）。 */
+  gap: 10px;
+  /* ⚠️ 三条实测数据一起定出了这个内边距：
+       · 顶栏**所有元素的中心都在 y20**（圆钮 y9..30、最小化横线 y19..20）。
+         我们是 56 高、内容垂直居中 ⇒ 中心落 y28，整条顶栏低 8px。
+         留 16px 下内边距把内容盒压成 40 高，居中后就自然落到 y20；
+       · 参考最右的关闭键**右沿贴到客户区右沿**（按钮边到 x1219），所以右内边距必须为 0
+         （原来 14 ⇒ 右侧空出 27px，整簇跟着左移）。 */
+  padding: 0 0 16px 16px;
+  -webkit-app-region: drag;
+}
+
+.home-top > * {
+  -webkit-app-region: no-drag;
+}
+
+.home-round {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  background: transparent;
+  color: #d6d6da;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s;
+}
+
+.home-round:hover {
+  background: var(--h-tile);
+}
+
+/*
+ * 「设置圆钮 → 窗口键」之间的空档是 **22 列空像素**（我们只有 19），
+ * 而整簇是右对齐的 ⇒ 在这里补 2px 会让**左侧的圆钮整体左移 2px**（正好落到实测值），
+ * 同时**不动**它右侧的分隔线（分隔线已对齐 x1091）。
+ * 换成给 .home-top 加 gap 是错的：那会把窗口键和分隔线也一起带走。
+ */
+.home-round[data-home-round="settings"] {
+  margin-left: 2px;
+}
+
+/* 参考在圆钮（客服/设置）与窗口控制之间有一条竖分隔线，别漏 */
+.home-wins {
+  display: inline-flex;
+  align-items: center;
+  /* 实测参考：最右那枚圆钮（八角环）的中心 x1062.5、分隔线 x1091 ⇒ 两者相距 28.5；
+     减去 gap 10 与分隔线自身的 1px + 8px 左内边距 ⇒ 这里只该留 4
+     （原来是 6，整簇因此把圆钮往左顶了 2.5px）。 */
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid #3a3a42;
+}
+
+.home-wins button {
+  /* 实测参考三枚窗口键的墨迹中心是 x1119.5 / 1159.5 / 1199.5 ⇒ **节距 40**，
+     且最右一枚的右边即客户区右沿 ⇒ 每枚 40 宽、彼此无间隙。原来是 32 宽，
+     三枚累计少 24px，加上右侧 14px 内边距，整簇比参考左移了 30 多像素。
+     高度取 40 与内容盒等高 —— 参考的横线正好落在 y19..20，即 40 高的正中。 */
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: #d6d6da;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.12s;
+}
+
+.home-wins button:hover {
+  background: #34343c;
+}
+
+.home-wins button.danger:hover {
+  background: #e11d48;
+  color: #fff;
+}
+
+/* ---------------------------- 内容滚动区 ---------------------------- */
+
+/*
+ * ⚠️ **不要**给 .home-body 写 ::-webkit-scrollbar。
+ *
+ * 一旦写了，Chromium 就改用「自定义滚动条」——它**永远占布局宽度**：
+ * 内容右沿从 1196 缩到 1187，三张功能卡跟着 flex 均分变窄 3px 并整体左移，
+ * 差异图里右侧三格一起偏色，很容易误判成"卡片没对齐"。
+ * 参考客户端是叠加式滚动条（静置时看不到，截图里也没有），所以这里
+ * 用标准属性 scrollbar-width:none —— Chromium 121+ 支持，它同时做到
+ * 「不绘制」与「不占位」两件事；滚轮/触控板滚动照常可用。
+ * （主进程那条 OverlayScrollbar 开关在 Windows 上实测不生效，保留无害。）
+ */
+.home-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+  padding: 0 24px 28px;
+}
+
+/* 原来的 .home-body::-webkit-scrollbar 三条规则已删除（见上面的说明）。
+   装了自定义滚动条 = 放弃叠加式 = 右侧固定少 9px 宽。 */
+
+/* ------------------------------ banner ------------------------------ */
+
+.home-hero-row {
+  display: flex;
+  gap: 16px;
+  height: 180px;
+}
+
+.home-hero {
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 26px 26px 22px;
+  font-family: inherit;
+  text-align: left;
+  color: #fff;
+  transition: transform 0.18s, box-shadow 0.18s;
+}
+
+.home-hero:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.34);
+}
+
+/* 左侧 banner 渐变。
+ *
+ * 这是整页差异最大的一块（y 56..235 那一整条带状区），所以按**实测色彩场**拟合，
+ * 而不是随手取两个端点。参考图（1220x720）在卡片内 7x4 网格的实测值：
+ *
+ *   y=70   #8636BC  #C263E4  #D922F7  #EC1FFD  #D726EC  #8E15DD  #5E0AD4
+ *   y=140                    #C648DE  #D020DD  #C640BB  #923BAB  #5815B7
+ *   y=172  #641B93  #8C20B0  #B534CA  #BA20C7  #B442A6  #9B5B88  #5D259C
+ *   y=226  #4B1C6B  #621C7B  #791F88  #7F1E89  #80357A  #A38058  #7F615E
+ *
+ * 三条结论（决定了下面这三层）：
+ *   ① 峰值 #EC1FFD 在**宽度 52% 的卡顶附近**，越往外越暗 ⇒ 上中部的洋红径向高光；
+ *   ② 右上角是 #5E0AD4（**偏蓝紫**），不是洋红 ⇒ 底色是「左紫 → 右蓝紫」的横向渐变；
+ *     早期写成 112deg 斜向，右上角被渲染成洋红，那一块单格差 46 点；
+ *   ③ 右下角 #A38058 / #7F615E 是**暖色** ⇒ 右下角另有一团橙色光晕。
+ * 另外整卡「上亮下暗」（左上 #6E24AD → 左下 #4B1C6B），用一层纵向压暗表达。
+ */
+.home-hero-video {
+  flex: 0 0 539px;
+  background:
+    /* 右下角暖色光晕（峰位在卡宽 ~86%，纵向要够高：参考在 y=172 时 x=700 已是暖色 #9B5B88）
+       强度按底部实测反调过：0.98 时右下角会亮出一截（#D3825B vs 参考 #A38058）。 */
+    radial-gradient(54% 92% at 86% 106%, rgba(255, 176, 80, 0.66) 0%, rgba(246, 150, 66, 0.34) 30%, rgba(232, 120, 70, 0) 64%),
+    /* 上中部洋红高光：横向只铺到 52%（铺太宽会把右上角染成洋红） */
+    radial-gradient(52% 134% at 47% -2%, #ec1ffd 0%, rgba(222, 32, 244, 0.88) 30%, rgba(170, 24, 228, 0.5) 62%, rgba(120, 20, 200, 0) 100%),
+    /* 纵向压暗，制造上亮下暗 */
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(6, 0, 20, 0.46) 100%),
+    /* 底色：左「藕紫」→ 右蓝紫。左侧的绿通道要给足（参考左上 #8636BC 的 g=54，
+       而纯 #7a1fa8 只有 31 —— 太低时左半张会偏艳，差值图整片标红）。 */
+    linear-gradient(97deg, #7d34ac 0%, #8f28c8 26%, #9c1fdc 48%, #7a13d4 74%, #5709d2 100%);
+}
+
+.home-hero-ai {
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(118deg, #6a86a8 0%, #4d72b5 22%, #3963ad 48%, #325bad 64%, #2f4096 84%, #3c2d78 100%);
+}
+
+.home-hero::after {
+  content: '';
+  position: absolute;
+  right: -60px;
+  top: -70px;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.16), transparent 68%);
+  pointer-events: none;
+}
+
+.home-hero h2 {
+  margin: 0;
+  /* 实测「视频剪辑器」墨迹宽 106px / 5 字 ⇒ 字号 ≈ 21px */
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  position: relative;
+}
+
+.home-hero p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.74);
+  position: relative;
+}
+
+/*
+ * 参考的按钮是**半透明白胶囊**（不是实心白）：拿按钮内 #7D499E 与同位置
+ * 纯渐变 #5E1A87 反解 rgba(255,255,255,a)，三通道分别得 0.193/0.205/0.190
+ * ⇒ a ≈ 0.2。文字与箭头都是白色（早期做成实心白底 + 深色字 + 深色小箭头，
+ * 三处都反了）。实测胶囊 x 280..421 / y 180..211，文字墨迹 x310..393。
+ */
+.home-hero-btn {
+  margin-top: auto;
+  position: relative;
+  height: 32px;
+  padding: 0 28px;
+  border: 0;
+  border-radius: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.2);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.home-hero-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ---------------------------- 三张功能卡 ---------------------------- */
+
+.home-feat-row {
+  display: flex;
+  gap: 16px;
+  height: 100px;
+  margin-top: 16px;
+}
+
+.home-feat {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  font-family: inherit;
+  text-align: left;
+  color: #fff;
+  padding: 0 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(112deg, #2d2144 0%, #31224b 40%, #3a255e 74%, #42286c 100%);
+  transition: transform 0.18s, box-shadow 0.18s;
+}
+
+.home-feat:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
+}
+
+.home-feat-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.home-feat h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.home-feat p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 右侧配图区。默认由 Home.jsx 渲染真实配图（后台配的 / builtin 参考图），
+   这里的 CSS 剪影只是**最后兜底**：两级图都取不到时才露出。
+   之所以保留剪影而不是留白，是因为卡片右侧一旦空了，三张卡的视觉重量会明显失衡。 */
+.home-feat-art {
+  flex: 0 0 104px;
+  width: 104px;
+  align-self: stretch;
+  position: relative;
+}
+
+.home-feat-art::before,
+.home-feat-art::after {
+  content: '';
+  position: absolute;
+}
+
+.home-feat-art::before {
+  /* 头 */
+  right: 42px;
+  bottom: 44px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.16));
+}
+
+.home-feat-art::after {
+  /* 肩身 */
+  right: 24px;
+  bottom: -14px;
+  width: 63px;
+  height: 64px;
+  border-radius: 30px 30px 6px 6px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.05));
+}
+
+/*
+ * 有配图时的样式。这张卡的显示区是 104×100：
+ *   · 后台配图（生产后台 → 客户端广告位 → 功能卡配图）建议上传 208×200（2 倍图）；
+ *   · 内置参考图是 421×345 / 437×341 / 336×327，都是「人贴右下方」的构图，
+ *     所以 object-position 用 right bottom —— 与原本那套剪影的站位一致。
+ * Home.jsx 不给 .has-image 时上面的剪影照旧生效，也就是三级回退的第三级。
+ */
+.home-feat-art.has-image::before,
+.home-feat-art.has-image::after {
+  display: none;
+}
+
+.home-feat-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* contain 而不是 cover：人物图用 cover 会把头和脚裁掉，而这里恰恰不能裁。
+     内置参考图已按 alpha 裁掉四周留白，所以 contain 之后画面能占满这块区域。 */
+  object-fit: contain;
+  /* 贴右下：与这块原本的剪影构图一致（人站在卡片右下角） */
+  object-position: right bottom;
+  /* 点击必须仍然落在整张卡片的按钮上 */
+  pointer-events: none;
+}
+
+/* ---------------------------- AI 工具 ---------------------------- */
+
+.home-tools-sec {
+  position: relative;
+}
+
+/* 参考客户端在工具行右端贴了一个圆形横向滚动按钮（实测 x1178..1219 / 底 #3B3B3F），
+   它压在窗口右边缘上，所以这里用 right:-24px 抵消掉内容区的 padding */
+.home-tools-more {
+  position: absolute;
+  right: -24px;
+  top: 45px;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 21px;
+  cursor: pointer;
+  background: #3b3b3f;
+  color: #d6d6da;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s;
+}
+
+.home-tools-more:hover {
+  background: #4a4a50;
+}
+
+.home-sec-head {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.home-sec-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.home-sec-head a {
+  font-size: 12px;
+  color: var(--h-muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.home-sec-head a:hover {
+  color: var(--h-text);
+}
+
+.home-tools {
+  display: flex;
+  align-items: flex-start;
+}
+
+.home-tool {
+  width: 112px;
+  flex: 0 0 112px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.home-tool-ico {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: var(--h-tile);
+  color: #e4e4e8;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s;
+  overflow: hidden;
+}
+
+.home-tool-ico img {
+  /* 参考真图标：铺满 48×48 圆角块（裁图本身带参考的底色与圆角） */
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.home-tool:hover .home-tool-ico {
+  background: #38383f;
+}
+
+.home-tool-label {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--h-muted);
+  white-space: nowrap;
+  line-height: 20px;
+}
+
+.home-tool:hover .home-tool-label {
+  color: var(--h-text);
+}
+
+/* ---------------------------- 最近草稿 ---------------------------- */
+
+.home-sec-head.is-draft {
+  height: 46px;
+}
+
+.home-viewswitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--h-muted);
+}
+
+.home-viewswitch svg {
+  cursor: pointer;
+}
+
+.home-viewswitch svg[data-on='true'] {
+  color: var(--h-text);
+}
+
+.home-empty {
+  height: 200px;
+  display: grid;
+  place-items: center;
+  color: #34343d;
+}
+
+.home-empty-wrap {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+}
+
+.home-empty-wrap.is-photo img {
+  /* 参考的空草稿插画（真图替换自绘虚线相机） */
+  max-width: 320px;
+  max-height: 180px;
+  object-fit: contain;
+  display: block;
+}
+
+.home-empty-wrap small {
+  font-size: 12px;
+  color: var(--h-dim);
+}
+
+.home-empty-text {
+  margin: 0 0 40px;
+  font-size: 12.5px;
+  color: var(--h-dim);
+}
+
+/* ===================== 二级页（草稿 / 模板 / 工具箱） ===================== */
+
+.home-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.home-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.home-page-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.home-page-sub {
+  font-size: 12.5px;
+  color: var(--h-dim);
+}
+
+.home-page-actions {
+  margin-left: auto;
+}
+
+.home-page-btn {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid #5a4a7a;
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.16);
+  color: #d8bdff;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.home-page-btn:hover {
+  background: rgba(168, 85, 247, 0.28);
+  color: #fff;
+}
+
+/* ---- 最近草稿：列表行 ---- */
+
+.home-draft-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.home-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 8px;
+  border-radius: 10px;
+  background: var(--h-tile);
+}
+
+.home-draft-row:hover {
+  background: #34343a;
+}
+
+.home-draft-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.home-draft-thumb {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 32px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #3a2f56, #262a45);
+  color: #b18cf0;
+}
+
+.home-draft-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.home-draft-meta b {
+  font-size: 13px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-draft-meta em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--h-dim);
+}
+
+.home-draft-del {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--h-muted);
+  cursor: pointer;
+}
+
+.home-draft-del:hover {
+  background: rgba(255, 90, 90, 0.18);
+  color: #ff8b8b;
+}
+
+/* ---- 首页「最近草稿」卡片型预览 ---- */
+
+.home-draft-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-draft-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--h-tile);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-draft-card:hover {
+  background: #34343a;
+}
+
+.home-draft-card-art {
+  display: grid;
+  place-items: center;
+  height: 54px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3a2f56, #262a45);
+  color: #b18cf0;
+}
+
+.home-draft-card b {
+  font-size: 12.5px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-draft-card em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--h-dim);
+}
+
+/* ---- AI 模板 ---- */
+
+.home-tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.home-tpl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--h-tile);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.home-tpl:hover {
+  background: #34343a;
+}
+
+/* 预览位：外框铺该能力的色调，里面是「按模板比例取景」的缩略镜位。
+   ⚠️ 只用 flex 居中，不用 absolute 定位 —— 叠层定位一旦被后来的层压住就是静默错位。 */
+.home-tpl-art {
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #4a2f6e, #2b2f5c);
+}
+
+/* 取景框：高度恒定、宽度由 aspect-ratio 推出来，于是 9:16 是窄竖条、
+   1:1 是方、16:9 是宽条 —— 一眼就能看出这个模板会出什么画幅。 */
+.home-tpl-frame {
+  height: 58px;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.home-tpl-frame[data-ratio='9:16'] {
+  aspect-ratio: 9 / 16;
+}
+
+.home-tpl-frame[data-ratio='1:1'] {
+  aspect-ratio: 1 / 1;
+}
+
+.home-tpl-frame[data-ratio='4:3'] {
+  aspect-ratio: 4 / 3;
+}
+
+.home-tpl-art[data-cap='text_to_image'] {
+  background: linear-gradient(135deg, #6e3f2f, #5c2b47);
+}
+
+.home-tpl-art[data-cap='digital_human'],
+.home-tpl-art[data-cap='lipsync'] {
+  background: linear-gradient(135deg, #2f5a6e, #2b3a5c);
+}
+
+.home-tpl-art[data-cap='video_music'],
+.home-tpl-art[data-cap='story_script'] {
+  background: linear-gradient(135deg, #2f6e52, #2b5c50);
+}
+
+.home-tpl-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 12px;
+}
+
+.home-tpl-text b {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.home-tpl-text em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--h-dim);
+}
+
+/* ---- AI 工具箱：能力列表直接来自服务端目录 ---- */
+
+.home-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+  align-content: start;
+}
+
+.home-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--h-tile);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-cap:hover {
+  background: #34343a;
+}
+
+.home-cap-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.14);
+  color: #b18cf0;
+}
+
+.home-cap-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-cap-text b {
+  font-size: 12.5px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-cap-text em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--h-dim);
+}
+
+/* 首页里的拖拽遮罩沿用 App 的 .drop-veil，这里只补一层底色适配 */
+.home .drop-veil {
+  background: rgba(20, 20, 26, 0.72);
+}
+
+/* App 默认是「顶栏 52px + 工作区」两行网格；首页自带顶栏，只占一行 */
+.app.is-home {
+  grid-template-rows: 1fr;
+}
