@@ -522,12 +522,20 @@ button:disabled {
  * ⚠️ `overflow: hidden` 是「窗口外不显示」的那一半：
  *    字幕 / 画中画 / 画面特效都是画布内的绝对定位层，超出的部分靠它裁掉，
  *    不靠每一层自己算边界 —— 层一多，各自算边界迟早漏一处。
+ *
+ * ⚠️ `container-type: size` 不能省：画布内的层（画中画盒子、字幕字号、锐化半径、
+ *    圆角、描边阴影）算尺寸用的都是 **cqw / cqh**，而 cqw 参照的是**最近的容器祖先**。
+ *    少了这一条，最近的容器退成了外面的 `.wb-player-stage`（播放器面板）——
+ *    面板比画布高得多，于是 `100cqh` 拿到的是面板高度，画中画被顶到画布下方、
+ *    被上面的 `overflow: hidden` 裁掉，表现成"时间线上有画中画、预览里什么都没有"。
+ *    （2026-10-11 修：此前注释里写着"它带 container-type: size"，实际并没有这行。）
  */
 .canvas-frame {
   --canvas-ar: 1.7778;
   aspect-ratio: var(--canvas-ar);
   width: min(100%, calc(100cqh * var(--canvas-ar)));
   position: relative;
+  container-type: size;
   background: #000;
   border: 1px solid var(--line);
   border-radius: 6px;

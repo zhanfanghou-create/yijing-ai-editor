@@ -1,29 +1,38 @@
 # 艺镜剪辑 · YiJing AI Editor
 
-> 一个**完全在本机运行**的开源视频剪辑客户端。Electron + React + 本机 ffmpeg。
-> 没有账号、没有联网服务、没有付费功能 —— 导入素材、剪辑、调色、加字幕与特效、导出成片，
-> 全在你自己的机器上完成。
+> **一款完全在本机运行的开源桌面视频剪辑器** —— Electron + React + 本机 ffmpeg。
+> 从导入素材、多轨剪辑、调色、字幕、特效，到导出成片，整条链路都在你自己的电脑上完成：
+> **不联网、不上传素材、没有账号体系、没有任何收费入口。**
+>
+> 它还内置了一个 **MCP 服务端**，可以被 [艺镜·镜枢](https://github.com/zhanfanghou-create/YJAI-yegin-releases)
+> 这类 AI 智能体直接驱动 —— 智能体给出剪辑方案，软件自动落地成草稿并导出成片。
+
+<p align="center">
+  <a href="https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest"><b>▶ 下载 Windows 版（免安装 · 约 151 MB）</b></a>
+</p>
+
+![工作台总览](docs/screenshots/02-workbench.png)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/zhanfanghou-create/yijing-ai-editor?color=2ea043&label=%E6%9C%80%E6%96%B0%E7%89%88)](https://github.com/zhanfanghou-create/yijing-ai-editor/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-1f6feb.svg)](#下载与安装)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://www.electronjs.org/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520.11-339933.svg)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-6E56CF.svg)](#智能剪辑内置-mcp-服务)
-
-![工作台](docs/screenshots/02-editor-visual.png)
 
 ---
 
 ## 目录
 
 - [这是什么](#这是什么)
+- [界面截图](#界面截图)
 - [功能特性](#功能特性)
-- [截图](#截图)
 - [下载与安装](#下载与安装)
+- [与艺镜·镜枢配合](#与艺镜镜枢配合)
+- [智能剪辑：内置 MCP 服务](#智能剪辑内置-mcp-服务)
 - [从源码构建](#从源码构建)
 - [使用说明](#使用说明)
 - [快捷键](#快捷键)
-- [智能剪辑：内置 MCP 服务](#智能剪辑内置-mcp-服务)
 - [关于 ffmpeg](#关于-ffmpeg)
 - [目录结构](#目录结构)
 - [验证与闸门](#验证与闸门)
@@ -36,16 +45,27 @@
 
 ## 这是什么
 
-**艺镜剪辑**是一款纯本地的桌面视频剪辑工具。它把「导入 → 剪辑 → 调色 → 加字幕 → 加特效 → 导出」
-这条完整的创作链路都放在一台电脑上完成，不依赖任何后端服务：
+**艺镜剪辑**是一款**纯本地**的桌面视频剪辑器。它把「导入 → 剪辑 → 调色 → 加字幕 → 加特效 → 导出」
+这条完整的创作链路整条放在一台电脑上，不依赖任何后端服务：
 
-- **不联网**：软件没有任何联网请求，也没有遥测、埋点或账号体系。
-- **不上传**：素材始终留在你自己的磁盘上，成片也直接写到你指定的目录。
-- **不收费**：没有任何收费入口，也没有解锁墙。
+|  |  |
+| --- | --- |
+| **不联网** | 应用没有任何对外网络请求，也没有遥测、埋点或更新检查。 |
+| **不上传** | 素材始终留在你自己的磁盘上，成片直接写到你指定的目录。 |
+| **不要账号** | 没有注册、没有授权、没有账号体系，装完就能用。 |
+| **不收费** | 没有任何付费入口，也没有功能解锁墙，全部能力开箱即用。 |
 
-它同时内置了一个 **MCP（Model Context Protocol）服务端**，可以被支持 MCP 的 AI 智能体
-直接驱动 —— 智能体给出剪辑方案，软件自动落地成草稿并导出成片（见
-[智能剪辑：内置 MCP 服务](#智能剪辑内置-mcp-服务)）。
+### 它面向谁
+
+- **想在本机剪片、又不愿意把素材传上云的人**：素材不出本机是硬需求；
+- **要把剪辑接进自动化流程的人**：内置 MCP 服务端，AI 智能体可以直接调用它建草稿、加片段、导出；
+- **想读源码 / 二次开发的人**：全部代码开源，纯函数真源集中在 `src/shared/`，没有黑箱。
+
+### 它和谁一起用
+
+艺镜剪辑既**可以单独使用**（当作一个普通的本地剪辑软件），也可以作为**艺镜·镜枢**的
+「剪辑手」—— 镜枢负责理解与决策，剪辑器负责落地成片。两者通过 **MCP** 通信，
+装在同一台机器上即可自动对接，详见 [与艺镜·镜枢配合](#与艺镜镜枢配合)。
 
 ### 它能做什么
 
@@ -66,14 +86,117 @@
 | 倍速 | 0.25×–4×，预览与成片速度一致（导出按倍速拆分 atempo 级） |
 | 画面比例 | 1:1 / 1:2 / 3:4 / 9:16 / 16:9 / 4:3 / 2:1 共 7 档，裁切铺满、不留黑边 |
 | 导出 | 调用本机 ffmpeg 合成成片：滤镜 / 转场 / 帧特效 / 字幕 / 画中画 / 音量 / 倍速全部进成片 |
-| 草稿 | 自动落盘，重启后自动恢复；可自定义分辨率、比例与保存位置 |
+| 草稿 | 自动保存，重启后自动恢复；可自定义分辨率、比例与保存位置 |
 | 界面 | 四区工作台可拖拽伸缩、双击复位、方向键微调；22 个可自定义快捷键 |
 
 ### 它不做什么
 
-- 不联网、不设账号、不采集任何数据；
-- 没有模型推理、没有在线素材 / 模板下载（这一类依赖外部服务，本版不含）；
+- 不联网、不要账号、不采集任何数据；
+- **没有模型推理、没有在线素材 / 模板下载** —— 这一类依赖外部服务，本版一律不含；
 - 没有任何计费体系。
+
+---
+
+## 界面截图
+
+> 以下截图取自**本仓库构建出的真实客户端**（Windows · 1920×1080）。演示草稿的素材由本机
+> ffmpeg 现场生成，不涉及任何第三方素材。
+
+### 创作中心（首页）
+
+<img src="docs/screenshots/01-home.png" width="860" alt="创作中心首页">
+
+左侧是「创作视频」与「最近草稿」；中间是快速入口、七个剪辑工具的直达按钮，以及最近草稿列表
+（显示片段数与总时长）。点「视频剪辑器」或任意一张草稿即可进入工作台。
+
+### 工作台总览
+
+<img src="docs/screenshots/02-workbench.png" width="960" alt="工作台总览">
+
+四区布局：**左「功能分类」→ 中「素材 / 预览」→ 下「时间线」→ 右「属性检查器」**。
+这张图里的草稿有 6 个片段：主轨三段视频（含两处叠化转场）、一个画中画、
+一条带真实波形的配乐、一条字幕 —— 预览里同时能看到主画面、右下角的画中画与字幕叠加。
+
+### 时间线与多轨
+
+<img src="docs/screenshots/13-timeline.png" width="960" alt="时间线与多轨">
+
+时间码是 `HH:MM:SS:FF` 的**帧号**格式（30fps）。音频片段上画的是由本机 ffmpeg 抽取 PCM
+绘制的真实波形；视频片段底部也带一条内嵌波形，方便对轴。左侧每条轨道都有
+隐藏 / 静音 / 锁定 / 独奏四个开关。
+
+### 画面检查器
+
+<img src="docs/screenshots/03-inspector-visual.png" width="960" alt="画面检查器">
+
+选中片段后，右栏是检查器，页签按片段类型给：**信息 / 画面 / 音频 / 变速 / 调整**
+（音频轨只给前两项，字幕片段给「字幕」）。「画面」页管滤镜、转场、画面特效与不透明度。
+
+### 调节与美颜
+
+<img src="docs/screenshots/04-inspector-adjust.png" width="960" alt="调节与美颜">
+
+亮度、对比度、饱和度、色温、色调、锐化与美颜档位。**这一页的每一个滑杆都由同一份纯函数
+同时驱动预览与导出**，不会出现「预览好看、成片不对」。
+
+### 变速
+
+<img src="docs/screenshots/05-inspector-speed.png" width="960" alt="变速">
+
+0.25×–4× 逐档可调。预览按同一倍率播放，导出按倍速拆分 `setpts` / `atempo`，
+单级超出 0.5–2.0 会自动拆成多级，保证音画同步。
+
+### 音频检查器
+
+<img src="docs/screenshots/06-inspector-audio.png" width="960" alt="音频检查器">
+
+音量、淡入、淡出；「从视频提取音轨」也在这一链路里完成（本机 ffmpeg）。
+
+### 字幕与花字
+
+<img src="docs/screenshots/07-subtitle.png" width="960" alt="字幕与花字">
+
+左栏是字幕样式库与手写字幕列表，右栏可覆写字号、颜色、描边、底色与位置偏移。
+字幕的样式真源是一份纯函数，预览与 `main/subtitles.js` 的导出参数共用它。
+
+### 画面特效
+
+<img src="docs/screenshots/08-effect.png" width="960" alt="画面特效">
+
+闪光、故障、扫描线、漏光、暗角、气泡等帧特效，按类别分组、卡片自带动态预览。
+特效走独立叠加层，不会压掉已经在用的调色。
+
+### 转场
+
+<img src="docs/screenshots/09-transition.png" width="960" alt="转场">
+
+叠化、模糊、故障、运镜、扭曲、3D、光效等，按组排布；拖到两个片段之间即可。
+
+### 滤镜
+
+<img src="docs/screenshots/10-filter.png" width="960" alt="滤镜">
+
+电影风格、复古、黑白、风景等调色预设，直接作用在预览与成片上。
+
+### 画面比例
+
+<img src="docs/screenshots/11-aspect.png" width="960" alt="画面比例">
+
+预览控制条右端的比例 chip，展开就是 7 档比例。比例语义是**裁切铺满**（不是加黑边），
+并且跟着项目走、存进草稿。
+
+### 音频库
+
+<img src="docs/screenshots/12-audio-lib.png" width="960" alt="音频库">
+
+本地音乐的浏览与入轨，以及「从视频提取音轨」。
+
+### 导出
+
+<img src="docs/screenshots/14-export.png" width="960" alt="导出">
+
+导出面板会列出片段数、成片时长、输出分辨率 / 比例 / 尺寸 / 帧率、速度与音量，
+并显示画面引擎状态。点「导出成片」即调用本机 ffmpeg 合成 MP4；也可以「另存工程文件」。
 
 ---
 
@@ -96,8 +219,8 @@
 
 ### 预览即所得
 
-预览合成器对热点窗口预挂载解码器，跨片段接缝不换 `src`，因此播放不会闪。
-调色、美颜、位置旋转、字幕样式都是**同一份纯函数**同时驱动预览与导出 ——
+预览合成器对热点窗口预挂载解码器，跨片段接缝不换 `src`，因此播放不闪。
+调色、美颜、位置旋转、字幕样式、画中画都是**同一份纯函数**同时驱动预览与导出 ——
 不存在「预览好看、成片不对」的分叉。
 
 ### 导出
@@ -107,45 +230,78 @@
 
 ---
 
-## 截图
-
-<table>
-  <tr>
-    <td align="center"><b>创作中心 / 首页</b><br/><img src="docs/screenshots/01-home.png" width="560"/></td>
-    <td align="center"><b>工作台 · 画面检查器</b><br/><img src="docs/screenshots/02-editor-visual.png" width="560"/></td>
-  </tr>
-  <tr>
-    <td align="center"><b>字幕样式与检查器</b><br/><img src="docs/screenshots/03-editor-subtitle.png" width="560"/></td>
-    <td align="center"><b>调节 / 美颜</b><br/><img src="docs/screenshots/04-editor-adjust.png" width="560"/></td>
-  </tr>
-  <tr>
-    <td align="center"><b>画面比例（7 档）</b><br/><img src="docs/screenshots/05-editor-aspect.png" width="560"/></td>
-    <td align="center"><b>画面特效库</b><br/><img src="docs/screenshots/06-editor-effects.png" width="560"/></td>
-  </tr>
-</table>
-
-> 截图取自本仓库构建出的真实客户端（Windows）。
-
----
-
 ## 下载与安装
 
 ### 方式一：下载安装包（推荐）
 
-到 [**Releases**](https://github.com/zhanfanghou-create/yijing-ai-editor/releases) 下载最新的
-Windows 安装包并运行：
+<p align="center">
+  <a href="https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest"><b>▶ 前往下载最新版（Windows x64 · 免安装）</b></a>
+</p>
 
-```
-YiJingAIEditor-Setup-Windows-x64.exe
-```
+| 文件 | 平台 | 大小 |
+| --- | --- | --- |
+| [`YiJingAIEditor-Setup-Windows-x64.exe`](https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest/download/YiJingAIEditor-Setup-Windows-x64.exe) | Windows 10 / 11 (x64) | 约 151 MB |
 
-- 免安装（portable）：双击即用，不写注册表、不留残留；
-- 首次运行会在 `%APPDATA%\<产品名>` 下建立数据目录（草稿、设置）；
-- 支持 Windows 10 / 11（x64）。
+- **免安装（portable）**：双击即用，不写注册表、不留残留；
+- 首次运行会在 `%APPDATA%\YiJingAIEditor` 下建立数据目录（草稿、设置）；
+- 每个 Release 都附有安装包的 **SHA-256**，可用 `certutil -hashfile <文件> SHA256` 校验。
+
+> ⚠️ 安装包目前**未做代码签名**，Windows SmartScreen 可能提示「未知发布者」，
+> 选择「更多信息 → 仍要运行」即可。
 
 ### 方式二：从源码构建
 
-见下一节。
+见 [从源码构建](#从源码构建)。
+
+---
+
+## 与艺镜·镜枢配合
+
+[**艺镜·镜枢（Yegin）**](https://github.com/zhanfanghou-create/YJAI-yegin-releases) 是一个本地 AI 智能体
+客户端。把镜枢和艺镜剪辑装在**同一台机器**上，两者就能自动对接：
+
+1. **下载并安装镜枢**：到 [YJAI-yegin-releases](https://github.com/zhanfanghou-create/YJAI-yegin-releases/releases/latest)
+   下载对应平台的安装包（Windows / macOS）。
+2. **首次运行艺镜剪辑**：它会检测本机是否装有兼容的 MCP 宿主；若已安装，会**自动**把自己
+   注册进去，**不需要任何额外配置**。
+3. **在镜枢里直接下指令**：例如「把 `D:\素材` 里那三段视频剪成一个 9:16 的短片，
+   加淡入淡出和字幕，导出到桌面」—— 镜枢会把方案落成草稿，剪辑器执行并导出成片。
+
+两者的分工是：**镜枢负责理解与决策，艺镜剪辑负责落地与渲染**。产出的草稿是同一份格式 ——
+智能体建好的草稿可以在界面里继续手动精修，界面里做好的草稿也能被智能体读取。
+
+> 当然，**不装镜枢也完全可以**：艺镜剪辑本身就是一个完整的、可手动操作的剪辑器。
+
+---
+
+## 智能剪辑：内置 MCP 服务
+
+本软件内置了一个 **MCP（Model Context Protocol）stdio 服务端**，任何支持 MCP 的 AI 智能体
+都可以把它当作工具来调用，从而**自动完成剪辑**：建草稿 → 加片段 → 加字幕与特效 → 导出成片。
+
+### 提供的工具
+
+| 工具 | 作用 |
+| --- | --- |
+| `yijing_list_drafts` | 列出本机草稿 |
+| `yijing_read_draft` | 读取某个草稿的完整内容 |
+| `yijing_create_draft` | 新建草稿 |
+| `yijing_probe_media` | 探测素材真实时长 / 尺寸 / 类型 |
+| `yijing_add_clips` | 向草稿添加片段（视频 / 音频 / 图片 / 文字） |
+| `yijing_add_subtitles` | 批量添加字幕 |
+| `yijing_update_clip` | 修改片段属性（起止 / 调色 / 特效 / 倍速…） |
+| `yijing_delete_clip` | 删除片段 |
+| `yijing_export_video` | 调用本机 ffmpeg 导出成片 |
+
+### 自动对接
+
+- 软件首次运行会检测本机是否安装了兼容的 MCP 宿主（智能体客户端）；若已安装，会**自动**
+  把自己注册进该宿主的 MCP 配置，**无需任何额外安装步骤**。
+- 服务端与界面共用同一份草稿格式、素材描述与导出管线 —— 智能体产出的草稿在界面里可以直接
+  打开继续编辑，界面里做好的草稿也能被智能体读取。
+- `stdout` 只用于 JSON-RPC 报文，所有日志走 `stderr`，不污染协议。
+
+> 隔离运行（例如测试时传 `--user-data-dir`）**不会**写入宿主的全局配置，避免污染开发机。
 
 ---
 
@@ -229,37 +385,6 @@ packages/installer/dist-installer/YiJingAIEditor-Setup-Windows-x64.exe
 | 项目 | 导出视频 | `Ctrl+E` |
 
 固定键位：`Esc` 关闭弹窗 / 退出全屏。
-
----
-
-## 智能剪辑：内置 MCP 服务
-
-本软件内置了一个 **MCP（Model Context Protocol）stdio 服务端**，任何支持 MCP 的 AI 智能体
-都可以把它当作工具来调用，从而**自动完成剪辑**：建草稿 → 加片段 → 加字幕与特效 → 导出成片。
-
-### 提供的工具
-
-| 工具 | 作用 |
-| --- | --- |
-| `yijing_list_drafts` | 列出本机草稿 |
-| `yijing_read_draft` | 读取某个草稿的完整内容 |
-| `yijing_create_draft` | 新建草稿 |
-| `yijing_probe_media` | 探测素材真实时长 / 尺寸 / 类型 |
-| `yijing_add_clips` | 向草稿添加片段（视频 / 音频 / 图片 / 文字） |
-| `yijing_add_subtitles` | 批量添加字幕 |
-| `yijing_update_clip` | 修改片段属性（起止 / 调色 / 特效 / 倍速…） |
-| `yijing_delete_clip` | 删除片段 |
-| `yijing_export_video` | 调用本机 ffmpeg 导出成片 |
-
-### 自动对接
-
-- 软件首次运行会检测本机是否安装了兼容的 MCP 宿主（智能体客户端）；若已安装，会**自动**
-  把自己注册进该宿主的 MCP 配置，**无需任何额外安装步骤**。
-- 服务端与界面共用同一份草稿格式、素材描述与导出管线 —— 智能体产出的草稿在界面里可以直接
-  打开继续编辑，界面里做好的草稿也能被智能体读取。
-- `stdout` 只用于 JSON-RPC 报文，所有日志走 `stderr`。
-
-> 隔离运行（例如测试时传 `--user-data-dir`）**不会**写入宿主的全局配置，避免污染开发机。
 
 ---
 
@@ -364,11 +489,14 @@ node scripts/verify.mjs --only icons # 只跑某一道
 不会。整个应用没有任何对外网络请求，也没有账号、遥测与更新检查。
 
 **Q：草稿存在哪里？**
-用户数据目录下（Windows 为 `%APPDATA%\<产品名>\drafts`）。可在草稿参数面板中修改保存位置。
+用户数据目录下（Windows 为 `%APPDATA%\YiJingAIEditor\drafts`）。可在草稿参数面板中修改保存位置。
 
 **Q：为什么预览里的波形 / 缩略图偶尔不显示？**
 波形由本机 ffmpeg 抽取真实 PCM 绘制，若素材编码特殊或 ffmpeg 不可用，该片段的波形会缺失，
 但不影响其它功能。
+
+**Q：一定要装艺镜·镜枢才能用吗？**
+不用。镜枢只是「自动剪辑」的入口，艺镜剪辑本身是一个完整的手动剪辑器。
 
 ---
 
