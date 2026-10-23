@@ -21,12 +21,28 @@ import {
   isNoopTransition,
   resolveTotalDuration
 } from '../looks.js'
-import { FILTER_GROUPS, TRANSITION_GROUPS, EFFECT_GROUPS, materialThumb } from '../materials.js'
+import { FILTER_GROUPS, TRANSITION_GROUPS, EFFECT_GROUPS, ADJUST_GROUPS, materialThumb } from '../materials.js'
+/* 调节的真源：面板里点一个预设写回的就是这五个键，右栏「调整」页的滑杆读同一份 */
+import { ADJUST_PARAMS, readAdjust } from '../../shared/adjust.js'
 /** 画面比例真源（与预览共用同一份表，成片按它裁） */
 import { DEFAULT_ASPECT, aspectOf, outputSizeFor } from '../../shared/aspect.js'
+/** 响度统一预设（导出阶段，作用在混完的总线上） */
+import { LOUDNESS_MODES } from '../../shared/audio.js'
 
 /** 「我的预设」持久化键。与其它本地设置同前缀，便于一起清理。 */
 const PRESET_KEY = 'yjai_desktop_looks_presets'
+
+/**
+ * 编码器的显示名。
+ * ⚠️ 这里的键必须与主进程 render.js 的 ENCODER_KEYS 一一对应 ——
+ *    渲染层多写一个、主进程不认识，那个选项选了就会被静默换回 libx264。
+ */
+const ENCODER_LABEL = {
+  libx264: '软件编码（x264）',
+  h264_nvenc: 'NVIDIA 硬件编码（NVENC）',
+  h264_qsv: 'Intel 硬件编码（QSV）',
+  h264_amf: 'AMD 硬件编码（AMF）'
+}
 
 const readPresets = () => {
   if (typeof localStorage === 'undefined') return []
@@ -77,11 +93,13 @@ export default function SidePanels(props) {
     onAddAsset,
     /* 参与导出的片段（App 已按轨道开关 / 停用状态结算过）。
        缺省回退 clips：这样旧的调用点不传也不会崩，只是拿全量。 */
-    renderClips = null
+    renderClips = null,
+    /* 时间区域（秒）：非空时导出面板给出「只导出这一段」的开关 */
+    range = null
   } = props
 
   if (mode === 'export') {
-    return <ExportPanel clips={renderClips || clips} projectName={projectName} backdrop={backdrop} />
+    return <ExportPanel clips={renderClips || clips} projectName={projectName} backdrop={backdrop} aspect={props.aspect || DEFAULT_ASPECT} range={range} />
   }
   if (mode === 'text') return <TextPanel onAddTextClip={onAddTextClip} clips={clips} onClearTextTrack={onClearTextTrack} />
   /* 「文字 → 花字」与「字幕 → 字幕模板」共用样式页，靠 textStyleGroup 区分：
@@ -120,6 +138,9 @@ export default function SidePanels(props) {
   }
   if (mode === 'filter') {
     return <FilterPanel selectedClip={selectedClip} activeClip={activeClip} onPatchClip={onPatchClip} material={materialGroup} />
+  }
+  if (mode === 'adjust') {
+    return <AdjustPanel selectedClip={selectedClip} activeClip={activeClip} onPatchClip={onPatchClip} material={materialGroup} />
   }
   if (mode === 'effect') {
     return (
@@ -385,7 +406,7 @@ function TextPanel({ clips, onAddTextClip, onClearTextTrack }) {
   return (
     <Shell kicker="TEXT" title="文字" extra={<span className="pill">{items.length} 种样式</span>}>
       <div className="notice" style={{ marginBottom: 12 }}>
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>
           点一个样式就会在<b>播放头位置</b>新增一段文字，并把播放头停在它的起点 ——
           所以在预览画面里立刻能看到效果。之后可以在时间线上拖动、修剪，也可以按 Ctrl+B 分割。
@@ -501,7 +522,7 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
         <span>提取音频</span>
       </div>
       <div className="notice">
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>把片段里的音轨单独抽成一条音频素材，抽出来可以放到音频轨上复用。全程用本机 ffmpeg，不依赖任何服务。</span>
       </div>
 
@@ -574,7 +595,7 @@ function StockPanel({ assets, onAddToTimeline }) {
                 </small>
               </div>
               <button className="btn small" type="button" onClick={() => onAddToTimeline?.(asset)}>
-                <IconPlus size={13} />
+                <IconPlus size={14} />
                 加入
               </button>
             </div>
@@ -761,7 +782,7 @@ function TransitionPanel({ clips, selectedClip, activeClip, onPatchClip, materia
             onChange={setDuration}
           />
           <div className="notice" style={{ marginTop: 8 }}>
-            <IconWand size={15} />
+            <IconWand size={14} />
             <span>
               转场会让成片<b>缩短</b>对应时长（交叠部分不重复计时）：当前结算后
               <b> {timecode(total, false)}</b>（原 {timecode(rawTotal, false)}）。
@@ -861,6 +882,121 @@ function FilterPanel({ selectedClip, activeClip, onPatchClip, material }) {
   )
 }
 
+/* ------------------------------ 调节 ------------------------------ */
+
+/**
+ * 「调节」页 —— 亮度 / 对比度 / 饱和度 / 色温 / 色调 的预设网格。
+ *
+ * 与「滤镜」的区别必须让用户一眼看出来：滤镜套的是一层风格（looks.js 的调色键），
+ * 调节改的是片段自己的五个数值（shared/adjust.js），右栏「调整」页的滑杆就是它们的镜像。
+ * 所以这里点一个预设，右栏滑杆会**当场跟着动** —— 两处读的是同一个 `clip.adjust`。
+ *
+ * 缩略图是**真算出来的**：用同一组参数换算成 CSS `brightness/contrast/saturate`
+ * 加一层按色温取色的内阴影，张张不同、且与点下去的画面方向一致
+ * （暖调卡片看着就暖）。不是随便找张图凑数。
+ */
+function AdjustPanel({ selectedClip, activeClip, onPatchClip, material }) {
+  const toast = useToast()
+  /* 与滤镜/转场/特效同一条兜底规则：没选中就用播放头处那个片段 */
+  const cut = selectedClip || activeClip || null
+  const current = cut ? readAdjust(cut.adjust) : null
+  const groupIndex = Math.min(parseMaterialGroup(material), ADJUST_GROUPS.length - 1)
+  const group = ADJUST_GROUPS[groupIndex] || ADJUST_GROUPS[0]
+
+  /** 当前片段的五个参数是否正好等于这条预设（容差 0.5：都是整数档，不需要更细） */
+  const isSame = (adjust) =>
+    Boolean(current) && ADJUST_PARAMS.every((item) => Math.abs(current[item.key] - (adjust[item.key] || 0)) < 0.5)
+
+  const apply = (item) => {
+    if (!cut) {
+      toast.bad('时间线上还没有片段，调节没有作用对象')
+      return
+    }
+    onPatchClip?.(cut.id, { adjust: { ...readAdjust(item.adjust) } })
+    toast.good(`已应用「${item.zh}」`)
+  }
+
+  const reset = () => {
+    if (!cut) return
+    onPatchClip?.(cut.id, { adjust: { bright: 0, contrast: 0, saturate: 0, temp: 0, tint: 0 } })
+    toast.good('已恢复原画面')
+  }
+
+  /* 「恢复原画面」只在**真的改过**时出现：参数全 0 时它点了什么都不会变，
+     那正是本项目一直在清的那类"看着有、实际没接"的按钮。 */
+  const touched = Boolean(current) && ADJUST_PARAMS.some((item) => Math.abs(current[item.key]) > 0.01)
+
+  /* 预览渲染：把 ±100 的参数折成 CSS 的倍率。分母取 120~200 —— 一档就顶到纯白/全灰
+     会让十六张卡长得一样，而分母太大（250+）又看不出差别（实测 1.02 的 brightness
+     在缩略图上完全分辨不出）。方向与 shared/adjust.js 的增益一致：
+     亮度↑=更亮、对比↑=更硬、饱和↑=更艳、色温↑=更暖（正）更冷（负）。 */
+  const previewStyle = (adjust) => {
+    const bright = 1 + (adjust.bright || 0) / 150
+    const contrast = 1 + (adjust.contrast || 0) / 110
+    const saturate = 1 + (adjust.saturate || 0) / 90
+    const temp = adjust.temp || 0
+    return {
+      /* 一块"假风景"：天空 → 地面 + 左上高光。有明暗层次才看得出对比度与亮度差，
+         纯色渐变上这些参数变化几乎不可见（对比度对纯色毫无作用）。 */
+      backgroundImage:
+        'radial-gradient(circle at 30% 26%, rgba(255, 246, 220, 0.85) 0%, rgba(255, 246, 220, 0) 44%), linear-gradient(168deg, #93aec6 0%, #cbd6d9 40%, #8d9a72 68%, #3d4738 100%)',
+      filter: `brightness(${bright.toFixed(3)}) contrast(${contrast.toFixed(3)}) saturate(${saturate.toFixed(3)})`,
+      boxShadow:
+        temp > 0
+          ? `inset 0 0 0 999px rgba(255, 150, 40, ${(temp / 260).toFixed(3)})`
+          : temp < 0
+            ? `inset 0 0 0 999px rgba(40, 140, 255, ${(-temp / 260).toFixed(3)})`
+            : 'none'
+    }
+  }
+
+  return (
+    <Shell>
+      <div className="mat-group-row">
+        <span className="mat-group-name">{group.name}</span>
+        <span className="grow" />
+        {cut && touched ? (
+          <button className="btn small" type="button" data-mat-reset="adjust" onClick={reset}>
+            恢复原画面
+          </button>
+        ) : null}
+      </div>
+      <div className="look-grid" data-adjust-grid="1">
+        {group.items.map((item) => {
+          const active = isSame(item.adjust)
+          return (
+            <button
+              key={item.zh}
+              type="button"
+              className={`look-card ${active ? 'active' : ''}`}
+              data-adjust-preset={item.zh}
+              aria-pressed={active}
+              disabled={!cut}
+              title={
+                cut
+                  ? `应用「${item.zh}」：亮度 ${item.adjust.bright} / 对比度 ${item.adjust.contrast} / 饱和度 ${item.adjust.saturate}`
+                  : '先在时间线上选一个片段'
+              }
+              onClick={() => apply(item)}
+            >
+              <span className="look-preview is-photo">
+                <span className="look-adjust-art" style={previewStyle(item.adjust)} />
+              </span>
+              <span className="look-name">{item.zh}</span>
+            </button>
+          )
+        })}
+      </div>
+      {cut && touched ? (
+        <p className="wb-insphint" data-adjust-values="1">
+          当前：亮度 {current.bright} · 对比度 {current.contrast} · 饱和度 {current.saturate} · 色温 {current.temp} · 色调{' '}
+          {current.tint}
+        </p>
+      ) : null}
+    </Shell>
+  )
+}
+
 /* ------------------------------ 我的预设 ------------------------------ */
 
 function PresetPanel({ selectedClip, onPatchClip }) {
@@ -914,14 +1050,14 @@ function PresetPanel({ selectedClip, onPatchClip }) {
   return (
     <Shell kicker="PRESETS" title="我的预设" extra={<span className="pill">{saved.length} 套</span>}>
       <div className="notice" style={{ marginBottom: 12 }}>
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>把选中片段当前的<b>滤镜 + 转场</b>存成一套，之后一键套到别的片段上。预设存在本机。</span>
       </div>
 
       <div className="row" style={{ gap: 8 }}>
         <input className="input" style={{ flex: 1 }} value={name} placeholder="预设名称（可留空）" onChange={(event) => setName(event.target.value)} />
         <button className="btn small primary" type="button" onClick={save} disabled={!selectedClip}>
-          <IconAddSquare size={13} />
+          <IconAddSquare size={14} />
           保存
         </button>
       </div>
@@ -946,7 +1082,7 @@ function PresetPanel({ selectedClip, onPatchClip }) {
                 套用
               </button>
               <button className="btn small" type="button" onClick={() => remove(entry.key)} aria-label="删除预设">
-                <IconTrash size={13} />
+                <IconTrash size={14} />
               </button>
             </div>
           ))}
@@ -1014,7 +1150,7 @@ function SmartPanel({ clips, onSplitEvenly, onCloseGaps, onClearTextTrack }) {
       </div>
 
       <div className="notice" style={{ marginTop: 12 }}>
-        <IconSparkle size={15} />
+        <IconSparkle size={14} />
         <span>
           以上每一项都是当场执行的真实操作，并会写进撤销历史（Ctrl+Z 可回退）。
         </span>
@@ -1039,7 +1175,7 @@ function RecordPanel({ onImport }) {
   return (
     <Shell kicker="RECORD" title="录制">
       <div className="notice warn" style={{ marginBottom: 12 }}>
-        <IconAlert size={15} />
+        <IconAlert size={14} />
         <span>
           <b>应用内录制尚未接入。</b>
           参考客户端在这一项下做的是屏幕/摄像头录制，本项目要支持它必须放开渲染进程的
@@ -1057,7 +1193,7 @@ function RecordPanel({ onImport }) {
             <small>Windows 按 Win+G 录屏，macOS 按 Cmd+Shift+5，存好后从这里导入</small>
           </div>
           <button className="btn small" type="button" onClick={onImport}>
-            <IconPlus size={13} />
+            <IconPlus size={14} />
             导入
           </button>
         </div>
@@ -1071,7 +1207,7 @@ function RecordPanel({ onImport }) {
       </div>
 
       <div className="notice" style={{ marginTop: 12 }}>
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>
           接入应用内录制需要新增主进程 desktopCapturer 通道并将 media 权限收敛到本应用源，
           属于安全基线变更，已列入待确认清单。
@@ -1083,11 +1219,17 @@ function RecordPanel({ onImport }) {
 
 /* ------------------------------- 导出 ------------------------------- */
 
-function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASPECT }) {
+function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASPECT, range = null }) {
   const toast = useToast()
   const [resolution, setResolution] = useState('1080p')
   const [fps, setFps] = useState(30)
   const [quality, setQuality] = useState(80)
+  /* 编码与码率：默认软编 + 画质优先，与改动前逐字一致（不改变既有的导出证据） */
+  const [encoder, setEncoder] = useState('libx264')
+  const [bitrateMode, setBitrateMode] = useState('quality')
+  const [bitrate, setBitrate] = useState(8000)
+  /* 响度统一：默认不处理 */
+  const [loudness, setLoudness] = useState('off')
   const [ffmpeg, setFfmpeg] = useState(null)
   const [outPath, setOutPath] = useState('')
   const [ratio, setRatio] = useState(0)
@@ -1096,6 +1238,26 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
 
   /** 成片时长必须走与渲染同一份结算：转场会让成片变短，直接累加 start+duration 会虚高 */
   const duration = resolveTotalDuration(clips)
+  /**
+   * 「只导出时间区域」。
+   *
+   * 默认**开着**：用户是从时间线的「只导出」按钮进来的，他要的就是这一段；
+   * 但开关必须摆在明面上 —— 默认行为如果是"偷偷只导一部分"，
+   * 用户下次从「导出」菜单进来会以为成片缺了一大截。
+   *
+   * ⚠️ 区间是**片段层**裁剪（主进程 region.trimToRegion），不是给 ffmpeg 加 -ss/-to：
+   *    输出侧裁时间会让画中画 / 转场 / 音量包络的时间表达式全部错位，
+   *    而它们都是按原时间线算的。
+   */
+  const [onlyRange, setOnlyRange] = useState(Boolean(range && Number(range.end) > Number(range.start)))
+  const activeRange =
+    onlyRange && range && Number(range.end) > Number(range.start)
+      ? { start: Number(range.start), end: Number(range.end) }
+      : null
+  /** 只导出区间时的成片时长（区间可能比内容更长，按内容截断，不虚报） */
+  const outDuration = activeRange
+    ? Math.max(0, Math.min(activeRange.end, duration) - Math.min(activeRange.start, duration))
+    : duration
   const rawDuration = clips.reduce((max, item) => Math.max(max, item.start + item.duration), 0)
   const savedByTransitions = Number((rawDuration - duration).toFixed(3))
 
@@ -1113,6 +1275,14 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
     (SIZES[resolution] || SIZES['1080p'])[1],
     aspect
   )
+
+  /**
+   * 可选编码器 = 主进程 probe 出来的那几个。
+   * 探测还没回来（ffmpeg === null）时只给 libx264 —— 软编永远可用，先摆一个能用的，
+   * 不摆一个"待定"的空下拉。硬件编码回来了再自动多出选项。
+   */
+  const availableEncoders =
+    ffmpeg && Array.isArray(ffmpeg.encoders) && ffmpeg.encoders.length ? ffmpeg.encoders : ['libx264']
 
   // 打开面板就探一次 ffmpeg，让用户先知道本机能不能渲
   useEffect(() => {
@@ -1167,7 +1337,9 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
        */
       const result = await bridge.render.start({
         outPath: target,
-        options: { width: sizeOut.width, height: sizeOut.height, fps, quality, aspect },
+        /* range：只导出时间区域时给主进程（片段层裁剪）。null = 整条时间线。
+           少带它 = 面板上选了"只导出区域"、成片还是整条 —— 而且时长与内容都不报错。 */
+        options: { width: sizeOut.width, height: sizeOut.height, fps, quality, aspect, encoder, bitrateMode, bitrate, loudness, range: activeRange },
         /* 背景（素材 → 背景选的那张图）也要进成片，否则"选了背景"只影响预览。 */
         backdrop: backdrop || '',
         // 片段里带 path 的用磁盘路径，生成类素材是 http 链接，ffmpeg 都能直接吃。
@@ -1201,6 +1373,12 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
           /* 倍速。少了它，成片里所有片段都按原速渲染 ——
              "调了 2 倍速，成片一点没变"，而导出流程一句错都不报。 */
           speed: clip.speed ?? 1,
+          /* 曲线变速（点列）+ 音高两项。⚠️ 少带 speedCurve 的后果特别隐蔽：
+             预览按曲线播、成片按 clip.speed 那一个均值匀速播，两边都不报错，
+             只有把两段视频摆在一起比才看得出"成片没变速"。 */
+          speedCurve: clip.speedCurve || null,
+          keepPitch: clip.keepPitch !== false,
+          pitch: clip.pitch ?? 0,
           pip: clip.pip || null,
           /* 「画面 · 位置/旋转」（检查器）。少了这三项，成片里的画面永远居中不转 ——
              "预览里挪过、成片里没动"，而导出照旧不报错。 */
@@ -1215,6 +1393,23 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
              真源换算在 shared/effects.js，两侧共用；载荷里少带就是
              "面板上调了圆角、预览里圆了、成片还是方的"。 */
           effects: clip.effects || null,
+          /* 自由裁剪框（框外裁掉、框内铺满）。换算在 shared/crop.js，与预览的 transform 同源；
+             载荷里少带一项就是"面板上框好了、成片还是整幅"。 */
+          crop: clip.crop || null,
+          /* 音量包络（关键帧）。导出侧拼成 ffmpeg 的 volume 表达式；
+             少带它 = 预览里听得到渐弱、成片里从头到尾一个音量。 */
+          volumeKf: clip.volumeKf || null,
+          /* 修复类三件（**导出阶段**生效，界面上标了「导出时应用」）：
+             视频降噪 / 视频防抖 / 音频降噪。 */
+          denoise: clip.denoise ?? 0,
+          stabilize: clip.stabilize ?? 0,
+          audioDenoise: clip.audioDenoise ?? 0,
+          /* 倒放：导出侧拼 ffmpeg 的 reverse / areverse（预览靠 sourceTimeAt 反向取帧）。
+             载荷里少带这一个布尔 = 面板上开关亮了、成片照旧正放。 */
+          reverse: clip.reverse === true,
+          /* 立体声平衡（-100 左 / 0 居中 / +100 右）。导出侧拼 pan 滤镜；
+             预览因为浏览器不能按声道分增益，只标注不生效（见 RightPanel 的提示）。 */
+          pan: clip.pan ?? 0,
           /* 关键帧表（位置/缩放/旋转/不透明度的时间曲线）。导出侧用它拼
              ffmpeg 的表达式（`t` 为片段内时间），与预览同一个线性插值函数。 */
           keyframes: clip.keyframes || null,
@@ -1234,6 +1429,24 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
           textColor: clip.textColor || '',
           textAnchor: clip.textAnchor || '',
           textOffset: clip.textOffset ?? null,
+          /* 排版三项（行距 / 对齐 / 背景框）。导出侧读这些拼 line_spacing / text_align / box，
+             少带一项 = 预览里排好了、成片里回到默认。 */
+          textLineHeight: clip.textLineHeight ?? null,
+          textAlign: clip.textAlign || '',
+          textBgOn: clip.textBgOn ?? null,
+          textBgColor: clip.textBgColor || '',
+          textBgOpacity: clip.textBgOpacity ?? null,
+          textBgPad: clip.textBgPad ?? null,
+          /* 文字动画三项 + 两个时长。导出侧用它们生成 drawtext 的时间表达式
+             （alpha / x / y / fontsize），与预览的 CSS 类同源。 */
+          textIn: clip.textIn || '',
+          textOut: clip.textOut || '',
+          textLoop: clip.textLoop || '',
+          textInDur: clip.textInDur ?? null,
+          textOutDur: clip.textOutDur ?? null,
+          /* 自定义字体：路径给导出（fontfile），家族名给预览（CSS） */
+          textFont: clip.textFont || '',
+          textFontPath: clip.textFontPath || '',
           assetId: clip.assetId || ''
         }))
       })
@@ -1255,7 +1468,7 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
     } finally {
       setBusy(false)
     }
-  }, [aspect, backdrop, bridge, clips, fps, outPath, pickOutput, quality, resolution, toast])
+  }, [activeRange, aspect, backdrop, bitrate, bitrateMode, bridge, clips, encoder, fps, loudness, outPath, pickOutput, quality, resolution, toast])
 
   const cancelRender = useCallback(() => {
     bridge?.render?.cancel()
@@ -1301,9 +1514,17 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
           <strong>{clips.length}</strong>
         </div>
         <div>
-          <span>成片时长</span>
-          <strong>{timecode(duration, false)}</strong>
+          <span>{activeRange ? '成片时长（仅区域）' : '成片时长'}</span>
+          <strong data-export-duration={Number(outDuration.toFixed(3))}>{timecode(outDuration, false)}</strong>
         </div>
+        {activeRange ? (
+          <div>
+            <span>导出区间</span>
+            <strong className="mono" data-export-range={`${activeRange.start}-${activeRange.end}`}>
+              {timecode(activeRange.start, false)} – {timecode(activeRange.end, false)}
+            </strong>
+          </div>
+        ) : null}
         {savedByTransitions > 0.01 ? (
           <div>
             <span>转场占用</span>
@@ -1346,8 +1567,113 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
         </div>
       </div>
 
+      {/* 时间区域：只有当前真的框了区间才出现（没框的时候摆一个灰开关毫无意义） */}
+      {range ? (
+        <div className="field" data-export-range-field="1">
+          <span>输出范围</span>
+          <div className="wb-chiprow" data-export-range-mode="1">
+            <button
+              type="button"
+              className={`chip ${!onlyRange ? 'on' : ''}`}
+              data-export-range-btn="all"
+              aria-pressed={!onlyRange}
+              title="导出整条时间线"
+              onClick={() => setOnlyRange(false)}
+            >
+              整条时间线
+            </button>
+            <button
+              type="button"
+              className={`chip ${onlyRange ? 'on' : ''}`}
+              data-export-range-btn="range"
+              aria-pressed={onlyRange}
+              title={`只导出 ${timecode(Number(range.start), false)} – ${timecode(Number(range.end), false)} 这一段`}
+              onClick={() => setOnlyRange(true)}
+            >
+              只导出时间区域
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <Slider label="帧率" suffix=" fps" min={24} max={60} step={6} value={fps} onChange={setFps} />
-      <Slider label="画质" suffix="%" min={30} max={100} step={5} value={quality} onChange={setQuality} />
+
+      {/*
+        编码器：只列**本机 ffmpeg 真的支持**的那几个（probe 时逐个查过 `-encoders`）。
+        ⚠️ 摆一个选了就废掉的选项比不摆更糟：没有 N 卡却选 h264_nvenc 时，
+        ffmpeg 不是回退软编，而是整个导出失败（"No capable devices found"）。
+      */}
+      <label className="field">
+        <span>视频编码</span>
+        <select
+          className="select"
+          value={availableEncoders.includes(encoder) ? encoder : 'libx264'}
+          data-export-encoder="1"
+          onChange={(event) => setEncoder(event.target.value)}
+        >
+          {availableEncoders.map((key) => (
+            <option key={key} value={key}>
+              {ENCODER_LABEL[key] || key}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {/* 码率模式：画质优先（crf/cq）或码率优先（准 CBR） */}
+      <div className="field">
+        <span>码率控制</span>
+        <div className="wb-chiprow" data-export-bitrate-mode="1">
+          {[
+            ['quality', '画质优先'],
+            ['bitrate', '码率优先']
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={`chip ${bitrateMode === key ? 'on' : ''}`}
+              data-export-bitrate-btn={key}
+              aria-pressed={bitrateMode === key}
+              onClick={() => setBitrateMode(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {bitrateMode === 'bitrate' ? (
+        <Slider
+          label="目标码率"
+          suffix=" kbps"
+          min={1000}
+          max={60000}
+          step={500}
+          value={bitrate}
+          onChange={setBitrate}
+        />
+      ) : (
+        <Slider label="画质" suffix="%" min={30} max={100} step={5} value={quality} onChange={setQuality} />
+      )}
+
+      {/* 响度统一（导出阶段，作用在混完的总线上） */}
+      <label className="field">
+        <span>响度统一</span>
+        <select
+          className="select"
+          value={loudness}
+          data-export-loudness="1"
+          onChange={(event) => setLoudness(event.target.value)}
+        >
+          {LOUDNESS_MODES.map((item) => (
+            <option key={item.key} value={item.key}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="hint" style={{ marginTop: -4 }}>
+        响度统一在混音完成后统一整条音轨的响度（不同素材音量差很大时最有用），只影响导出。
+      </p>
 
       <label className="field">
         <span>输出文件</span>
@@ -1414,14 +1740,14 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
 
       {failure ? (
         <div className="notice warn" style={{ marginTop: 12 }}>
-          <IconAlert size={15} />
+          <IconAlert size={14} />
           <span style={{ whiteSpace: 'pre-wrap' }}>{failure}</span>
         </div>
       ) : null}
 
       {ffmpeg && !ffmpeg.available ? (
         <div className="notice warn" style={{ marginTop: 12 }}>
-          <IconAlert size={15} />
+          <IconAlert size={14} />
           <span>
             {ffmpeg.reason === 'not-found'
               ? /* ⚠️ 必须给出**可照做**的三条路：ffmpeg 是 LGPL/GPL 的，本项目是 MIT，

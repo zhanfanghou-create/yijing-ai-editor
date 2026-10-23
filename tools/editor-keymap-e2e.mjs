@@ -42,10 +42,13 @@ const PROFILE_PREFIX = '.keymap-profile'
 
 /** 期望值全部**独立写死**在这里，不从源码 import —— 从被测算的代码里取期望值等于没测。
  *  21 → 22（2026-10-08）：编辑组新增「停用 / 启用选中的片段」（V，参照参考客户端的
- *  「停用片段」），参考客户端同款功能同名键位。 */
+ *  「停用片段」），参考客户端同款功能同名键位。
+ *  22 → 25（2026-10-19）：新增用户标记三项（M 打点 / Ctrl+← → 在标记间跳）。
+ *  25 → 28（2026-10-20）：新增时间区域三项（I 入点 / O 出点 / Shift+Delete 删除区间）。
+ *  固定键位行不算在动作行里（它是单独的一块说明），所以恒比动作行多 1。 */
 const EXPECTED_GROUPS = ['编辑', '播放', '跳转', '视图', '项目', '固定键位']
-const EXPECTED_ACTION_ROWS = 22
-const EXPECTED_TOTAL_ROWS = 23
+const EXPECTED_ACTION_ROWS = 28
+const EXPECTED_TOTAL_ROWS = 29
 
 function rmrf(target, { attempts = 24, waitMs = 300 } = {}) {
   for (let i = 0; i < attempts; i += 1) {

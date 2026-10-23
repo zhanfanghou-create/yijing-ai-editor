@@ -83,14 +83,25 @@ export function Field({ label, hint, children }) {
  *   倍速这类小数滑杆要用它（0.25x 显示成 "0.25x" 而不是 "0.2500000001x"），
  *   不传就按「原值 + suffix」显示，与以前逐字相同。
  */
-export function Slider({ label, value, suffix = '', min = 0, max = 100, step = 1, format, onChange }) {
+export function Slider({ label, value, suffix = '', min = 0, max = 100, step = 1, format, onChange, hook }) {
   return (
     <div className="slider-row">
       <label>
         {label}
         <em>{format ? format(value) : `${value}${suffix}`}</em>
       </label>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      {/* `data-slider`：滑杆的稳定钩子。
+          与 `data-insp-num`（数值输入框）同一套命名 —— 闸门/E2E 断言"滑杆真的把值写出去了"
+          时读这个，而不是按标签文字找元素（文案一改，测试就全都找不到）。 */}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        data-slider={hook}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
     </div>
   )
 }

@@ -93,7 +93,7 @@
 }
 
 .home-brand-text span {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-muted);
   letter-spacing: 0.6px;
 }
@@ -288,7 +288,7 @@
 /* 参考胶囊里的标题是**斜体**（实测字高 10px ⇒ 字号 14），不是常规粗体 */
 .home-promo-text b {
   min-width: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-style: italic;
   font-weight: 600;
   line-height: 1;
@@ -571,7 +571,7 @@
 .home-hero h2 {
   margin: 0;
   /* 实测「视频剪辑器」墨迹宽 106px / 5 字 ⇒ 字号 ≈ 21px */
-  font-size: 21px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.2px;
   position: relative;
@@ -599,7 +599,7 @@
   border-radius: 16px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: #fff;
   background: rgba(255, 255, 255, 0.2);
@@ -652,7 +652,7 @@
 
 .home-feat h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -765,7 +765,7 @@
 
 .home-sec-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -885,7 +885,7 @@
 
 .home-empty-text {
   margin: 0 0 40px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--h-dim);
 }
 
@@ -912,7 +912,7 @@
 }
 
 .home-page-sub {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--h-dim);
 }
 
@@ -927,7 +927,7 @@
   border-radius: 8px;
   background: rgba(168, 85, 247, 0.16);
   color: #d8bdff;
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -1001,7 +1001,7 @@
 
 .home-draft-meta em {
   font-style: normal;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-dim);
 }
 
@@ -1059,7 +1059,7 @@
 }
 
 .home-draft-card b {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1162,7 +1162,7 @@
 
 .home-tpl-text em {
   font-style: normal;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-dim);
 }
 
@@ -1213,7 +1213,7 @@
 }
 
 .home-cap-text b {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;

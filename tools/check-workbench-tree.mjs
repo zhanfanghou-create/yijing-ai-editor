@@ -457,12 +457,13 @@ export function runCheck(paths = PATHS) {
   // ---- 全局 1/10：树解析成功（含「子项写法的解析器看懂了」）----
   const badRoots = tabs.filter((tab) => !tab.root.key || !tab.root.label).map((tab) => tab.key)
   claim(
-    /* 7 = 开源版的标签数（媒体 / 文字 / 字幕 / 音频 / 转场 / 滤镜 / 特效）。
-       数字人与素材(贴纸)两页随那一版的功能一起删掉了，下界同步下调。 */
-    tabs.length >= 7 && !badRoots.length && !unresolved.length,
+    /* 8 = 开源版的标签数（素材 / 音频 / 文字 / 特效 / 转场 / 字幕 / 滤镜 / 调节）。
+       数字人与素材(贴纸)两页随那一版的功能一起删掉了，下界同步下调；
+       「调节」是真功能，补上后下界回升到 8。 */
+    tabs.length >= 8 && !badRoots.length && !unresolved.length,
     `WB_TREE 解析出 ${tabs.length} 个标签，每个标签都有 root（键 + 文案），且 children 的写法都看得懂`,
     [
-      tabs.length < 7 ? `只解析出 ${tabs.length} 个标签，解析器可能坏了` : '',
+      tabs.length < 8 ? `只解析出 ${tabs.length} 个标签，解析器可能坏了` : '',
       badRoots.length ? `这些标签的 root 缺 key/label：${badRoots.join(', ')}` : '',
       unresolved.length
         ? `children 解析不到（子项会整片失去看门狗）：${unresolved

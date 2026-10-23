@@ -32,6 +32,42 @@ const effects = require('../shared/effects.js')
 /* 画面比例的真源：与渲染层**同一份**（各写一份就会有一边漏掉比例，
    症状是"预览 1:1、成片还是 16:9"，两边单独看都没错）。 */
 const aspect = require('../shared/aspect.js')
+/* 自由裁剪框：裁剪 + 铺满。与预览的 transform 同一套换算 */
+const crop = require('../shared/crop.js')
+/* 自由变形（四角透视）：ffmpeg 的 `perspective` 参数由这一份算出来，
+   与预览侧的 CSS `matrix3d` 是同一个单应矩阵（见 shared/warp.js 的说明）。 */
+const warpTable = require('../shared/warp.js')
+/* 音量包络 + 导出阶段的母带处理（响度 / 降噪 / 防抖） */
+const audiofx = require('../shared/audio.js')
+/* 倒放：导出是 ffmpeg 的 reverse/areverse，预览是 sourceTimeAt 把局部秒翻过来 ——
+   两侧实现完全不同，所以"局部时间怎么翻"只能有一份（在 shared/reverse.js 里）。 */
+const reverse = require('../shared/reverse.js')
+/* 复合片段：**在 render() 入口处展开**，之后整条链（探测 / 遮罩 / 拼图）都只看见普通片段。
+   放在这里而不是放在调用方：导出面板、MCP 工具、草稿重渲都是调用方，
+   各写一份展开逻辑 = 迟早有一处漏掉，症状是"成片里复合片段整段不见"。 */
+const compound = require('../shared/compound.js')
+/* 多机位：与复合片段一样在 render() 入口展开。**两道的顺序必须是先多机位后复合**：
+   多机位不包住复合片段（建的时候已经排除），反过来则可能（复合里能放多机位展开出的片段）。
+   顺序反了会留下"复合片段里还套着一个多机位"的情况 —— 它没有 url，成片里那段是黑的。 */
+const multicam = require('../shared/multicam.js')
+/* HDR：HLG/PQ 素材必须映射到 SDR 再进调色链，否则超出 100% 的亮部被裁成死白
+   （尺寸/时长/帧率全都正常，只有颜色是错的 —— 见 shared/hdr.js 的说明） */
+const hdr = require('../shared/hdr.js')
+/* 时间区域：只导出区间时在**片段层**把时间线裁到 [start, end) 并归零。
+   与渲染层用的是同一份（shared/region.js）—— 各写一份的话，成片里切的位置
+   会和预览差一点点，而且谁都不报错。 */
+const region = require('../shared/region.js')
+/* 画面层级（自由层级）：叠加层的**叠放顺序**。与预览用的是同一份比较函数
+   （shared/layers.js）—— 各写一份的话，"预览里 A 压住 B、成片里 B 压住 A"，
+   而两边单独看都没错。ffmpeg 的 overlay 链是**后叠的盖住先叠的**，
+   所以这里按"底 → 顶"排好、顺序追加即可。 */
+const layers = require('../shared/layers.js')
+/* 场景检测：ffmpeg 输出的解析与"源秒 → 时间线秒"的换算在渲染层也要用同一份
+   （右键菜单点完立刻算切点，不用为一次换算再跑一趟 IPC）。 */
+const scenesTable = require('../shared/scenes.js')
+/* 预览画质 / 代理：档位表、文件名与缩放滤镜都在 shared/proxy.js（渲染层读同一份档位表）。
+   ⚠️ 代理**只服务预览**：本文件里除了这个函数，没有任何导出路径会碰它。 */
+const proxyTable = require('../shared/proxy.js')
 
 /** 常见安装位置（Windows 上用户手工解压 ffmpeg 基本就放这几个地方） */
 const COMMON_DIRS = [
@@ -163,6 +199,7 @@ function findFfmpeg() {
 
 function resetFfmpegCache() {
   cached = null
+  encoderCache = null
 }
 
 /** 跑一个短命令并收集输出；用于 -version / ffprobe */
@@ -210,16 +247,50 @@ function run(bin, args, { timeout = 15000 } = {}) {
   })
 }
 
+/** 硬件编码器的可用性缓存（一次探测、整个会话复用；ffmpeg 路径变了会重置） */
+let encoderCache = null
+
+/**
+ * 本机 ffmpeg 支持哪些 H.264 编码器。
+ *
+ * ⚠️ 为什么必须真查一遍：`-c:v h264_nvenc` 在一台没有 NVIDIA 卡的机器上不是"回退到
+ *    软编"，而是**整个导出失败**（"Cannot load nvcuda.dll" / "No capable devices found"）。
+ *    界面上摆一个选了就废掉的选项，比不摆更糟。
+ * ⚠️ `-encoders` 的输出里包含"仅解码"的条目？不会 —— 解码器在 `-decoders` 里，
+ *    这里只认 `-encoders` 段落中的 V..... 行。
+ */
+async function probeEncoders(bin) {
+  if (encoderCache) return encoderCache
+  const list = []
+  const result = await run(bin, ['-hide_banner', '-encoders'], { timeout: 15000 })
+  const text = `${result.stdout || ''}\n${result.stderr || ''}`
+  for (const key of ENCODER_KEYS) {
+    /* 行形如 ` V....D h264_nvenc   NVIDIA NVENC H.264 encoder`，
+       直接找"空格 + 名字 + 空白"比解析列宽稳。 */
+    if (new RegExp(`(^|\\s)${key}(\\s|$)`, 'm').test(text)) list.push(key)
+  }
+  encoderCache = list
+  return list
+}
+
 /** 探测可用性 + 版本，供界面显示「本机已就绪 / 未安装」 */
 async function probe() {
   const found = findFfmpeg()
-  if (!found) return { available: false, reason: 'not-found', ffmpeg: '', ffprobe: '', version: '' }
+  if (!found) return { available: false, reason: 'not-found', ffmpeg: '', ffprobe: '', version: '', encoders: ['libx264'] }
   const result = await run(found.ffmpeg, ['-hide_banner', '-version'])
   if (!result.ok) {
-    return { available: false, reason: 'broken', ffmpeg: found.ffmpeg, ffprobe: found.ffprobe, version: '', detail: result.stderr.slice(0, 400) }
+    return { available: false, reason: 'broken', ffmpeg: found.ffmpeg, ffprobe: found.ffprobe, version: '', encoders: ['libx264'], detail: result.stderr.slice(0, 400) }
   }
   const first = result.stdout.split('\n')[0] || ''
-  return { available: true, reason: 'ok', ffmpeg: found.ffmpeg, ffprobe: found.ffprobe, version: first.trim() }
+  /* 编码器清单：导出面板据此只列出**本机真能用**的那几个 */
+  let encoders = ['libx264']
+  try {
+    encoders = await probeEncoders(found.ffmpeg)
+    if (!encoders.includes('libx264')) encoders.unshift('libx264')
+  } catch {
+    /* 探测失败就只给软编 —— 软编永远能用 */
+  }
+  return { available: true, reason: 'ok', ffmpeg: found.ffmpeg, ffprobe: found.ffprobe, version: first.trim(), encoders }
 }
 
 /* ------------------------------ 媒体探测 ------------------------------ */
@@ -233,7 +304,7 @@ async function probeStreams(file) {
   if (!found || !found.ffprobe) return null
   const result = await run(found.ffprobe, [
     '-v', 'error',
-    '-show_entries', 'stream=codec_type',
+    '-show_entries', 'stream=codec_type,color_transfer,color_primaries,color_space,pix_fmt',
     '-show_entries', 'format=duration',
     '-of', 'json',
     file
@@ -243,10 +314,16 @@ async function probeStreams(file) {
     const parsed = JSON.parse(result.stdout)
     const streams = Array.isArray(parsed.streams) ? parsed.streams : []
     const duration = Number(parsed.format && parsed.format.duration)
+    /* 色彩标签挂在该文件的**第一个视频流**上：HDR 判定只认它（见 shared/hdr.js） */
+    const video = streams.find((s) => s.codec_type === 'video') || {}
     return {
       hasVideo: streams.some((s) => s.codec_type === 'video'),
       hasAudio: streams.some((s) => s.codec_type === 'audio'),
-      duration: Number.isFinite(duration) ? duration : 0
+      duration: Number.isFinite(duration) ? duration : 0,
+      transfer: video.color_transfer || '',
+      primaries: video.color_primaries || '',
+      matrix: video.color_space || '',
+      pixFmt: video.pix_fmt || ''
     }
   } catch {
     return null
@@ -265,6 +342,46 @@ function round(value, digits = 3) {
 }
 
 const clampNum = (value, min, max) => Math.min(max, Math.max(min, num(value)))
+
+/** 允许的编码器白名单。渲染层只从这几个里选，未知值一律回落 libx264（不报错，但会在 warnings 里说） */
+const ENCODER_KEYS = ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf']
+
+/**
+ * 编码参数。
+ *
+ * @param {object} options { encoder, bitrateMode:'quality'|'bitrate', bitrate, preset }
+ * @param {number} crf     由画质档推算出来的质量值（16–34）
+ * @returns {string[]} 直接拼进 ffmpeg 的参数片段
+ */
+function encodeArgs(options, crf) {
+  const wanted = String((options && options.encoder) || 'libx264')
+  const encoder = ENCODER_KEYS.includes(wanted) ? wanted : 'libx264'
+  const bitrateMode = options && options.bitrateMode === 'bitrate' ? 'bitrate' : 'quality'
+  const kbps = Math.min(200000, Math.max(200, Math.round(num(options && options.bitrate, 8000))))
+
+  if (bitrateMode === 'bitrate') {
+    /* 准 CBR：目标码率 + maxrate = 目标 + bufsize = 2×目标。
+       只给 -b:v 而不给 maxrate/bufsize 的话，编码器仍会在简单画面上大幅降码率，
+       用户看到的"码率"与设置值差一倍以上。 */
+    const extra = ['-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`]
+    if (encoder === 'libx264') return ['-c:v', encoder, '-preset', 'veryfast', '-pix_fmt', 'yuv420p', ...extra]
+    if (encoder === 'h264_nvenc') return ['-c:v', encoder, '-preset', 'p4', '-rc', 'cbr', '-pix_fmt', 'yuv420p', ...extra]
+    if (encoder === 'h264_qsv') return ['-c:v', encoder, '-pix_fmt', 'nv12', ...extra]
+    return ['-c:v', encoder, '-rc', 'cbr', '-pix_fmt', 'yuv420p', ...extra]
+  }
+
+  if (encoder === 'libx264') {
+    return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p']
+  }
+  if (encoder === 'h264_nvenc') {
+    /* nvenc 的画质档是 -cq（constant quality），必须显式 -rc vbr，否则 -cq 不生效 */
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', String(crf), '-pix_fmt', 'yuv420p']
+  }
+  if (encoder === 'h264_qsv') {
+    return ['-c:v', 'h264_qsv', '-global_quality', String(crf), '-pix_fmt', 'nv12']
+  }
+  return ['-c:v', 'h264_amf', '-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf), '-pix_fmt', 'yuv420p']
+}
 
 /**
  * 片段的位置与旋转（属性面板「画面 · 位置/旋转」）。
@@ -318,7 +435,80 @@ function fadePartFor(clip, dur) {
   return parts.length ? ',' + parts.join(',') : ''
 }
 
-/* ------------------------- 效果（圆角/蒙版/抠像/变形/描边/阴影） ------------------------- */
+/* ------------------------------- 曲线变速（导出侧分段） ------------------------------- */
+
+/**
+ * 曲线变速在 ffmpeg 里只能"切成若干常速段再拼回来"。
+ *
+ * 为什么不能像常速那样一句 `setpts` 解决：`setpts` 能吃时间表达式，但音频侧的
+ * `atempo` 只接受常量速率（它没有"逐帧变速率"的用法）。画面按表达式变速、
+ * 音频按平均速率变速 ⇒ 声音会**越播越对不上画面**，而这种错在静音检查时完全看不见。
+ * 切成段之后，每段一个 setpts + 一个 atempo，两边逐段对齐，误差只剩段内曲线形状的量化。
+ *
+ * 段数由 `speed.curveSegments` 合并到 ≤12 段，且**总面积与总时长仍然精确**
+ * （合并只把同向的多段并成常数速率），所以片段总长不会漂。
+ *
+ * @returns {string|null} 可以当作视频流标签用的 `[cvokN]`；不需要分段时返回 null
+ */
+function curveVideoChain({ filters, idx, tag, clip, offset, dur, pre = '' }) {
+  if (clip && clip.reverse === true) return null
+  const points = speed.readCurve(clip)
+  if (!points) return null
+  const segs = speed.curveSegments(points, dur, 12)
+  if (segs.length < 2) return null
+  const labels = []
+  segs.forEach((seg, k) => {
+    if (!(seg.srcLen > 0.001) || !(seg.dur > 0.001)) return
+    const label = `cvs${tag}_${k}`
+    /* ⚠️ `(PTS-STARTPTS)/speed` 是**一条**表达式：先归零再除。
+       拆成两句 `setpts=PTS-STARTPTS,setpts=PTS/x` 也等价，但多一次滤镜遍历；
+       而写成 `setpts=PTS/x`（忘了减 STARTPTS）会让第二段起的时间戳
+       从上一段的末尾接着走，concat 之后整条时间线越拼越长。 */
+    filters.push(
+      `[${idx}:v]${pre}trim=start=${round(offset + seg.srcStart)}:duration=${round(seg.srcLen)},` +
+        `${speed.setptsExpr(seg.speed, round)}[${label}]`
+    )
+    labels.push(`[${label}]`)
+  })
+  if (labels.length < 2) return null
+  const out = `cvok${tag}`
+  filters.push(`${labels.join('')}concat=n=${labels.length}:v=1:a=0[${out}]`)
+  return `[${out}]`
+}
+
+/**
+ * 曲线变速的音频侧：同样分段，每段 `atrim → asetpts → atempo`（或 asetrate），然后 concat。
+ *
+ * ⚠️ 每段都要带 `aformat`：concat 要求各路采样格式/采样率/声道布局**完全一致**，
+ *    少一路就会以"Input link parameters do not match"失败 ——
+ *    报错里既没有段号也没有时间，很难看出是分段拼出来的。
+ *
+ * @returns {string|null} 可以当作音频流标签用的 `[caokN]`；不需要分段时返回 null
+ */
+function curveAudioChain({ filters, idx, tag, clip, offset, dur, keepPitch }) {
+  if (clip && clip.reverse === true) return null
+  const points = speed.readCurve(clip)
+  if (!points) return null
+  const segs = speed.curveSegments(points, dur, 12)
+  if (segs.length < 2) return null
+  const labels = []
+  segs.forEach((seg, k) => {
+    if (!(seg.srcLen > 0.001) || !(seg.dur > 0.001)) return
+    const label = `cas${tag}_${k}`
+    filters.push(
+      `[${idx}:a]atrim=start=${round(offset + seg.srcStart)}:duration=${round(seg.srcLen)},asetpts=PTS-STARTPTS` +
+        speed.pitchChain(seg.speed, keepPitch, round) +
+        `,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[${label}]`
+    )
+    labels.push(`[${label}]`)
+  })
+  if (labels.length < 2) return null
+  const out = `caok${tag}`
+  filters.push(`${labels.join('')}concat=n=${labels.length}:v=0:a=1[${out}]`)
+  return `[${out}]`
+}
+
+
 
 /**
  * 圆角 / 蒙版遮罩 PNG 的磁盘缓存目录。
@@ -329,9 +519,19 @@ function fadePartFor(clip, dur) {
  */
 const MASK_DIR = () => path.join(os.tmpdir(), 'yjai-masks')
 
+/**
+ * 遮罩 PNG 的**缓存格式版本**。改了这些图的生成方式就把它 +1。
+ *
+ * ⚠️ 缓存落在 `%TEMP%`、跨版本存活。没有版本号时，"表达式改了、代码也重装了，
+ *    但临时目录里那张旧图还在" ⇒ 修复看起来完全没生效（本次调试就被骗过一次：
+ *    虚线的优先级 bug 已改好，成片仍是旧的全亮框）。
+ *    版本进键就再也没有这个问题：新键 = 新文件。
+ */
+const MASK_VERSION = 'v2'
+
 /** 遮罩 PNG 的缓存键 = 尺寸 + 表达式 + 羽化（内容相同即复用） */
 function maskKey(width, height, expr, feather) {
-  return `${width}x${height}|${Math.round(feather)}|${expr}`
+  return `${MASK_VERSION}|mask|${width}x${height}|${Math.round(feather)}|${expr}`
 }
 
 /**
@@ -368,6 +568,119 @@ async function writeMaskPng(bin, key, expr, width, height, feather) {
  * 画中画**不走这里**：它的高度由素材比例决定，构建命令时算不出来，
  * 所以画中画的遮罩在链上直接按运行时尺寸 `geq` 求值（见 effectsStages 的说明）。
  */
+/** 自由变形有效区遮罩的缓存键（尺寸 + 透视参数） */
+const warpMaskKey = (width, height, perspective) => `${MASK_VERSION}|warp|${width}x${height}|${perspective}`
+/** 虚线框图的缓存键（颜色也进键：同一几何不同颜色是两张图） */
+const dashKey = (width, height, expr, color) => `${MASK_VERSION}|dash|${width}x${height}|${color}|${expr}`
+/**
+ * 内阴影距离场的缓存键（尺寸 + 全部像素级参数 + 颜色）。
+ * ⚠️ 颜色必须进键：颜色已经烘进 PNG 了，同一个几何换颜色就是另一张图，
+ *    不换键会拿到上一次的旧颜色（改了色号、成片不变 —— 又是一次静默失效）。
+ */
+const innerShadowKey = (width, height, spec, color) =>
+  `${MASK_VERSION}|inner|${width}x${height}|${spec.spreadPx}|${spec.blurPx}|${spec.dx}|${spec.dy}|${spec.opacity}|${color}`
+
+/** 统一的 PNG 落盘路径（键 → 文件名，同一份键复用同一张图） */
+function pngPathOf(key) {
+  const dir = MASK_DIR()
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch {
+    return ''
+  }
+  return path.join(dir, `${Buffer.from(key).toString('base64url').slice(0, 48)}.png`)
+}
+
+/**
+ * 生成「自由变形的有效区遮罩」PNG：白底 + 几像素黑边 → **同一个 perspective** → 灰度图。
+ *
+ * ⚠️ 为什么不是纯白：`perspective` 对目标框外的像素用**边缘 clamp**（把边缘那一列
+ *    拉伸出去），纯白图变换后连框外也是白 —— 补出来的 alpha 还是 255，等于没补。
+ *    给一圈黑边，clamp 取到的就是黑，框外才是 0。
+ * ⚠️ 这张图与画面**必须用同一个 perspective 串**（含同一组像素坐标），
+ *    否则遮罩与画面对不齐，边缘会露出一条细缝或者啃掉一圈画面。
+ */
+async function writeWarpMaskPng(bin, key, perspective, width, height) {
+  const file = pngPathOf(key)
+  if (!file) return ''
+  if (fs.existsSync(file)) return file
+  const border = warpTable.WARP_MASK_BORDER
+  const vf = `drawbox=x=0:y=0:w=${width}:h=${height}:c=black:t=${border},${perspective},format=gray`
+  const result = await run(
+    bin,
+    ['-hide_banner', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=c=white:s=${width}x${height}`,
+      '-vf', vf, '-frames:v', '1', file],
+    { timeout: 30000 }
+  )
+  return result.ok && fs.existsSync(file) ? file : ''
+}
+
+/**
+ * 生成「虚线框」PNG（RGBA，颜色已染好）。
+ *
+ * geq 直接写 `a=` 通道：一张图就同时带几何与颜色，链上只剩一次 `overlay`。
+ * 先灰度再在链上染色是行不通的 —— 那样每次导出都要多 split 一次，
+ * 而这张图本来就是与画面内容无关的常量。
+ */
+async function writeDashPng(bin, key, expr, color, width, height) {
+  const file = pngPathOf(key)
+  if (!file) return ''
+  if (fs.existsSync(file)) return file
+  const c = effects.readHexColor(color, '#ffffff')
+  const vf = `format=rgba,geq=r=${c.r}:g=${c.g}:b=${c.b}:a='${expr}'`
+  const result = await run(
+    bin,
+    ['-hide_banner', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=c=black:s=${width}x${height}`,
+      '-vf', vf, '-frames:v', '1', file],
+    { timeout: 30000 }
+  )
+  return result.ok && fs.existsSync(file) ? file : ''
+}
+
+/**
+ * 生成「内阴影距离场」PNG（**RGBA：颜色与 alpha 都已烘好**）。
+ *
+ * 为什么是"距离场"而不是从画面的 alpha 推：见 effectsStages 里内阴影那一段的说明
+ * —— 形态学在"画面铺满画布"时完全失效，而铺满恰恰是最常见的情况。
+ *
+ * 为什么把颜色烘进 PNG（而不是链上 `lutrgb` + `alphamerge`）：
+ * 实测本机这套 ffmpeg 里 `alphamerge` 接在 `format=rgba,lutrgb` 之后**不出效果**
+ * （补出来的 alpha 恒 0，叠上去整层透明）—— 而虚线框那条"geq 直接写 a 通道 +
+ * overlay"的路是验证可用的。同一件事只用一种写法，少一个会静默失效的环节。
+ */
+async function writeInnerShadowPng(bin, key, spec, color) {
+  const file = pngPathOf(key)
+  if (!file) return ''
+  if (fs.existsSync(file)) return file
+  const expr = effects.innerShadowExpr(spec)
+  if (!expr) return ''
+  const c = effects.readHexColor(color, '#000000')
+  const result = await run(
+    bin,
+    ['-hide_banner', '-y', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', `color=c=black:s=${spec.width}x${spec.height}`,
+      '-vf', `format=rgba,geq=r=${c.r}:g=${c.g}:b=${c.b}:a='${expr}'`, '-frames:v', '1', file],
+    { timeout: 30000 }
+  )
+  return result.ok && fs.existsSync(file) ? file : ''
+}
+
+/**
+ * 一次导出开始前，把所有**主画面**要用的 PNG 先备好（异步）。
+ *
+ * 三类图共用一张表（键带前缀区分）：
+ *   · `maskKey`     圆角 / 蒙版的遮罩；
+ *   · `warpMaskKey` 自由变形的有效区（白底黑边走同一个 perspective）；
+ *   · `dashKey`     虚线框（几何 + 颜色都已烘进图里）。
+ *
+ * ⚠️ 必须在 buildPlan **之前**做：buildPlan 是同步的，而生成图要等 ffmpeg 跑完。
+ *    把它塞进 buildPlan 只能靠 spawnSync —— 本机那条路走不通（管道恒 EBUSY）。
+ *
+ * 画中画**不走这里**：它的高度由素材比例决定，构建命令时算不出来。
+ * 所以画中画的圆角/蒙版在链上按运行时尺寸 `geq` 求值；
+ * 而画中画的**自由变形与虚线框**这一轮不做（右栏也不给画中画开这两个入口）——
+ * 宁可"没有这个控件"，也不要"控件在、成片里没有"。
+ */
 async function prepareEffectMasks(bin, clips, options) {
   const map = new Map()
   if (!bin) return map
@@ -379,12 +692,44 @@ async function prepareEffectMasks(bin, clips, options) {
     if (clip.track === 'overlay') continue
     const fx = effects.readEffects(clip.effects)
     const expr = effects.maskExprFor(fx)
-    if (!expr) continue
-    const key = maskKey(width, height, expr, fx.mask.feather)
-    if (seen.has(key)) continue
-    seen.add(key)
-    const file = await writeMaskPng(bin, key, expr, width, height, fx.mask.feather)
-    if (file) map.set(key, file)
+    if (expr) {
+      const key = maskKey(width, height, expr, fx.mask.feather)
+      if (!seen.has(key)) {
+        seen.add(key)
+        const file = await writeMaskPng(bin, key, expr, width, height, fx.mask.feather)
+        if (file) map.set(key, file)
+      }
+    }
+    if (effects.hasWarp(fx)) {
+      const perspective = warpTable.perspectiveFilter(fx.warp, width, height, round)
+      if (perspective) {
+        const key = warpMaskKey(width, height, perspective)
+        if (!seen.has(key)) {
+          seen.add(key)
+          const file = await writeWarpMaskPng(bin, key, perspective, width, height)
+          if (file) map.set(key, file)
+        }
+      }
+    }
+    const dashExpr = effects.dashedBoxExpr(fx, width, height, round)
+    if (dashExpr) {
+      const key = dashKey(width, height, dashExpr, fx.stroke.color)
+      if (!seen.has(key)) {
+        seen.add(key)
+        const file = await writeDashPng(bin, key, dashExpr, fx.stroke.color, width, height)
+        if (file) map.set(key, file)
+      }
+    }
+    const innerSpec = effects.innerShadowSpec(fx, width, height)
+    if (innerSpec) {
+      const innerColor = fx.shadow.color
+      const key = innerShadowKey(width, height, innerSpec, innerColor)
+      if (!seen.has(key)) {
+        seen.add(key)
+        const file = await writeInnerShadowPng(bin, key, innerSpec, innerColor)
+        if (file) map.set(key, file)
+      }
+    }
   }
   return map
 }
@@ -393,15 +738,21 @@ async function prepareEffectMasks(bin, clips, options) {
  * 把「效果」落到一条**已经成帧**的流上。
  *
  * 顺序（与预览侧 Stage.jsx 的 effectFilterParts 同一口径）：
- *   抠像 → 圆角/蒙版 → 描边 → 阴影
+ *   自由变形 → 抠像 → 圆角/蒙版 → 描边 → 内阴影 → 外阴影 → 虚线框
  *
+ * ⚠️ 自由变形必须**最先**：它改变的是"画面落在哪儿"，后面所有按像素算的效果
+ *    （描边宽度、蒙版几何、阴影偏移）都应该以变形后的画面为准。
+ *    排在后面会得到"描边跟着原矩形走、画面已经变成梯形"。
  * ⚠️ 圆角/蒙版与描边/阴影的顺序不能反：描边是从**最终 alpha** 推出来的，
  *    先描边再裁形状的话，被裁掉的那部分描边就"描了个寂寞"。
  * ⚠️ 抠像与蒙版都是 alpha 的乘法关系，先后不影响结果。
+ * ⚠️ 内阴影必须在描边**之后**：它要从"含描边的最终 alpha"往里收，
+ *    否则描边内侧会多出一圈内阴影的暗边。
  *
  * @param {string} label    输入流标签（不含方括号）
  * @param {string} maskFile 主画面的遮罩 PNG 路径（画中画传空串 → 走运行时 geq）
- * @param {function} addMaskInput 把遮罩图加成一个 ffmpeg 输入、返回它的序号
+ * @param {function} addMaskInput 把一张 PNG 加成一个 ffmpeg 输入、返回它的序号
+ * @param {Map} maskMap     预生成的 PNG 表（键见 maskKey / warpKey / dashKey）
  * @param {string} pixFmt   这一段的统一像素格式（末尾要把链路归一回去）
  * @returns {{lines: string[], label: string}} 追加的滤镜行 + 新标签
  */
@@ -421,6 +772,31 @@ function effectsStages({
   if (effects.isNeutralEffects(fx)) return { lines, label }
   let cur = label
   const next = (suffix) => `${suffix}${tag}`
+
+  /* --- 自由变形（四角透视） --- */
+  /**
+   * ⚠️ 这一段是"必须两张图"的活：
+   *    `perspective` 变换后**alpha 全丢**（源四角内缩出来的框外是不透明黑），
+   *    所以还要一张「白底黑边」的图走同一个 perspective 得到有效区遮罩，
+   *    再用 `alphamerge` 把 alpha 灌回去。少这一步，成片里变形后的画面外
+   *    会是一整片黑，把下层画面/背景整个盖住 —— 而预览里是透的。
+   */
+  const warpFilter = effects.hasWarp(fx)
+    ? warpTable.perspectiveFilter(fx.warp, width || 1920, height || 1080, round)
+    : ''
+  if (warpFilter) {
+    const wKey = warpMaskKey(width || 1920, height || 1080, warpFilter)
+    const wFile = maskMap && maskMap.get(wKey)
+    if (wFile && addMaskInput) {
+      const wIdx = addMaskInput(wFile)
+      lines.push(`[${cur}]${warpFilter},format=rgba[${next('wpp')}]`)
+      lines.push(`[${wIdx}:v]format=gray[${next('wpm')}]`)
+      lines.push(`[${next('wpp')}][${next('wpm')}]alphamerge[${next('wpa')}]`)
+      cur = next('wpa')
+    }
+    /* 图没备好（生成失败 / 画中画）时**不做变形**：宁可退回原矩形，
+       也不要给出一张框外全黑的画面 —— 前者是"没生效"，后者是"坏了"。 */
+  }
 
   /* --- 抠像：在 RGB 空间判定（与预览的 feColorMatrix 同一空间） --- */
   const key = effects.colorkeyFor(fx)
@@ -449,21 +825,45 @@ function effectsStages({
   }
 
   /* --- 描边：把 alpha 膨胀 N 像素、减去原 alpha 得到一圈环，再染色叠回去 --- */
-  const dilations = effects.strokeDilations(fx, width)
-  if (dilations > 0) {
-    const dil = 'dilation,'.repeat(dilations).slice(0, -1)
-    lines.push(`[${cur}]split=2[${next('csb')}][${next('css')}]`)
-    lines.push(`[${next('css')}]alphaextract,format=gray,split=2[${next('csd')}][${next('csa')}]`)
-    lines.push(`[${next('csd')}]${dil}[${next('cse')}]`)
-    lines.push(`[${next('cse')}][${next('csa')}]blend=all_mode=subtract[${next('csr')}]`)
-    lines.push(`[${next('csr')}]format=rgba,split=2[${next('csc')}][${next('csm')}]`)
-    lines.push(`[${next('csc')}]lutrgb=${effects.strokeLut(fx, round)}[${next('csq')}]`)
-    lines.push(`[${next('csq')}][${next('csm')}]alphamerge[${next('css2')}]`)
-    lines.push(`[${next('css2')}][${next('csb')}]overlay=0:0[${next('csf')}]`)
-    cur = next('csf')
+  /**
+   * 每一层环各走一遍「膨胀 → 减原 alpha → 染色」，最后按底→顶顺序叠回画面。
+   *
+   * ⚠️ **所有环都必须从同一份原始 alpha 推出来**，不能"环 2 接在环 1 的结果上"。
+   *    实测过的错误版本：环 2 的输入是 `[csf0]`（已经含环 1 的画面），
+   *    于是环 2 的膨胀是从"环 1 的外沿"往外长的 —— 双线描边会在外侧多出一道
+   *    颜色不对的边（本该在内侧），而 ffmpeg 一行错都不报。正确做法是先
+   *    `alphaextract` 一次、`split` 成 N 份，各层独立膨胀：环 2 天然是环 1 的子集，
+   *    叠上去正好是内侧那道细线。
+   * ⚠️ 中间标签必须带层号：两层用同一套标签的话，后面的 `overlay` 会连到
+   *    前一层残留的流上 —— ffmpeg 通常直接报"找不到标签"，但也可能静默接错。
+   */
+  const strokeRings = effects.strokeLayers(fx, width)
+  if (strokeRings.length) {
+    const alphaTags = strokeRings.map((_, i) => next(`csa${i}`))
+    lines.push(
+      `[${cur}]alphaextract,format=gray,split=${strokeRings.length}${alphaTags.map((t) => `[${t}]`).join('')}`
+    )
+    strokeRings.forEach((ring, index) => {
+      const t = String(index)
+      const dil = 'dilation,'.repeat(ring.dilations).slice(0, -1)
+      const blurPart = ring.blur > 0 ? `,gblur=sigma=${round(ring.blur, 3)}` : ''
+      lines.push(`[${alphaTags[index]}]split=2[${next(`csd${t}`)}][${next(`cso${t}`)}]`)
+      lines.push(`[${next(`csd${t}`)}]${dil}${blurPart}[${next(`cse${t}`)}]`)
+      lines.push(
+        `[${next(`cse${t}`)}][${next(`cso${t}`)}]blend=all_mode=subtract[${next(`csx${t}`)}]`
+      )
+      lines.push(`[${next(`csx${t}`)}]format=rgba,split=2[${next(`csc${t}`)}][${next(`csm${t}`)}]`)
+      lines.push(`[${next(`csc${t}`)}]lutrgb=${effects.strokeLut(fx, round, ring.color)}[${next(`csq${t}`)}]`)
+      lines.push(`[${next(`csq${t}`)}][${next(`csm${t}`)}]alphamerge[${next(`csr${t}`)}]`)
+    })
+    strokeRings.forEach((_, index) => {
+      const t = String(index)
+      lines.push(`[${cur}][${next(`csr${t}`)}]overlay=0:0[${next(`csf${t}`)}]`)
+      cur = next(`csf${t}`)
+    })
   }
 
-  /* --- 阴影：黑色剪影 → 高斯模糊 → 按偏移垫出去 → 压在原画面下面 --- */
+  /* --- 外阴影：黑色剪影 → 高斯模糊 → 按偏移垫出去 → 压在原画面下面 --- */
   const sigma = effects.shadowSigma(fx, width)
   if (sigma > 0) {
     const off = effects.shadowOffset(fx, width)
@@ -478,6 +878,57 @@ function effectsStages({
     )
     lines.push(`[${next('shc')}][${next('shb')}]overlay=0:0:format=auto[${next('shf')}]`)
     cur = next('shf')
+  }
+
+  /* --- 内阴影：沿画框四边往里散开的暗边，压在画面上面 --- */
+  /**
+   * 为什么走「预生成距离场 PNG」而不是 alpha 形态学：
+   *   试过 `erosion` 与「取反 → dilation → 取反」两条路，都在**铺满画布**的素材上
+   *   失效 —— 形态学滤镜在画面边界按"沿用边缘像素"处理，alpha 全 255 时
+   *   腐蚀不出任何东西（实测 20 级腐蚀后仍全 255，内环整片 0）。
+   *   而"画面铺满画布"恰恰是最常见的情况，所以那条路只能放弃。
+   *
+   * 现在这条路：一张按尺寸/参数预生成的 **RGBA** 图（`geq` 距离场 + 落差曲线 +
+   * 已烘好的颜色，见 writeInnerShadowPng），链上只需一次 `overlay`。
+   * 完全确定、可缓存、可单测，而且与预览的 `box-shadow: inset` 是同一个几何。
+   *
+   * ⚠️ 链上**不做** `gblur`：落差曲线已经算进 PNG 了。实测再叠一层 σ≈13 的模糊，
+   *    会把 20px 的带子平均到几乎看不见（角上只剩 3/255）—— 这正是上一版
+   *    "内阴影像是没生效"的真正原因。
+   * ⚠️ 链上**也不做** `lutrgb` 染色 + `alphamerge`：颜色与 alpha 都在 PNG 里了。
+   *    实测本机这套 ffmpeg 上 `alphamerge` 接在 `format=rgba,lutrgb` 之后不出效果
+   *    （补出来的 alpha 恒 0），多这一步只会多一个静默失效点。
+   *
+   * ⚠️ 与预览一致的边界：内阴影沿**画框矩形**，不跟随蒙版形状，也不跟随圆角
+   *    （预览那一层是直角的）。这条如实写在界面上，不假装"沿轮廓"。
+   */
+  if (effects.hasInnerShadow(fx)) {
+    const s = effects.innerShadowSpec(fx, width, height || 1080)
+    if (s) {
+      const iKey = innerShadowKey(s.width, s.height, s, fx.shadow.color)
+      const iFile = maskMap && maskMap.get(iKey)
+      if (iFile && addMaskInput) {
+        const iIdx = addMaskInput(iFile)
+        /* ⚠️ 顺序：**画面在下、阴影在上**。写成 `[阴影][画面]overlay` 时，
+           画面（alpha 全 255）会把阴影整层盖掉 —— 命令不报错、成片里一点变化都没有。
+           这是"效果接对了但看不见"最典型的一种。 */
+        lines.push(`[${iIdx}:v]format=rgba[${next('ism')}]`)
+        lines.push(`[${cur}][${next('ism')}]overlay=0:0[${next('isf')}]`)
+        cur = next('isf')
+      }
+    }
+  }
+
+  /* --- 虚线框：一张按画框尺寸预生成的虚线 PNG，直接叠上去 --- */
+  const dashExpr = effects.dashedBoxExpr(fx, width, height || 1080, round)
+  if (dashExpr) {
+    const dKey = dashKey(width || 1920, height || 1080, dashExpr, fx.stroke.color)
+    const dFile = maskMap && maskMap.get(dKey)
+    if (dFile && addMaskInput) {
+      const dIdx = addMaskInput(dFile)
+      lines.push(`[${cur}][${dIdx}:v]overlay=0:0[${next('dsh')}]`)
+      cur = next('dsh')
+    }
   }
 
   /**
@@ -599,10 +1050,15 @@ function buildPlan({
    * 叠加轨（画中画）：不进主链，而是整段 overlay 在主画面之上。
    * 它**参与**成片时长：画中画比主画面长时，成片要跟着延长，
    * 否则"画中画的后半截被硬切掉"，而界面上一点提示都没有。
+   *
+   * ⚠️ 排序按 `shared/layers.js`（先 z 再起点再序号），不是纯按起点：
+   *    两段画中画完全重叠时，唯一能决定谁压住谁的就是 z。按起点排会让
+   *    "上移一层"在成片里完全没效果 —— 而预览里动了（预览走同一个比较函数），
+   *    于是出现"预览与成片互相矛盾"。
    */
   const overlayClips = list
     .filter((clip) => clip.track === 'overlay')
-    .sort((a, b) => num(a.start) - num(b.start))
+    .sort(layers.compareLayers)
   const audioClips = list
     .filter((clip) => clip.track === 'audio')
     .sort((a, b) => num(a.start) - num(b.start))
@@ -622,11 +1078,28 @@ function buildPlan({
    *    alpha 通道里写值。少了这几类的判定 ⇒ pixFmt 落回 `yuv420p`、alpha 被整体丢掉，
    *    表现是"预览里抠了像、成片里绿底还在"——而 ffmpeg 一行错都不报。
    */
+  /**
+   * 片段级不透明度：只要有一段是半透明的，整条链就必须带 alpha，否则透不出背景。
+   *
+   * ⚠️ 会产生 alpha 的**不只是不透明度**：抠像 / 圆角 / 蒙版 / 描边 / 阴影 / 自由变形
+   *    都会往 alpha 通道里写值。少了这几类的判定 ⇒ pixFmt 落回 `yuv420p`、alpha 被整体丢掉，
+   *    表现是"预览里抠了像、成片里绿底还在"，"预览里变形后四周是透的、成片里是一圈拉长的边缘像素"
+   *    —— 而 ffmpeg 一行错都不报。
+   * ⚠️ 自由变形尤其容易漏：它的 alpha 由 `alphamerge` **补出来**，如果链路是
+   *    `yuv420p`，`perspective` 框外那些"边缘 clamp"像素会被原样留下、还变成不透明，
+   *    看上去就像"变形没生效，只是画面被拉歪了"。
+   */
   const anyTransparent = [...videoClips, ...overlayClips].some((clip) => {
     if (num(clip.opacity, 100) < 99.5) return true
     const fx = effects.readEffects(clip.effects)
     if (!fx) return false
-    return effects.hasClip(fx) || Boolean(fx.key.on) || Boolean(fx.stroke.on) || Boolean(fx.shadow.on)
+    return (
+      effects.hasClip(fx) ||
+      Boolean(fx.key.on) ||
+      Boolean(fx.stroke.on) ||
+      Boolean(fx.shadow.on) ||
+      effects.hasWarp(fx)
+    )
   })
 
   const videoEnd = videoClips.reduce((max, clip) => Math.max(max, num(clip.start) + num(clip.duration)), 0)
@@ -703,6 +1176,10 @@ function buildPlan({
       args.push('-i', source.value)
     }
     const idx = inputIndex++
+    /* tag 提前取：曲线分段要在**成帧之前**先拼出一条流（见 curveVideoChain），
+       那时就必须知道"这是时间线上的第几段"来给滤镜起名字。
+       这里取是安全的：Gap 的 push 在上面，之后到 push 之前不会再动 segments。 */
+    const tag = segments.length
     /**
      * 素材按**裁切**填满画布（increase + crop），与预览的 `object-fit: cover` 同一口径。
      *
@@ -715,7 +1192,10 @@ function buildPlan({
      *    pad 因此**不能删**：它不是在补比例不匹配的边，而是在补缩小后的边。
      */
     const scale = `scale=${width}:${height}:force_original_aspect_ratio=increase`
-    const crop = `crop=${width}:${height}`
+    /* ⚠️ 这里原名就叫 `crop`，与本文件顶部 require 进来的 shared/crop.js 撞名 ——
+       一旦撞上，下面 `crop.ffmpegCropFor` 就会变成"调用一个字符串"，直接 TypeError。
+       改名成 cropBase，语义也更准确：它只是"铺满画布"的那一刀。 */
+    const cropBase = `crop=${width}:${height}`
     const pad = `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=${padColor}`
     /**
      * 倍速：先按**源跨度**截取（`duration × speed` 秒的源素材），再用 setpts 压回
@@ -727,9 +1207,35 @@ function buildPlan({
      *    既有的导出证据不会因为这些改动失效。
      */
     const rate = speed.clipSpeed(clip)
-    const seek = isImage
+    /* 「变速保留音高」—— 关掉就是磁带快放/慢放的效果（见 shared/speed.js 的 pitchChain）。
+       缺省视为开：绝大多数人调倍速是为了"看快一点"，不是要变声。 */
+    const keepPitch = clip.keepPitch !== false
+    /* 探测结果（有没有音轨 / 色彩标签）在这里就要用到：HDR 判定决定画面链的**第一段**，
+       而它在曲线变速分支里就要拼进去了，所以查询必须提到 curveVideoChain 之前。 */
+    const known = info[clip.id]
+    /**
+     * HDR → SDR 的色调映射。放在**这条流的最前面**（trim 之前）：
+     *   · 放在调色/特效之后 ⇒ 调色是按 HDR 的超标亮度算的，映射完颜色全偏；
+     *   · 放在 trim 之前与之后在结果上等价（zscale 逐帧、无状态），但提前做能保证
+     *     后面每个分支（常速 / 曲线分段）拿到的都是同一份 SDR 流。
+     * 非 HDR 输入返回空串 ⇒ 本段滤镜串与改动前**逐字相同**，老工程的成片不受影响。
+     */
+    const hdrPre = isImage ? '' : (() => {
+      const chain = hdr.tonemapChain(known)
+      return chain ? `${chain},` : ''
+    })()
+    /**
+     * 曲线变速：把这一段换成"分段常速 + concat"，返回一个新的流标签。
+     * 拿不到分段（没有曲线 / 开了倒放 / 段数不足两段）时返回 null，
+     * 下面照旧走单条常速路径 —— 两条路径的**总时长与源消耗完全相同**，
+     * 所以切换曲线与否不会让片段在时间线上变长变短。
+     */
+    const curveRef = isImage
+      ? null
+      : curveVideoChain({ filters, idx, tag: `v${tag}`, clip, offset, dur, pre: hdrPre })
+    const seek = isImage || curveRef
       ? ''
-      : `trim=start=${round(offset)}:duration=${round(dur * rate)},${speed.setptsExpr(rate, round)},`
+      : `trim=start=${round(offset)}:duration=${round(dur * rate)},${speed.setptsExpr(rate, round)}${reverse.videoReversePart(clip)},`
     // 调色滤镜夹在 pad 与归一化之间：先成帧、再调色、最后统一时基。
     // 放在 trim 之前会连没被用到的帧一起算，白耗时间。
     const grade = looks.ffmpegFilterFor(clip.filter, clip.filterIntensity ?? 1)
@@ -776,9 +1282,39 @@ function buildPlan({
     const coverPart = cover > 1 ? `,scale=iw*${cover}:ih*${cover},crop=${width}:${height}` : ''
     const adjustStr = adjust.ffmpegFilterFor(clip.adjust, clip.beauty, round, width)
     const adjustPart = adjustStr ? `,${adjustStr}` : ''
-    const tag = segments.length
+    /**
+     * 自由裁剪框：框外裁掉、框内铺满。
+     * 排在「铺满画布」之后、缩放/位置之前 —— 语义就是"先成帧，再在帧里框一块，
+     * 再放大回原尺寸"。换算全在 shared/crop.js，与预览的 transform 同一份。
+     */
+    const cropStr = crop.ffmpegCropFor(clip.crop, width, height, round)
+    const cropPart = cropStr ? `,${cropStr}` : ''
+    /**
+     * 视频降噪 / 防抖（**导出阶段**，界面上标了「导出时应用」）。
+     * 放在几何变换之前：先裁再降噪会把裁切边界的噪点抹成一条亮边；
+     * 防抖更要先做，否则后面的 crop/pad 会把抖动的位移一起算进构图。
+     */
+    const denoiseStr = audiofx.videoDenoiseFilter(clip.denoise, round)
+    const denoisePart = denoiseStr ? `,${denoiseStr}` : ''
+    const stabilizeStr = audiofx.stabilizeFilter(clip.stabilize, round)
+    const stabilizePart = stabilizeStr ? `,${stabilizeStr}` : ''
+    /**
+     * 镜像与斜切。
+     *
+     * ⚠️ 斜切原来**只活在预览里**：shared/effects.js 写了 shearFor，Stage.jsx 也真的
+     *    把 `skew()` 挂到了 transform 上，但 buildPlan 从来没调用过它 ——
+     *    于是"面板上斜了、预览里斜了、成片里是正的"。这类缺陷不报错、不崩，
+     *    只有把两段视频摆在一起比才看得见，正是本项目最怕的那一类。
+     *    镜像同理，加它的时候就一起接上，不留"预览有、成片没有"的窗口期。
+     */
+    const fxObj = effects.readEffects(clip.effects)
+    const shearStr = effects.shearFor(fxObj, round, 'black@0')
+    const mirrorStr = effects.mirrorFilters(fxObj)
+    /* 顺序与预览的 transform 列表逐字对应（CSS 从右往左作用）：
+       裁剪 → 镜像 → 斜切 → 缩放/位置/旋转。 */
+    const shapePart = [mirrorStr, shearStr].filter(Boolean).map((item) => `,${item}`).join('')
     filters.push(
-      `[${idx}:v]${seek}${scale},${crop}${zoomPart}${posePart},${pad}${coverPart}${adjustPart}${gradePart}${fxPart},setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[svb${tag}]`
+      `${curveRef || `[${idx}:v]`}${curveRef ? '' : hdrPre}${seek}${scale},${cropBase}${stabilizePart}${denoisePart}${cropPart}${shapePart}${zoomPart}${posePart},${pad}${coverPart}${adjustPart}${gradePart}${fxPart},setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[svb${tag}]`
     )
     /**
      * 效果链（抠像 → 圆角/蒙版 → 描边 → 阴影）接在"已经成帧"的 `[svb${tag}]` 之后。
@@ -799,19 +1335,56 @@ function buildPlan({
     eff.lines.forEach((line) => filters.push(line))
     const svRef = `[${eff.label}]`
 
-    const known = info[clip.id]
     const hasAudio = isImage ? false : known ? Boolean(known.hasAudio) : assumeVideoAudio
     /** 片段级音量（属性面板那个滑块，100 = 原音量）。静音片段走不到这里，见下面 */
     const gain = Math.min(2, Math.max(0, num(clip.gain, 100) / 100))
-    const gainPart = Math.abs(gain - 1) > 0.001 ? `,volume=${round(gain, 4)}` : ''
+    /**
+     * 音量包络（关键帧）：有包络时**优先于**静态音量，且把静态音量乘进每个采样点。
+     * ⚠️ 表达式里的 `t` 是滤镜链当前时间，前面已经 asetpts=PTS-STARTPTS 把片段
+     *    起点归零，所以包络的时间轴（片段内秒数）与它天然对齐。
+     */
+    const volPoints = audiofx
+      .readVolumeKf(clip.volumeKf)
+      .map((point) => ({ t: point.t, v: point.v * gain }))
+    const volExpr = audiofx.hasVolumeKf(volPoints) ? audiofx.volumeExpr(volPoints) : ''
+    const gainPart = volExpr
+      ? `,volume='${volExpr}'`
+      : Math.abs(gain - 1) > 0.001
+        ? `,volume=${round(gain, 4)}`
+        : ''
+    /** 音频降噪（导出阶段）—— 逐片段挂，作用在**这一段的原声**上 */
+    const adn = audiofx.audioDenoiseFilter(clip.audioDenoise, round)
+    const adnPart = adn ? `,${adn}` : ''
+    /** 立体声平衡（导出阶段）—— 只改左右声道增益，不混单声道 */
+    const panPart = (() => {
+      const pan = audiofx.panFilter(clip.pan, round)
+      return pan ? `,${pan}` : ''
+    })()
     if (hasAudio) {
+      /* 变调（半音）：作用在**整段**上、排在变速之后。
+         放在分段之前的话每段都会各自变一次调，听起来像"一格一格地抖"。 */
+      const pitchPart = speed.semitoneChain(clip.pitch, round)
+      const aCurve = curveAudioChain({ filters, idx, tag: `a${tag}`, clip, offset, dur, keepPitch })
+      /* 尾段（降噪 / 平衡 / 音量 / 淡入淡出）两条路共用，都以逗号开头 ——
+         接在曲线那条后面时要**去掉第一个逗号**：concat 的输出标签后面紧跟的是
+         第一个滤镜名，写成 `[caok1],asetrate=…` 会被 ffmpeg 当成语法错。 */
+      const aTail = pitchPart + adnPart + panPart + gainPart + fadePartFor(clip, dur)
+      /* ⚠️ 尾段可能**整段为空**（没变调、没降噪、没平衡、音量 100、没淡入淡出）——
+         那时 `[caok1][sa1]` 里夹着零个滤镜，ffmpeg 报 "No such filter: ''"。
+         补一个 `anull` 兜底：它什么都不做，但让这条链始终是"输入 → 至少一个滤镜 → 输出"。 */
+      const aTailSafe = aTail || ',anull'
       filters.push(
-        `[${idx}:a]atrim=start=${round(offset)}:duration=${round(dur * rate)},asetpts=PTS-STARTPTS` +
-          /* 音频变速：atempo 单级只吃 0.5–2.0，超出由 atempoChain 拆成多级相乘 */
-          speed.atempoChain(rate, round) +
-          ',aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo' +
-          gainPart +
-          fadePartFor(clip, dur) +
+        (aCurve
+          ? aCurve + aTailSafe.replace(/^,/, '')
+          : `[${idx}:a]atrim=start=${round(offset)}:duration=${round(dur * rate)},asetpts=PTS-STARTPTS` +
+            /* 倒放：整段音轨反着吐。必须紧跟 asetpts（areverse 要求干净时间戳），
+               且要排在 atempo 之前 —— 反的是"内容"，变的是"速率"，顺序换了就只反了一半 */
+            reverse.audioReversePart(clip) +
+            /* 音频变速：atempo 单级只吃 0.5–2.0，超出由 atempoChain 拆成多级相乘；
+               关掉「保留音高」时走 asetrate（见 pitchChain） */
+            speed.pitchChain(rate, keepPitch, round) +
+            ',aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo' +
+            aTail) +
           '[sa' + tag + ']'
       )
       segments.push({ v: svRef, a: `[sa${tag}]`, len: dur, transitionOut: seg.transitionOut })
@@ -947,11 +1520,14 @@ function buildPlan({
     const alphaPart = opacity < 0.995 ? `,colorchannelmixer=aa=${round(opacity, 4)}` : ''
     /* 画中画也吃倍速（与主链同一口径，否则"画中画快、主画面慢"） */
     const pipRate = speed.clipSpeed(clip)
-    const seek = isImage
+    /* 曲线变速同样要进画中画：只给主画面接曲线的话，画中画里那层还是匀速的，
+       两个画面一起放时快慢对不上 —— 而这种"不同步"在单独看任何一层时都看不出来。 */
+    const pipCurve = isImage ? null : curveVideoChain({ filters, idx, tag: `pv${i}`, clip, offset, dur })
+    const seek = isImage || pipCurve
       ? ''
-      : `trim=start=${round(offset)}:duration=${round(dur * pipRate)},${speed.setptsExpr(pipRate, round)},`
+      : `trim=start=${round(offset)}:duration=${round(dur * pipRate)},${speed.setptsExpr(pipRate, round)}${reverse.videoReversePart(clip)},`
 
-    filters.push(`[${idx}:v]${seek}scale=${w}:-2,setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[pipin${i}]`)
+    filters.push(`${pipCurve || `[${idx}:v]`}${seek}scale=${w}:-2,setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[pipin${i}]`)
     /**
      * 画中画同样吃效果链（圆角/蒙版/抠像/描边/阴影）。
      * ⚠️ 遮罩走**运行时 geq**（不预生成 PNG）：画中画的高度由素材比例决定，
@@ -1080,15 +1656,42 @@ function buildPlan({
     const gain = Math.min(2, Math.max(0, num(clip.gain, 100) / 100))
     /* 音频轨 / 画中画原声同样吃倍速（与画面同一口径） */
     const bedRate = speed.clipSpeed(clip)
+    /* 音量包络与主链同一份换算（audiofx.volumeAt 是预览侧用的同一个插值） */
+    const bedVol = audiofx
+      .readVolumeKf(clip.volumeKf)
+      .map((point) => ({ t: point.t, v: point.v * gain }))
+    const bedExpr = audiofx.hasVolumeKf(bedVol) ? audiofx.volumeExpr(bedVol) : ''
+    const bedGain = bedExpr ? `volume='${bedExpr}'` : `volume=${round(gain, 4)}`
+    const bedDenoise = audiofx.audioDenoiseFilter(clip.audioDenoise, round)
+    const bedPan = audiofx.panFilter(clip.pan, round)
+    /* 音频轨上的片段同样可能有曲线变速（配乐踩点就落在这条轨上）。
+       有曲线时走分段拼接，否则走原来那条单段链 —— 两条路的尾段完全一致。 */
+    const bedCurve = curveAudioChain({
+      filters,
+      idx,
+      tag: `ba${i}`,
+      clip,
+      offset,
+      dur,
+      keepPitch: clip.keepPitch !== false
+    })
+    const bedTail =
+      speed.semitoneChain(clip.pitch, round) +
+      (bedDenoise ? `,${bedDenoise}` : '') +
+      (bedPan ? `,${bedPan}` : '') +
+      `,${bedGain}` +
+      /* 音频轨（BGM/配音）与画中画原声同样吃淡入/淡出：面板上那条滑杆对
+         「音频轨上的片段」也开放，少了这一段就是"能调、成片不变" */
+      fadePartFor(clip, dur) +
+      `,adelay=${delay}:all=1[mx${i}]`
     filters.push(
-      `[${idx}:a]atrim=start=${round(offset)}:duration=${round(dur * bedRate)},asetpts=PTS-STARTPTS` +
-        speed.atempoChain(bedRate, round) +
-        `,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-        `volume=${round(gain, 4)}` +
-        /* 音频轨（BGM/配音）与画中画原声同样吃淡入/淡出：面板上那条滑杆对
-           「音频轨上的片段」也开放，少了这一段就是"能调、成片不变" */
-        fadePartFor(clip, dur) +
-        `,adelay=${delay}:all=1[mx${i}]`
+      bedCurve
+        ? bedCurve + bedTail.replace(/^,/, '')
+        : `[${idx}:a]atrim=start=${round(offset)}:duration=${round(dur * bedRate)},asetpts=PTS-STARTPTS` +
+          reverse.audioReversePart(clip) +
+          speed.pitchChain(bedRate, clip.keepPitch !== false, round) +
+          `,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo` +
+          bedTail
     )
     extra.push(`[mx${i}]`)
   })
@@ -1098,10 +1701,60 @@ function buildPlan({
     audioLabel = '[aout]'
   }
 
+  /**
+   * 响度统一（**导出阶段**）：作用在混完的整条音轨上，排在 amix **之后**。
+   *
+   * ⚠️ 不能逐片段拉响度：每段各自拉到同一个 LUFS 再混起来，音量关系反而更乱
+   *    （一段轻声旁白会被拉成和配乐一样响）。母带处理的对象永远是"总线"。
+   */
+  const loudnorm = audiofx.loudnormFor(options.loudness, round)
+  if (loudnorm) {
+    filters.push(`${audioLabel}${loudnorm}[aloud]`)
+    audioLabel = '[aloud]'
+  }
+
+  /**
+   * 收尾统一**打色彩标签**：`setparams` 挂在成片的视频出口上。
+   *
+   * 为什么非要在滤镜里打一遍（明明下面还给了 `-color_trc bt709` 这些输出参数）：
+   * ffmpeg 在滤镜图存在时，**帧自带的色彩属性优先于输出参数**。
+   * HDR 源因为 zscale 显式写过 bt709，帧属性是对的；而 SDR 源（尤其是 lavfi / 手机截屏
+   * 这类"标签本来就是 unknown"的）帧属性是 unknown，输出参数被它盖掉，成片就标成 unknown。
+   * 表现是"我们这儿看着正常，某些播放器当它是未标定的片子，颜色随便解释一遍"。
+   * 这一句把出口帧属性钉死，两种源走同一条口径。
+   */
+  if (filters.length && videoLabel) {
+    const tagged = 'vtagged'
+    filters.push(`${videoLabel}setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[${tagged}]`)
+    videoLabel = `[${tagged}]`
+  }
+
   args.push('-filter_complex', filters.join(';'))
   args.push('-map', videoLabel, '-map', audioLabel)
   args.push('-t', round(finalDuration))
-  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p')
+  /**
+   * 编码参数。
+   *
+   * 三档来源：
+   *   · 编码器 —— `options.encoder`（渲染层只列本机真正有的那几个，见 probe 的 encoders）；
+   *   · 码率模式 —— 画质优先（crf/cq）或码率优先（-b:v + maxrate/bufsize 组成准 CBR）；
+   *   · 音频码率 —— 固定 192k（人声/配乐够用，且与所有容器的兼容性最好）。
+   *
+   * ⚠️ 硬件编码器的"画质档"参数各不相同：x264 用 `-crf`、nvenc 用 `-cq`（配 `-rc vbr`）、
+   *    qsv 用 `-global_quality`、amf 用 `-qp_i/-qp_p`。写错的那个不会报错 ——
+   *    ffmpeg 会**忽略不认识的私有参数**（有的版本只给一条 warning），
+   *    结果就是"选了硬件编码、画质完全不是设定的那一档"。
+   */
+  const encode = encodeArgs(options, crf)
+  args.push(...encode)
+  /**
+   * 色彩标签：成片一律标 BT.709 / SDR。
+   *
+   * 像素在链内已经是 SDR 了（HDR 源走过 tonemap，见 shared/hdr.js），但如果**不给标签**，
+   * 播放器会沿用输入文件的 HDR 标记去解释这些像素 —— 于是"我们自己看正常、别人那儿发灰"，
+   * 而且在本机永远复现不出来（本机的播放器恰好忽略了标签）。
+   */
+  args.push(...hdr.encoderTagArgs())
   args.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000')
   args.push('-movflags', '+faststart')
   args.push(outPath)
@@ -1269,6 +1922,29 @@ async function audioPeaks({ sourcePath, offset = 0, duration = 0, buckets = 160 
  * 返回 { ok, outPath, duration, attempts } 或 { ok:false, error }。
  */
 async function render({ clips, outPath, options, onProgress, ffmpegPath, signal, backdrop = '' }) {
+  /**
+   * 复合片段先摊平成普通片段（纯函数，预览侧用的是同一份）。
+   * 之后这个函数里所有 `clips` 的用法都改成 `list` —— 探测流信息、备遮罩、拼滤镜图
+   * 三处必须看见**同一份**片段表，只改其中一处就会出现"探到的是父片段、渲的是子片段"。
+   */
+  const expanded = compound.expandCompounds(multicam.expandMulticams(Array.isArray(clips) ? clips : []))
+  /**
+   * 只导出时间区域（`options.range`）。
+   *
+   * 在**片段层**裁剪而不是给 ffmpeg 加 `-ss/-to`：输出侧裁时间会让画中画定位、
+   * 转场、音量包络、关键帧这些"按绝对时间算"的东西整体错位（它们的时间表达式
+   * 都是相对原时间线的）。裁片段表之后，整条链看到的就是"从 0 开始的一段"，
+   * 与用户把这段拖到时间线开头再导出**逐字等价**。
+   *
+   * ⚠️ 展开必须在裁剪**之前**：复合片段 / 多机位的容器本身没有 url，
+   *    先裁后展开会把容器按区间切成半截，展开时算原点就错了。
+   */
+  const rangeStart = Number(options && options.range && options.range.start)
+  const rangeEnd = Number(options && options.range && options.range.end)
+  const list =
+    Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd > rangeStart
+      ? region.trimToRegion(expanded, { start: rangeStart, end: rangeEnd })
+      : expanded
   const found = findFfmpeg()
   const bin = ffmpegPath || (found && found.ffmpeg)
   if (!bin) return { ok: false, error: '找不到 ffmpeg', reason: 'not-found' }
@@ -1281,7 +1957,7 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
 
   // 先各自探测一遍流信息，决定要不要给视频片段接音轨
   const streamInfo = {}
-  const targets = (clips || []).filter((clip) => clip.track !== 'audio' && clip.track !== 'text' && clip.kind !== 'image')
+  const targets = list.filter((clip) => clip.track !== 'audio' && clip.track !== 'text' && clip.kind !== 'image')
   for (const clip of targets) {
     const source = sourceOf(clip)
     if (!source) continue
@@ -1297,13 +1973,13 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
    * ffmpeg 跑完（本机不能走 spawnSync —— 管道写法恒 EBUSY）。
    * 放在重试循环外：它只跟分辨率/表达式有关，与 assumeVideoAudio 无关，不必重做。
    */
-  const effectMasks = await prepareEffectMasks(bin, clips, options)
+  const effectMasks = await prepareEffectMasks(bin, list, options)
 
   let lastError = ''
   for (let i = 0; i < attempts.length; i += 1) {
     const assumeVideoAudio = attempts[i]
     const plan = buildPlan({
-      clips,
+      clips: list,
       streamInfo,
       outPath,
       options,
@@ -1394,6 +2070,102 @@ function runRender(bin, args, totalDuration, onProgress, signal) {
   })
 }
 
+/**
+ * 场景切换检测（「按场景分割」的探测步骤）。
+ *
+ * 用 ffmpeg 的 `select='gt(scene,T)'` 做**画面差异**检测（纯时间域，不解码成图片），
+ * 命中帧的 `pts_time` 就是切点在源文件里的绝对秒数；再由 shared/scenes.js 换算到时间线。
+ *
+ * ⚠️ `metadata=mode=print:file=-` 把元数据写到 **stdout**，而 ffmpeg 自己的日志在 stderr。
+ *    只读一路会拿到"有帧号没分数"或空字符串 —— 表现是"检测成功但一个切点都没有"。
+ *    所以两路都读、拼在一起交给解析器。退出码 1 也不是错误：这条路本来就是 `-f null -`
+ *    把整段解码一遍，末尾的 `Conversion failed` 之类不影响已经打出来的 pts。
+ *
+ * @returns {{ok:boolean, scenes?:Array<{at:number,score:number}>, reason?:string, error?:string}}
+ */
+async function detectScenes({ sourcePath, threshold = 0.3, duration = 0 } = {}) {
+  if (!sourcePath) return { ok: false, reason: 'bad-input', error: '没有指定源文件' }
+  const t = Math.min(0.9, Math.max(0.05, Number(threshold) || 0.3))
+  const found = findFfmpeg()
+  const bin = found && found.ffmpeg
+  if (!bin) return { ok: false, reason: 'not-found', error: '找不到 ffmpeg，做不了场景检测' }
+
+  const args = ['-hide_banner', '-nostdin']
+  const span = Number(duration) || 0
+  if (span > 0) args.push('-t', String(span))
+  args.push(
+    '-i', sourcePath,
+    '-filter:v', `select='gt(scene,${t})',metadata=mode=print:file=-`,
+    '-an', '-f', 'null', '-'
+  )
+  const result = await run(bin, args, { timeout: 120000 })
+  const text = `${result.stdout || ''}\n${result.stderr || ''}`
+  const scenes = scenesTable.parseScenes(text)
+  /* 一帧都没命中是**合法结果**（整段就是一个镜头），不能当失败上报 ——
+     但要把"为什么没有"说清楚，否则用户以为功能坏了。 */
+  return { ok: true, scenes, empty: scenes.length === 0, threshold: t }
+}
+
+/**
+ * 生成（或复用）预览代理。
+ *
+ * 代理是"预览用低分辨率、导出用原片"这件事的落点：
+ *   · 只降分辨率（`scale=-2:'min(ih,H)'`，不放大），编码参数故意给得很轻（veryfast / crf 26）
+ *     —— 代理的用途是拖动跟手，不是好看；
+ *   · 音频保留 AAC 96k：代理里没声音的话，"预览有画面没声音"会被误判成素材坏了；
+ *   · 已存在的代理**比源文件新**就直接复用（源被替换过就必须重做，
+ *     否则预览里放的是上一版素材 —— 那种错看着像"替换没生效"）。
+ *
+ * @returns {{ok:boolean, outPath?:string, height?:number, cached?:boolean, error?:string, reason?:string}}
+ */
+async function makeProxy({ sourcePath, height = 540, outDir }) {
+  if (!sourcePath) return { ok: false, reason: 'bad-input', error: '没有指定源文件' }
+  if (!outDir) return { ok: false, reason: 'bad-input', error: '没有指定代理目录' }
+  const target = Math.max(2, Math.round(Number(height) || 0))
+  if (!target) return { ok: false, reason: 'off', error: '当前画质档位不用代理' }
+  if (!fs.existsSync(sourcePath)) return { ok: false, reason: 'missing', error: '源文件不在了' }
+
+  const outPath = path.join(outDir, proxyTable.proxyName(sourcePath, target))
+  try {
+    const srcStat = fs.statSync(sourcePath)
+    if (fs.existsSync(outPath)) {
+      const proxyStat = fs.statSync(outPath)
+      if (proxyStat.size > 1024 && proxyStat.mtimeMs >= srcStat.mtimeMs) {
+        return { ok: true, outPath, height: target, cached: true }
+      }
+    }
+  } catch {
+    /* 读不到就重做 */
+  }
+
+  const found = findFfmpeg()
+  const bin = found && found.ffmpeg
+  if (!bin) return { ok: false, reason: 'not-found', error: '找不到 ffmpeg，生成不了预览代理' }
+
+  try {
+    fs.mkdirSync(outDir, { recursive: true })
+  } catch (error) {
+    return { ok: false, reason: 'io', error: `代理目录建不出来：${String(error && error.message)}` }
+  }
+
+  const args = [
+    '-hide_banner', '-y', '-loglevel', 'error',
+    '-i', sourcePath,
+    '-vf', proxyTable.scaleFilter(target),
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26',
+    '-pix_fmt', 'yuv420p',
+    /* `+faststart` 把索引挪到文件头：代理要边下边播，索引在尾部时第一帧要等整段读完 */
+    '-movflags', '+faststart',
+    '-c:a', 'aac', '-b:a', '96k',
+    outPath
+  ]
+  const result = await run(bin, args, { timeout: 10 * 60 * 1000 })
+  if (!result.ok || !fs.existsSync(outPath) || fs.statSync(outPath).size < 1024) {
+    return { ok: false, reason: 'ffmpeg', error: (result.stderr || '').trim().slice(-300) || '生成代理失败' }
+  }
+  return { ok: true, outPath, height: target, cached: false }
+}
+
 module.exports = {
   findFfmpeg,
   resetFfmpegCache,
@@ -1403,6 +2175,8 @@ module.exports = {
   render,
   extractAudio,
   audioPeaks,
+  detectScenes,
+  makeProxy,
   pathFromMediaUrl,
   sourceOf
 }

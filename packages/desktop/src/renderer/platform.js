@@ -251,15 +251,44 @@ function pickInBrowser() {
  * 打开系统文件选择框。
  * @returns {Promise<Array<{path:string,name:string,kind:string,size:number,url:string}>>}
  */
-export async function pickMedia() {
+export async function pickMedia(options = {}) {
   if (bridge?.media?.pick) {
     try {
-      return (await bridge.media.pick()) || []
+      return (await bridge.media.pick(options)) || []
     } catch {
       return []
     }
   }
   return pickInBrowser()
+}
+
+/**
+ * 导入字体：桌面端走主进程对话框；浏览器环境（开发预览）返回空数组。
+ * 返回项：`{ id, name, path, url }`，url 是 yjai-media 协议地址。
+ */
+export async function pickFonts() {
+  if (bridge?.font?.pick) {
+    try {
+      return (await bridge.font.pick()) || []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+/**
+ * 把已导入字体的路径重新登记进主进程白名单（启动/恢复草稿时调用）。
+ * ⚠️ 不登记的话：重启后白名单是空的，`fetch(url)` 得到 403，
+ *    字体家族根本没注册上 —— 预览会**静默**退回系统字体，界面上没有任何提示。
+ */
+export async function allowFontPaths(paths) {
+  if (!bridge?.font?.allow) return false
+  try {
+    return await bridge.font.allow(paths)
+  } catch {
+    return false
+  }
 }
 
 /** 拖拽文件 → 本地绝对路径（桌面端）；浏览器环境返回空串 */

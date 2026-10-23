@@ -64,7 +64,7 @@ const EDITOR_SIZE = [1920, 1032]
  * 与在线素材（stock）两个入口，那两类能力要么不在本机、要么要联网，
  * 剩下的归到「媒体文件」下的左栏节点里。改一头必须改另一头。
  */
-const TABS = ['media', 'text', 'subtitle', 'audio', 'transition', 'filter', 'effect']
+const TABS = ['media', 'audio', 'text', 'effect', 'transition', 'subtitle', 'filter', 'adjust']
 
 /** 外壳分区（与"面板内"互补，两边不重不漏地覆盖工作台全部按钮） */
 const SHELL_ZONES = ['winbtns', 'topbar', 'tabsrow', 'timeline']
@@ -100,7 +100,9 @@ const MIN_PANEL_BUTTONS = 5
  * ⚠️ 「帮助」只有两项是有意的：开源版没有商业化入口，原「升级」（购买/充值）
  * 与「反馈」（甩去外链）两项已整体删掉，不是漏接 —— 少一项要红。
  */
-const EXPECT_FILE_MENU = ['新草稿', '打开最近项目', '保存草稿', '将草稿另存为']
+/* 「文件」下拉的一级动作。素材包两项是 2026-10-20 加的（导出/导入 .yjpack），
+   它们和另外四项一样是**真动作**：点了要么弹保存框、要么弹打开框，不是占位。 */
+const EXPECT_FILE_MENU = ['新草稿', '打开最近项目', '保存草稿', '将草稿另存为', '导出素材包', '导入素材包']
 const EXPECT_HELP_MENU = ['使用指引', '关于']
 
 /** 固定 14 条断言 */

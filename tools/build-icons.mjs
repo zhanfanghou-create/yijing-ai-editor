@@ -239,17 +239,16 @@ for (const item of usable) {
 }
 
 const refHeader = `/**
- * 自绘图标组件 —— **本文件由 tools/build-icons.mjs 从 assets/icons/raw/ 的自绘 SVG 生成，请勿手改。**
+ * 自有图标组件 —— **本文件由 tools/build-icons.mjs 从 assets/icons/raw/ 的自绘 SVG 生成，请勿手改。**
  *
- * 来源：参考客户端可执行体里的 Qt 资源段。提取方式是按「4 字节大端长度前缀 == 载荷长度」
- * 逐块帧定，也就是**逐字节原样**取出，不是描摹重绘。原始 SVG 副本在
- * \`src/renderer/assets/icons/raw/<角色名>.svg\`。
+ * 版权：全部图标由 \`tools/build-own-icons.mjs\` 按统一规格**程序生成**（几何由脚本算出，
+ * 不是描摹、不是从任何第三方资源里提取）。规格：24×24 网格、四周留 2px 安全边、
+ * 线宽 1.7、圆角端点与圆角转折、单色 \`currentColor\`。
  *
  * 生成时做了三件归一化（原因见生成脚本注释）：
- *   1. 剥掉满画布的实心底板（参考里有些图标是「按钮式」资源，带一整块圆/方底）；
+ *   1. 剥掉满画布的实心底板（本项目图标一律不带底板，底板由 CSS 提供）；
  *   2. 所有颜色 → currentColor，交给 CSS 决定实际颜色与 hover/禁用态；
- *   3. 去掉 fill-opacity / stroke-opacity / opacity，避免参考里「次要态」的透明度
- *      在本项目里显得比周围图标暗一档。
+ *   3. 去掉 fill-opacity / stroke-opacity / opacity，避免个别图标比周围暗一档。
  *
  * 共同 props：\`size\`（默认 18，同时作为宽高），其余透传到 <svg>。
  */
@@ -292,13 +291,14 @@ const alreadyBarrel = /from '\.\/iconsLocal\.jsx'/.test(iconsSrc)
  * 且已被自绘图标接管（搬进 ownIcons）的角色又冒了出来。基于「行的区间」从构造上排除这种情况。
  */
 function parseDefs(src, label) {
-  const lines = src.split(/\r?\n/)
-  // 行首的字符偏移，用来把「字符位置」换回「行号」
-  const lineStart = []
-  for (let i = 0, pos = 0; i < lines.length; i++) {
-    lineStart.push(pos)
-    pos += lines[i].length + 1
-  }
+  /* ⚠️ 行首偏移必须**从原文里找 `\n`** 来算，不能 `split` 完再累加 `长度+1`：
+     那个式子只对 LF 成立。本仓库 `core.autocrlf=true`，Windows 上被记事本/某些工具
+     写过的文件是 **CRLF**，此时每行会少算一个字符，累积几十行后 `lineOf` 返回的行号
+     整体偏大 —— 于是「上一条的收尾行」落到「下一条的开头之后」，报出来的错是
+     `IconSparkle 的切分区间与上一条重叠`（图标本身一点问题没有，纯属换算错位）。 */
+  const lines = src.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line))
+  const lineStart = [0]
+  for (let i = 0; i < src.length; i += 1) if (src.charCodeAt(i) === 10) lineStart.push(i + 1)
   const lineOf = (charPos) => {
     let lo = 0
     let hi = lineStart.length - 1
@@ -459,7 +459,12 @@ const localCount = fs.existsSync(OUT_LOCAL)
 
 if (CHECK) {
   const prev = fs.existsSync(REPORT) ? fs.readFileSync(REPORT, 'utf8') : ''
-  const ok = prev === report
+  /* 比较前统一换行符：本仓库 `core.autocrlf=true`，产物文件在工作区里可能是 CRLF
+     （任何一次 `git stash pop` / `git checkout` 都会把它换成 CRLF），而这里生成的
+     文本是 LF。直接比就是「内容一字不差、却报产物过期」—— 而且**时绿时红**
+     （取决于上一条命令碰过没有），是最难信的那种闸门。 */
+  const norm = (text) => text.replace(/\r\n/g, '\n')
+  const ok = norm(prev) === norm(report)
   if (!ok) {
     console.error('ICONS_OUTDATED：产物与当前输入不一致，请重跑 tools/build-icons.mjs')
   }

@@ -34,8 +34,15 @@ export function SettingsDialog({
   keymap,
   onKeymapChange,
   hardwareAcceleration = true,
+  /* 导入方式：link = 只在素材里记下原路径；copy = 复制一份进应用的素材目录 */
+  importMode = 'link',
+  onImportModeChange,
   onHardwareAccelerationChange,
-  onRestart
+  onRestart,
+  /* 预览画质：full 原片 / smooth 720p 代理 / fast 540p 代理。
+     只影响预览取哪个文件，导出永远用原片（见 shared/proxy.js 的说明）。 */
+  previewQuality = 'full',
+  onPreviewQualityChange
 }) {
   const [tab, setTab] = useState('general')
   /** 正在等待录入的动作：`{ id, index }`；index 为 null 表示新增一格 */
@@ -113,7 +120,7 @@ export function SettingsDialog({
   const shortcutPanel = (
     <>
       <div className="notice" style={{ marginBottom: 12 }}>
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>
           点击键位格后直接按新键位即可改绑，Esc 取消。改动立即生效并保存在本机；
           「恢复默认」就是撤销。同一键位绑给两个动作时会标红提示冲突。
@@ -122,7 +129,7 @@ export function SettingsDialog({
 
       {conflictList.length ? (
         <div className="notice bad" style={{ marginBottom: 12 }} data-keymap-conflict>
-          <IconAlert size={15} />
+          <IconAlert size={14} />
           <span>
             检测到 {conflictList.length} 处键位冲突：
             {conflictList
@@ -184,7 +191,7 @@ export function SettingsDialog({
                               data-unbind={`${action.id}:${index}`}
                               title="取消这一格绑定"
                             >
-                              <IconClose size={10} />
+                              <IconClose size={12} />
                             </button>
                           </span>
                         ))
@@ -251,6 +258,25 @@ export function SettingsDialog({
 
   const generalPanel = (
     <>
+      {/* 预览画质：这是"卡不卡"的那一档，与导出画质**无关** ——
+          档位越低，预览用的是一份现生成的低分辨率代理；导出永远用原片。
+          文案必须把这件事写出来，否则用户会以为"调到极速，成片也变糊了"。 */}
+      <Field label="预览画质" hint="只影响预览是否流畅，导出始终使用原片">
+        <div className="seg" data-settings-preview-quality>
+          {['full', 'smooth', 'fast'].map((key) => (
+            <button
+              key={key}
+              type="button"
+              data-pq={key}
+              aria-pressed={previewQuality === key}
+              className={previewQuality === key ? 'active' : ''}
+              onClick={() => onPreviewQualityChange && onPreviewQualityChange(key)}
+            >
+              {key === 'full' ? '完整' : key === 'smooth' ? '流畅 720p' : '极速 540p'}
+            </button>
+          ))}
+        </div>
+      </Field>
       {/* 硬件加速：参考客户端「首选项」里的一项，配的提示是
           「导出的视频异常请试图关闭硬件加速」——
           也就是说它是**导出异常时的兜底开关**，不是可有可无的装饰。
@@ -277,7 +303,7 @@ export function SettingsDialog({
           </div>
           {info && Boolean(info.hardwareAcceleration) !== Boolean(hardwareAcceleration) ? (
             <div className="notice warn" style={{ flex: 1, margin: 0 }} data-settings-hw-dirty>
-              <IconAlert size={15} />
+              <IconAlert size={14} />
               <span>已保存，重启后生效</span>
               <button className="btn ghost small" type="button" onClick={onRestart} data-settings-restart>
                 立即重启
@@ -286,6 +312,32 @@ export function SettingsDialog({
           ) : (
             <span className="wb-muted-sm">当前实际：{info?.hardwareAcceleration === false ? '已关闭' : '已开启'}</span>
           )}
+        </div>
+      </Field>
+
+      {/* 导入方式：参考客户端「首选项」里没有这一项（它是导入对话框里的一个勾），
+          但本项目没有"导入对话框"，导入就是直接开系统文件框 —— 所以只能落到设置里。
+          文案必须把**代价**写清楚：复制会占磁盘，引用会因为原文件被移走而断。 */}
+      <Field label="素材导入方式" hint="只影响之后导入的素材，已经导入的不会变动">
+        <div className="seg" data-settings-import>
+          <button
+            type="button"
+            className={importMode !== 'copy' ? 'active' : ''}
+            onClick={() => onImportModeChange && onImportModeChange('link')}
+            data-import-mode="link"
+            title="只记下文件在原处的位置。省空间，但原文件被移走或删除后，草稿里这一段会变成离线素材。"
+          >
+            保留原位
+          </button>
+          <button
+            type="button"
+            className={importMode === 'copy' ? 'active' : ''}
+            onClick={() => onImportModeChange && onImportModeChange('copy')}
+            data-import-mode="copy"
+            title="导入时复制一份到应用的素材目录。占用磁盘，但原文件移走、删除都不影响草稿。"
+          >
+            复制进草稿
+          </button>
         </div>
       </Field>
 
@@ -318,7 +370,7 @@ export function SettingsDialog({
       </div>
 
       <div className="notice" style={{ marginTop: 12 }}>
-        <IconInfo size={15} />
+        <IconInfo size={14} />
         <span>全部处理都在本机完成：素材来自导入，成片由本机 ffmpeg 导出，不会向任何服务器发送数据。</span>
       </div>
     </>

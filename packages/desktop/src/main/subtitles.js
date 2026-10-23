@@ -14,6 +14,15 @@ const os = require('node:os')
 const path = require('node:path')
 const STYLES = require('../shared/textStyles.json')
 const { applyTextOverrides } = require('../shared/textOverrides.js')
+const { readTextAnim, animExpr } = require('../shared/textAnim.js')
+
+/**
+ * 左右对齐时离画面边的距离（画幅宽度的比例）。
+ * ⚠️ 必须与预览侧 renderer/textStyles.js 的 `sidePad = 6%` 一致：
+ *    两边各写一个数，改一边而忘另一边时，症状是"预览里贴着左边、成片里往中间挪了一点"，
+ *    幅度小到没人会当成 bug 报，但导出前后的胶片比对会一直差一点点。
+ */
+const ALIGN_MARGIN = 0.06
 
 /** 样式 key → 定义。写错 / 缺省一律退回 fallback，不让字幕以"没样式"的姿态消失 */
 function styleDef(key) {
@@ -113,7 +122,11 @@ function cssColorToFfmpeg(value, fallback = '#000000') {
 function drawtextFor(clip, { width, height, tmpDir, seq }) {
   const text = String(clip && clip.text ? clip.text : '').trim()
   if (!text) return null
-  const font = findFontFile()
+  /* 片段上带了自定义字体（「导入字体」选过）就用它，否则用系统里能找到的中文字体。
+     ⚠️ 自定义字体路径失效（用户删了字体文件/换了机器）时**必须退回系统字体**，
+        不能返回 null —— 返回 null 等于"这条字幕凭空消失"，而用户只是在另一台机器打开草稿。 */
+  const custom = String(clip && clip.textFontPath ? clip.textFontPath : '')
+  const font = custom && fs.existsSync(custom) ? custom : findFontFile()
   if (!font) return null
 
   /* 基线样式（样式表那一项）+ 片段覆写（右侧检查器调的字号/颜色/位置）。
@@ -138,17 +151,52 @@ function drawtextFor(clip, { width, height, tmpDir, seq }) {
    *    看着跟字幕一点关系都没有）；只转义不加引号同样断在冒号处。
    *    另外 `rgba(0, 0, 0, 0.55)` 这种带逗号的值不加引号会被当成两个 option。
    */
+  /* 动画的时间表达式（入场 / 出场 / 循环）。全部是**画幅百分比换算出来的像素**，
+     与预览侧 CSS 的 6% 位移逐字对应（见 shared/textAnim.js 的 shift 系数）。 */
+  const anim = readTextAnim(clip, def.anim)
+  const expr = animExpr(anim, {
+    start: Number(clip.start || 0),
+    duration: Number(clip.duration || 0),
+    width,
+    height
+  })
+  /* 表达式里的逗号是选项分隔符，必须转义 —— 少一个就会出现
+     "No option name near ..."，报错位置离字幕十万八千里。 */
+  const exprOpt = (value) => String(value).replace(/,/g, '\\,')
+
+  /* 字号：有缩放动画时写成表达式（fontsize 接受时间表达式，实测 ffmpeg 8.1.2 有效） */
+  const fontsizeValue = expr.fontScale
+    ? `'${exprOpt(`${size}*${expr.fontScale}`)}'`
+    : String(size)
+
+  /* 水平位置：对齐方式决定 x，再叠上动画的位移 */
+  const align = def.align === 'left' ? 'left' : def.align === 'right' ? 'right' : 'center'
+  let xExpr = '(w-text_w)/2'
+  if (align === 'left') xExpr = `w*${ALIGN_MARGIN}`
+  else if (align === 'right') xExpr = `w-text_w-w*${ALIGN_MARGIN}`
+  if (expr.dx) xExpr = `(${xExpr})+(${expr.dx})`
+
   const parts = [
     `fontfile='${esc(font)}'`,
     `textfile='${esc(file)}'`,
-    `fontsize=${size}`,
+    `fontsize=${fontsizeValue}`,
     `fontcolor='${esc(cssColorToFfmpeg(def.color, '#FFFFFF'))}'`,
-    `x=(w-text_w)/2`
+    /* 多行时按对齐方式排每一行（drawtext 的 text_align，ffmpeg 7+ 才有）。
+       x 定的是整块的位置，text_align 定的是块内每一行 —— 两者要一起给，
+       只给 x 的话多行文字会每行都居中，"左对齐"看起来只有第一行生效。 */
+    `text_align=${align}`,
+    `x='${exprOpt(xExpr)}'`
   ]
   if (stroke > 0.01) {
     parts.push(`borderw=${stroke.toFixed(2)}`)
     parts.push(`bordercolor='${esc(cssColorToFfmpeg(def.strokeColor, '#000000'))}'`)
   }
+  /* 行距：预览的 lineHeight 是「字号的倍数」，drawtext 的 line_spacing 是「额外的像素」。
+     基准 1.22 视为"不加额外行距"（def.lineHeight 未设时也是 1.22），
+     所以额外量 = (倍数 - 1.22) × 字号。负数允许（压紧），但不给到 -100%。 */
+  const lineExtra = Math.round(((Number(def.lineHeight || 1.22) - 1.22) * size) / 1.2)
+  if (lineExtra !== 0) parts.push(`line_spacing=${lineExtra}`)
+
   if (def.bg) {
     parts.push('box=1')
     parts.push(`boxcolor='${esc(cssColorToFfmpeg(def.bg))}'`)
@@ -159,15 +207,20 @@ function drawtextFor(clip, { width, height, tmpDir, seq }) {
      单位与预览一致（都按 1280 基准换算），所以预览里贴着下边、成片里也贴着下边。 */
   const offset = Number(def.offset || 0) * scale
   const anchor = def.anchor || 'bottom'
-  if (anchor === 'top') parts.push(`y=${Math.round(offset)}`)
-  else if (anchor === 'center' || anchor === 'middle') parts.push('y=(h-text_h)/2')
-  else parts.push(`y=h-text_h-${Math.round(offset)}`)
+  let yExpr = `h-text_h-${Math.round(offset)}`
+  if (anchor === 'top') yExpr = String(Math.round(offset))
+  else if (anchor === 'center' || anchor === 'middle') yExpr = '(h-text_h)/2'
+  if (expr.dy) yExpr = `(${yExpr})+(${expr.dy})`
+  parts.push(`y='${exprOpt(yExpr)}'`)
 
-  /* 淡入：预览里的 anim=fade 在这里用 alpha 表达式表达，
-     否则会出现"预览里字幕是淡进来的、成片里硬生生跳出来"。 */
-  if (def.anim === 'fade') {
-    parts.push(`alpha='if(lt(t-${Number(clip.start || 0).toFixed(3)}\\,0.3)\\,(t-${Number(clip.start || 0).toFixed(3)})/0.3\\,1)'`)
-  }
+  /* 透明度：片段的入场/出场/循环动画 + 样式表自带的淡入。
+     ⚠️ 两处都要**相乘**，不能取其一：样式表说"这条字幕要淡入"、
+        片段上又设了"上浮入场"，两条都得生效；只取片段那一份的话，
+        默认样式（sub-plain 的 anim=fade）会突然变成硬切。 */
+  /* ⚠️ 样式表自带的淡入已经并进 readTextAnim 的默认入场（STYLE_ANIM_MAP），
+     这里不再单独补一段 —— 两段并存会让"入场淡入 × 样式淡入"叠成两倍时长的淡入，
+     预览（只读片段参数）与成片（读两份）立刻对不上。 */
+  if (expr.alpha) parts.push(`alpha='${exprOpt(expr.alpha)}'`)
 
   return `drawtext=${parts.join(':')}`
 }

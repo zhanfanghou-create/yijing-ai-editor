@@ -11,12 +11,17 @@
 const { app, BrowserWindow, shell, ipcMain, safeStorage, nativeTheme, dialog, protocol } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+/* 素材入库要用它给副本文件名加短哈希（不同目录下的同名文件不能互相覆盖） */
+const { createHash } = require('node:crypto')
 const { Readable } = require('node:stream')
 const {
   probe: probeFfmpeg,
   render: renderTimeline,
   extractAudio: extractAudioTrack,
   audioPeaks: audioPeaksOf,
+  detectScenes: detectScenesOf,
+  makeProxy: makeProxyOf,
+  probeStreams: probeStreamsOf,
   pathFromMediaUrl
 } = require('./render')
 /**
@@ -26,6 +31,9 @@ const {
  */
 const media = require('./media')
 const { createDraftStore } = require('./drafts')
+const packOf = require('./pack')
+const packTable = require('../shared/pack')
+const hdrTable = require('../shared/hdr')
 const { registerMcpServer } = require('./mcp-register')
 
 const isDev = !app.isPackaged
@@ -112,6 +120,69 @@ const mediaUrlOf = media.mediaUrlOf
  * 描述一个本地文件，**并把它放进白名单**。
  * 文件不存在、不是普通文件、扩展名不支持，一律返回 null（由调用方过滤掉）。
  */
+/**
+ * 把用户选中的文件复制进应用的素材目录（`userData/materials/`），返回副本路径。
+ *
+ * 为什么需要它：默认的"引用原位"在真实使用里很容易断 —— 用户从下载文件夹导入、
+ * 剪完清空了下载文件夹，草稿里的素材就全成了离线素材（画面黑、导出失败）。
+ * "复制进草稿"把素材收进应用自己的目录，代价是占空间。
+ *
+ * ⚠️ 文件名必须带**短哈希**：不同目录下的同名文件（`VID_0001.mp4` 很常见）
+ *    直接按原名落地会互相覆盖，表现为"导入了两个素材，第二个把第一个覆盖了"。
+ * ⚠️ 复制失败（磁盘满 / 无权限）必须退回原路径，而不是返回空 ——
+ *    返回空等于"用户选了 5 个文件，导入了 0 个"，且没有任何提示。
+ */
+function copyIntoMaterials(sourcePath) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'materials')
+    fs.mkdirSync(dir, { recursive: true })
+    const ext = path.extname(sourcePath).toLowerCase()
+    const base = path.basename(sourcePath, path.extname(sourcePath))
+    const stamp = createHash('sha1').update(sourcePath).digest('hex').slice(0, 8)
+    let target = path.join(dir, `${base}-${stamp}${ext}`)
+    /* 同一个源文件重复导入：已经复制过就不再复制一次（省磁盘、也避免素材列表里出现两份） */
+    if (!fs.existsSync(target)) fs.copyFileSync(sourcePath, target)
+    return target
+  } catch {
+    return sourcePath
+  }
+}
+
+/**
+ * 字体入库：把用户选中的字体文件复制进 `userData/fonts/`，返回给渲染层的描述。
+ *
+ * 为什么要复制而不是直接用原路径：字体常常来自"下载"目录，清理一遍就没了；
+ * 草稿里那行字幕会在下次打开时静默退回系统字体（甚至直接消失）。
+ *
+ * ⚠️ 文件名带短哈希，理由同素材：`SourceHanSans.ttf` 这种名字极容易重名，
+ *    按原名落地会互相覆盖 —— 用户导了两种字体，实际只剩后一种。
+ * ⚠️ 字体**必须进 allowedMedia**，否则渲染层 fetch 那个 URL 会 403，
+ *    `document.fonts` 里就永远没有这个家族，预览静默退回默认字体。
+ */
+function importFont(sourcePath) {
+  const absolute = path.resolve(String(sourcePath || ''))
+  const ext = path.extname(absolute).toLowerCase()
+  if (!['.ttf', '.otf', '.ttc'].includes(ext)) return null
+  try {
+    const dir = path.join(app.getPath('userData'), 'fonts')
+    fs.mkdirSync(dir, { recursive: true })
+    const base = path.basename(absolute, path.extname(absolute)).replace(/[^\w\u4e00-\u9fa5-]/g, '_')
+    const stamp = createHash('sha1').update(absolute).digest('hex').slice(0, 8)
+    const target = path.join(dir, `${base}-${stamp}${ext}`)
+    if (!fs.existsSync(target)) fs.copyFileSync(absolute, target)
+    allowedMedia.add(target)
+    return {
+      /* id 用哈希：同一个字体重复导入得到同一个 id，设置里不会出现两条一样的 */
+      id: stamp,
+      name: base,
+      path: target,
+      url: mediaUrlOf(target)
+    }
+  } catch {
+    return null
+  }
+}
+
 function describeMedia(raw) {
   const described = media.describeMedia(raw)
   if (!described) return null
@@ -265,6 +336,13 @@ const saveDraft = (payload) => drafts.save(payload)
 const loadDraft = (id) => drafts.load(id)
 const removeDraft = (id) => drafts.remove(id)
 
+/**
+ * HDR 探测结果缓存（键 = 绝对路径 + mtime）。
+ * 不带 mtime 的话，用户用同名文件替换素材后仍会拿到旧结论 ——
+ * 表现是"换了片子还是按 HDR 转"，而且只有重启才恢复。
+ */
+const hdrCache = new Map()
+
 /* -------------------------------- 主窗口 -------------------------------- */
 
 function createWindow() {
@@ -324,8 +402,41 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // 不申请任何系统权限
-  mainWindow.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  /**
+   * 系统权限：**只放行「本窗口 + 只要麦克风 + 只要音频」这一种**。
+   *
+   * 原来是 `callback(false)` 通吃 —— 那条规则写在"这个应用没有任何需要系统权限的功能"
+   * 的年代。现在有了「录音配音」，麦克风是**功能的一部分**：一律拒绝的话，
+   * getUserMedia 直接抛 NotAllowedError，用户看到的是"录音按钮点了没反应"，
+   * 而系统连"要不要允许"都不会问（因为应用先自己拒了）。
+   *
+   * 放开的最小面：
+   *   · 只有**主窗口**能申请（别的 webContents / 将来开的子页一律拒）；
+   *   · 只有 `media` 这一种权限，其他（摄像头、通知、地理位置、剪贴板、MIDI…）照旧全拒；
+   *   · media 的 mediaTypes 必须**全部是 audio** —— 请求里只要带了 video
+   *     （摄像头），整条请求就拒，不给"顺手把摄像头也开了"留缝。
+   *
+   * 另外要设 check 处理器：Chromium 除了"申请"还会"复查"（同一 origin 第二次调用、
+   * 设备切换时会走 check），只设 request 时表现为"第一次能录、第二次报 NotAllowedError"。
+   */
+  const audioOnlyMedia = (details) => {
+    const types = Array.isArray(details && details.mediaTypes) ? details.mediaTypes : []
+    if (!types.length) return false
+    return types.every((type) => String(type).toLowerCase() === 'audio')
+  }
+  /* ⚠️ 四个形参都要写全：`details` 是第 4 个参数，`arguments[3]` 在箭头函数里根本不存在
+     （箭头函数没有自己的 arguments），写成那样等于恒 undefined ⇒ 权限永远被拒，
+     而"全拒"看起来跟"还没放开"一模一样，极难定位。 */
+  mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission !== 'media') return callback(false)
+    if (!mainWindow || wc !== mainWindow.webContents) return callback(false)
+    return callback(audioOnlyMedia(details))
+  })
+  mainWindow.webContents.session.setPermissionCheckHandler((wc, permission, _origin, details) => {
+    if (permission !== 'media') return false
+    if (!mainWindow || (wc && wc !== mainWindow.webContents)) return false
+    return Boolean(details && String(details.mediaType || '').toLowerCase() === 'audio')
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -428,6 +539,86 @@ function registerIpc() {
   ipcMain.handle('draft:load', (_event, id) => loadDraft(id))
   ipcMain.handle('draft:remove', (_event, id) => removeDraft(id))
 
+  /* ------------------------------ 素材包 ------------------------------ */
+
+  /**
+   * 体检：这一份草稿引用的素材找得到几个。
+   * 渲染层在弹「导出素材包」之前调它，好把"N 个素材找不到"写在确认框里 ——
+   * 而不是等包打完、对面黑屏才发现。
+   */
+  ipcMain.handle('pack:inspect', (_event, data) => packOf.inspectPackData(data))
+
+  /**
+   * 导出素材包：对话框 → 写 `.yjpack`（标准 zip，双击能打开核对）。
+   * 返回里带 missing，界面据此提示"已按离线导出"。
+   */
+  ipcMain.handle('pack:export', async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const suggested = packTable.packFileName((payload && payload.name) || '工程')
+    const options = {
+      title: '导出素材包',
+      defaultPath: path.join(app.getPath('documents'), suggested),
+      filters: [{ name: '艺镜素材包', extensions: ['yjpack'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+    /* 用户可能把扩展名删掉了（Windows 有时不会自动补），这里补回来 */
+    const outPath = /\.yjpack$/i.test(result.filePath) ? result.filePath : `${result.filePath}.yjpack`
+    return packOf.exportPack({
+      data: payload && payload.data,
+      name: (payload && payload.name) || '工程',
+      outPath
+    })
+  })
+
+  /**
+   * 导入素材包：对话框 → 解到 `userData/packs/<时间戳>/` → 存成**新草稿**并返回它的摘要。
+   *
+   * 刻意存成新草稿而不是覆盖同名的：包里带的是别人机器上的工程，
+   * 覆盖本机同 id 的草稿会把用户自己的东西冲掉（而且不可逆）。
+   */
+  ipcMain.handle('pack:import', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: '导入素材包',
+      properties: ['openFile'],
+      filters: [
+        { name: '艺镜素材包', extensions: ['yjpack'] },
+        { name: '全部文件', extensions: ['*'] }
+      ]
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true }
+
+    const stamp = `pack-${Date.now().toString(36)}`
+    const destDir = path.join(app.getPath('userData'), 'packs', stamp)
+    const imported = packOf.importPack({
+      packPath: result.filePaths[0],
+      destDir,
+      registerUrl: (filePath) => {
+        try {
+          if (!fs.statSync(filePath).isFile()) return ''
+        } catch {
+          return ''
+        }
+        const absolute = path.resolve(filePath)
+        allowedMedia.add(absolute)
+        return mediaUrlOf(absolute)
+      }
+    })
+    if (!imported.ok) return imported
+
+    const summary = saveDraft({ name: imported.name || '素材包工程', data: imported.data })
+    return {
+      ok: true,
+      id: summary.id,
+      name: summary.name,
+      mediaCount: imported.mediaCount,
+      missing: imported.missing,
+      dir: destDir
+    }
+  })
+
   ipcMain.handle('shell:openExternal', (_event, url) => {
     const parsed = new URL(String(url))
     if (!EXTERNAL_PROTOCOLS.has(parsed.protocol)) throw new Error('只允许打开 http/https 链接')
@@ -446,9 +637,9 @@ function registerIpc() {
    * 打开系统文件选择框，返回已入库（进白名单）的素材描述。
    * 用户取消时返回空数组，不抛错 —— 取消是正常操作，不该让界面进错误态。
    */
-  ipcMain.handle('media:pick', async (event) => {
+  ipcMain.handle('media:pick', async (event, options) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    const options = {
+    const dialogOptions = {
       title: '导入素材',
       buttonLabel: '导入',
       properties: ['openFile', 'multiSelections'],
@@ -460,9 +651,49 @@ function registerIpc() {
       ]
     }
     // 窗口可能已经关了，这时不传父窗口，否则 showOpenDialog 会抛
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    const result = win ? await dialog.showOpenDialog(win, dialogOptions) : await dialog.showOpenDialog(dialogOptions)
     if (result.canceled) return []
-    return result.filePaths.map(describeMedia).filter(Boolean)
+    /* 导入方式：'copy' = 复制一份进应用的素材目录，之后再移动/删除原文件也不影响草稿；
+       'link' = 只引用原路径（省空间，但原文件被移走就变成离线素材）。
+       ⚠️ 必须在 describeMedia **之前**换掉路径，否则白名单里登记的还是原路径，
+          复制出来的那份播不了（表现为"导入成功了，素材是黑的"）。 */
+    const mode = options && options.mode === 'copy' ? 'copy' : 'link'
+    return result.filePaths
+      .map((filePath) => describeMedia(mode === 'copy' ? copyIntoMaterials(filePath) : filePath))
+      .filter(Boolean)
+  })
+
+  /**
+   * 导入字体：只开一个单选/多选对话框，回来的路径逐个复制进 userData/fonts。
+   * 与 media:pick 分开是因为**过滤器不同**（字体不是素材，混进素材对话框会让
+   * 用户在"导入素材"里看到一堆 .ttf）。
+   */
+  ipcMain.handle('font:pick', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const dialogOptions = {
+      title: '导入字体',
+      buttonLabel: '导入',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '字体文件', extensions: ['ttf', 'otf', 'ttc'] }]
+    }
+    const result = win ? await dialog.showOpenDialog(win, dialogOptions) : await dialog.showOpenDialog(dialogOptions)
+    if (result.canceled) return []
+    return result.filePaths.map(importFont).filter(Boolean)
+  })
+
+  /** 恢复草稿时要把已经导入过的字体重新登记进白名单（进程重启后白名单是空的） */
+  ipcMain.handle('font:allow', (_event, paths) => {
+    const list = Array.isArray(paths) ? paths : []
+    for (const item of list) {
+      const absolute = path.resolve(String(item || ''))
+      if (!absolute) continue
+      try {
+        if (fs.statSync(absolute).isFile()) allowedMedia.add(absolute)
+      } catch {
+        /* 文件不在了就算了 —— 预览会退回系统字体，导出侧也会自己判断 */
+      }
+    }
+    return true
   })
 
   /** 拖拽进来的文件只有路径，这里做存在性 + 类型校验，顺便入库 */
@@ -555,6 +786,59 @@ function registerIpc() {
     return extractAudioTrack({ sourcePath, outPath })
   })
 
+  /* ------------------------------ 录音配音 ------------------------------ */
+
+  /**
+   * 保存一段录音（配音）。
+   *
+   * 分工：**浏览器侧只负责录**（MediaRecorder 产 blobs），**路径与落盘全在主进程** ——
+   * 与 `media:extractAudio` 同一道防线：渲染层能传字节，但传不进"往任意路径写文件"这个能力。
+   *
+   * ⚠️ 时长由渲染层**测量**后带过来，不在主进程 probe：
+   *    MediaRecorder 产出的 webm 头里没有 duration（Chromium 一直是这个行为），
+   *    `<audio>` 的 loadedmetadata 拿到的是 Infinity，ffprobe 也要啃完整条流才算得出。
+   *    以"用户按开始到按停止的墙钟时间"为准，误差在几十毫秒内，而那正是用户期望的长度。
+   *    （这也意味着录音片段**不允许被拉长**：sourceDuration 就是它自己，超出即黑/静音。）
+   */
+  ipcMain.handle('recording:save', async (_event, payload) => {
+    const bytes = payload && payload.bytes
+    const byteLength = bytes && typeof bytes.byteLength === 'number' ? bytes.byteLength : 0
+    if (!byteLength) return { ok: false, error: '没有收到录音数据' }
+    /* 上限 200MB：一小时的高质量 opus 也远小于这个数，超过基本是调用方传错了缓冲区 */
+    if (byteLength > 200 * 1024 * 1024) return { ok: false, error: '录音数据异常（超过 200MB）' }
+    const buffer = Buffer.from(bytes.buffer ? bytes : new Uint8Array(bytes))
+    /* 太短的（< 1KB）基本是"按下就停"：写进去之后在时间线上是一个几乎看不见的片段，
+       用户以为记录成功、实际什么都没录到。这里明确拒掉，让界面说一句真话。 */
+    if (buffer.length < 1024) return { ok: false, error: '这段录音太短了（几乎没有声音）' }
+    const dir = path.join(app.getPath('userData'), 'recordings')
+    fs.mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const ext = /mp4|m4a|aac/i.test(String(payload.mime || '')) ? '.m4a' : '.webm'
+    const outPath = path.join(dir, `配音-${stamp}${ext}`)
+    try {
+      fs.writeFileSync(outPath, buffer)
+    } catch (error) {
+      return { ok: false, error: `录音保存失败：${error.message}` }
+    }
+    const described = describeMedia(outPath)
+    if (!described) return { ok: false, error: '录音已落盘但读不出来（文件可能被占用）' }
+    /* 进白名单：不进的话 `yjai-media://` 会被协议层 403，预览是一片空白 + 无声，
+       而时间线上那个片段卡片画得好好的（"录完了、放不出来"）。 */
+    allowedMedia.add(described.path)
+    return {
+      ok: true,
+      asset: {
+        ...described,
+        /* .webm 在扩展名表里默认算 **video**（普通 webm 多半是视频），
+           而录音录制出来的一定是音频 —— 这里显式改掉，否则它会落到视频轨，
+           预览去建 <video> 元素（能出声但没有画面层，用户以为录坏了）。 */
+        kind: 'audio',
+        name: `配音 ${stamp.slice(11, 19).replace(/-/g, ':')}`,
+        duration: Number(payload.duration) > 0 ? Number(Number(payload.duration).toFixed(3)) : 0
+      }
+    }
+  })
+
   /* ------------------------------ 波形峰值 ------------------------------ */
 
   /**
@@ -573,6 +857,87 @@ function registerIpc() {
       duration: payload && payload.duration,
       buckets: payload && payload.buckets
     })
+  })
+
+  /**
+   * 场景切换检测（「按场景分割」的探测）。
+   *
+   * 只吃 `yjai-media://` 的 url，由主进程自己反解成路径 —— 渲染层拿不到、也不该拿
+   * 任意路径去喂 ffmpeg（那等于给了一个"读任意文件"的入口）。
+   */
+  ipcMain.handle('media:scenes', async (_event, payload) => {
+    const sourcePath = pathFromMediaUrl(String((payload && payload.url) || ''))
+    if (!sourcePath) return { ok: false, reason: 'bad-input', error: '源文件路径不合法' }
+    return detectScenesOf({
+      sourcePath,
+      threshold: payload && payload.threshold,
+      duration: payload && payload.duration
+    })
+  })
+
+  /**
+   * 生成预览代理（预览画质档位用它）。
+   *
+   * 落盘位置固定在 `userData/proxies`：用户可以在资源管理器里找到、也能整目录删掉，
+   * 不像"藏在某个缓存目录里"那种清理不掉又占空间的做法。
+   * 生成完**必须**登记进白名单，否则 `yjai-media://` 403 —— 预览一直卡在原片上，
+   * 而界面上显示"已切到 540p 代理"（第③类静默失效）。
+   */
+  ipcMain.handle('media:proxy', async (_event, payload) => {
+    const sourcePath = pathFromMediaUrl(String((payload && payload.url) || ''))
+    if (!sourcePath) return { ok: false, reason: 'bad-input', error: '源文件路径不合法' }
+    const outDir = path.join(app.getPath('userData'), 'proxies')
+    const result = await makeProxyOf({
+      sourcePath,
+      height: payload && payload.height,
+      outDir
+    })
+    if (!result.ok) return result
+    allowedMedia.add(result.outPath)
+    return {
+      ok: true,
+      url: mediaUrlOf(result.outPath),
+      path: result.outPath,
+      height: result.height,
+      cached: result.cached
+    }
+  })
+
+  /**
+   * HDR 体检：这个素材是不是 HLG / PQ，导出时会做色调映射。
+   *
+   * 为什么单独一个 IPC 而不是塞进 media:stat：`describeMedia` 是**同步**的纯文件描述
+   * （MCP server 也在用），ffprobe 是异步子进程；混进去会让"导入素材"变成一段
+   * 会卡的同步等待。界面按需（素材表变化后）问一次即可。
+   *
+   * 缓存键带 mtime：素材被替换成同名不同内容时不会拿到旧结论。
+   */
+  ipcMain.handle('media:hdr', async (_event, paths) => {
+    const list = Array.isArray(paths) ? paths.slice(0, 64) : []
+    const out = []
+    for (const raw of list) {
+      const absolute = media.normalizeMediaPath(raw)
+      if (!absolute) continue
+      let mtime = 0
+      try {
+        mtime = fs.statSync(absolute).mtimeMs
+      } catch {
+        continue
+      }
+      const key = `${absolute}|${mtime}`
+      if (!hdrCache.has(key)) {
+        const streams = await probeStreamsOf(absolute).catch(() => null)
+        hdrCache.set(key, {
+          hdr: hdrTable.isHdr(streams),
+          label: hdrTable.hdrLabel(streams),
+          hint: hdrTable.previewHint(streams),
+          transfer: (streams && streams.transfer) || '',
+          primaries: (streams && streams.primaries) || ''
+        })
+      }
+      out.push({ path: absolute, ...hdrCache.get(key) })
+    }
+    return out
   })
 }
 

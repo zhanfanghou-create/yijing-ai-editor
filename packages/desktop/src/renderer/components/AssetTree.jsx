@@ -243,6 +243,26 @@ export const WB_TREE = {
       ]
     },
     items: []
+  },
+  adjust: {
+    /* 「调节」：写的是片段的 adjust 五个参数（shared/adjust.js 的真源），
+       与右栏「调整」页的滑杆是同一份字段 —— 点一个预设，滑杆当场跟着动。
+       分组下标与 materials.js 的 ADJUST_GROUPS 顺序一一对应。 */
+    root: {
+      key: 'adjust-root',
+      label: '调节',
+      caret: true,
+      panel: 'adjust',
+      material: 'adjust:0',
+      children: [
+        { key: 'ad-g0', label: '热门', plain: true, panel: 'adjust', material: 'adjust:0' },
+        { key: 'ad-g1', label: '人像', plain: true, panel: 'adjust', material: 'adjust:1' },
+        { key: 'ad-g2', label: '风景', plain: true, panel: 'adjust', material: 'adjust:2' },
+        { key: 'ad-g3', label: '美食', plain: true, panel: 'adjust', material: 'adjust:3' },
+        { key: 'ad-g4', label: '夜景', plain: true, panel: 'adjust', material: 'adjust:4' }
+      ]
+    },
+    items: []
   }
 }
 
@@ -332,7 +352,7 @@ export default function AssetTree({ tab, active, onChange, countOf }) {
         <span>{node.label}</span>
         {node.tag ? <i className={`wb-tag ${node.tag.toLowerCase()}`}>{node.tag}</i> : null}
         {count ? <span className="wb-count">{count}</span> : null}
-        {node.caret ? <IconChevronDown size={13} className={`wb-caret ${isOpen ? 'open' : ''}`} /> : null}
+        {node.caret ? <IconChevronDown size={14} className={`wb-caret ${isOpen ? 'open' : ''}`} /> : null}
       </button>
     )
   }
@@ -354,7 +374,7 @@ export default function AssetTree({ tab, active, onChange, countOf }) {
       >
         <IconFolder size={16} />
         <span>{tree.root.label}</span>
-        <IconChevronDown size={13} className={`wb-caret ${openKey === tree.root.key ? 'open' : ''}`} />
+        <IconChevronDown size={14} className={`wb-caret ${openKey === tree.root.key ? 'open' : ''}`} />
       </button>
 
       {openKey === tree.root.key && tree.root.children?.length

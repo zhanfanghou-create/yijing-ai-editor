@@ -51,9 +51,15 @@ export const EPSILON = 0.001
  *    注释里的示例会被当成真导入，然后报"路径无法解析"。
  */
 import speedTable from '../shared/speed.js'
+import reverseTable from '../shared/reverse.js'
 
-const { SPEED_MAX, SPEED_MIN, clipSpeed, sourceSpan } = speedTable
-export { SPEED_MAX, SPEED_MIN, clipSpeed, sourceSpan }
+const { SPEED_MAX, SPEED_MIN, clipSpeed, clipRateAt, curveSourceTime, readCurve, sourceSpan } = speedTable
+export { SPEED_MAX, SPEED_MIN, clipSpeed, clipRateAt, curveSourceTime, readCurve, sourceSpan }
+
+/* 倒放的局部时间翻转。真源在 shared/reverse.js —— 导出侧拼的是 ffmpeg 的 reverse/areverse，
+   两侧**实现方式完全不同**（浏览器不能负速播放），所以更要共用同一份局部秒口径。 */
+const { isReversed, reverseLocal } = reverseTable
+export { isReversed, reverseLocal }
 
 /**
  * 计算一次修剪产生的片段增量。
@@ -199,6 +205,59 @@ export function replacePatch(clip, source, sourceDuration, min = MIN_CLIP_SECOND
 }
 
 /**
+ * 联动组：同一个源素材在时间线上被拆成的所有片段（视频本体 + 被分离出来的音频）。
+ *
+ * 为什么按 `assetId` 而不是"选中的那几条"：用户从没手动"创建过组"，
+ * 他理解的"联动"就是"这条片子的画面和声音要一起动"。按 assetId 分组天然符合这个直觉，
+ * 而且不需要维护一张会过期的成员表（片段被删掉后，成员表里留着幽灵 id，
+ * 下一次拖动就会静默少动一条）。
+ *
+ * ⚠️ 没有 assetId 的片段（字幕 / 纯文字 / 素材库拖进来的占位）**不参与联动**：
+ *    它们的 assetId 是空的，若也按空值分组，所有字幕会被绑成一团一起动。
+ */
+export function linkedIds(clips, clipId) {
+  const list = Array.isArray(clips) ? clips : []
+  const target = list.find((item) => item.id === clipId)
+  if (!target) return []
+  if (!target.assetId) return [target.id]
+  return list.filter((item) => item.assetId === target.assetId).map((item) => item.id)
+}
+
+/**
+ * 联动平移：把 `clipId` 拖到 `nextStart` 时，整组片段各自应该落到的起点。
+ *
+ * 返回 `[{ id, start }]`（含被拖的那一条），调用方直接逐条 patch。
+ *
+ * ⚠️ 必须**整组夹住**而不是只夹被拖的那一条：单个夹的话，把视频往左拖到 0 时，
+ *    声音还留在原地 —— 画面与声音直接错开，而且拖的过程中看不出来（两条都在动），
+ *    只有播放时才发现"没声音"或"声音晚半秒"。
+ *    所以这里先算整组能平移多少（受组内最早起点限制），再统一用这个量。
+ *
+ * @param {Array} clips 全部片段
+ * @param {string} clipId 被拖的片段
+ * @param {number} nextStart 被拖片段的目标起点（秒）
+ * @param {boolean} enabled 联动开关（关掉 = 只动自己，行为与旧版一致）
+ */
+export function linkMovePatches(clips, clipId, nextStart, enabled = true) {
+  const list = Array.isArray(clips) ? clips : []
+  const target = list.find((item) => item.id === clipId)
+  if (!target) return []
+  const want = Number(nextStart)
+  const from = Number(target.start) || 0
+  if (!Number.isFinite(want)) return []
+  if (!enabled) return [{ id: target.id, start: Math.max(0, want) }]
+
+  const group = list.filter((item) => (target.assetId ? item.assetId === target.assetId : item.id === target.id))
+  /* 整组的最小起点就是"最多还能往左挪多少" */
+  const floor = Math.min(...group.map((item) => Number(item.start) || 0))
+  const delta = Math.max(want - from, -floor)
+  return group.map((item) => ({
+    id: item.id,
+    start: Number(((Number(item.start) || 0) + delta).toFixed(3))
+  }))
+}
+
+/**
  * 播放头位于时间线某时刻时，该时刻对应的**源文件时间**（秒）。
  *
  * 为什么必须单独有这个函数：预览区原来直接把 `playhead` 赋给 `<video>.currentTime`。
@@ -220,13 +279,9 @@ export function replacePatch(clip, source, sourceDuration, min = MIN_CLIP_SECOND
  * @returns {number} 源文件秒数；片段时长无意义时返回 0；时间非数字时退回入点
  */
 export function sourceTimeAt(clip, timelineSeconds) {
-  const start = Number(clip && clip.start) || 0
-  const duration = Number(clip && clip.duration) || 0
-  const offset = Number(clip && clip.offset) || 0
-  if (!(duration > 0)) return 0
-  const t = Number(timelineSeconds)
-  if (!Number.isFinite(t)) return offset
-  // 夹到 [0, duration]：片段 head 之前取首帧，tail 之后取末帧
-  const local = Math.min(Math.max(t - start, 0), duration)
-  return offset + local * clipSpeed(clip)
+  /* 实现已经搬到 `shared/speed.js`（主进程算「时间区域」裁剪时也要这份口径），
+     这里只是转出同名函数，让已有的 import 路径与行为一字不变。
+     ⚠️ 别再在这里补逻辑 —— 补了就是两份真源，预览与成片会各走一条。 */
+  return speedTable.sourceTimeAt(clip, timelineSeconds)
 }
+

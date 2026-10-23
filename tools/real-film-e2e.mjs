@@ -1035,25 +1035,67 @@ try {
    * 应用行为完全正确，是尺子量错了对象 —— 跟组 F 里"时间码取秒位"是同一类错误。
    * 改成：点哪儿，播放头的像素位置就该在哪儿（与有没有分割、缩放多少都无关）。
    */
-  const clipBox = await page.locator('.wb-tllane[data-lane="video"] .clip').first().boundingBox()
-  // 点靠下的本体区域：上方 20px 是头栏，两端 7px 是修剪把手（把手会吃掉 pointerdown）
-  const clickX = clipBox.x + clipBox.width * 0.55
-  const clickY = clipBox.y + clipBox.height - 6
-  const clickHit = await page.evaluate(({ x, y }) => {
-    const lane = document.querySelector('.wb-tltracks')
-    const laneRect = lane.getBoundingClientRect()
-    const head = document.querySelector('.playhead')
-    return {
-      wantPx: x - laneRect.left + lane.scrollLeft,
-      beforePx: head ? parseFloat(head.style.left) : -1
+  /**
+   * ⚠️ 等横向滚动**停稳**再量、再点。
+   *
+   * 选中片段会触发「滚到能看见」（Timeline 里 `scrollTo({ behavior: 'smooth' })`），
+   * 那是动画：上一组（清空 → 撤销）之后它可能还在滑。量坐标时 scrollLeft=0、
+   * 真正 pointerup 时已经滑到 55px —— 于是应用按 822px 定位（**它对**），
+   * 尺子却拿着 767px 来比，报"差 55px"。这类假红测得越准越像功能坏了。
+   * 判据是「点哪儿到哪儿」，前提是"哪儿"在点下去那一刻是确定的 —— 所以先等它停。
+   */
+  const settleScroll = async () => {
+    let prev = Number.NaN
+    for (let i = 0; i < 25; i += 1) {
+      const cur = await page.evaluate(() => document.querySelector('.wb-tltracks').scrollLeft)
+      if (Number.isFinite(prev) && Math.abs(cur - prev) < 0.5) return cur
+      prev = cur
+      await page.waitForTimeout(80)
     }
-  }, { x: clickX, y: clickY })
-  await page.mouse.click(clickX, clickY)
-  await page.waitForTimeout(400)
-  const afterHit = await page.evaluate(() => {
-    const head = document.querySelector('.playhead')
-    return head ? parseFloat(head.style.left) : -1
-  })
+    return prev
+  }
+  /**
+   * ⚠️ 光"等它停稳"还不够：**滚动可能在取完坐标之后才启动**。
+   *
+   * 实测踩过（第二轮）：settleScroll 返回时确实静止，`boundingBox()` 也拿到了 x，
+   * 但在 `mouse.click` 落地前的几毫秒里，上一组操作触发的 smooth 滚动开始滑了 55px
+   * —— 应用按"滑过之后的 822px"定位（**它是对的**），尺子却拿着 767px 去比。
+   * 所以这里再补一道：点完复查 scrollLeft 有没有变，变了就整轮重来（最多 4 次）。
+   * 判据「点哪儿到哪儿」只有在"哪儿"于点下去那一刻是确定的时候才有意义。
+   */
+  let clickHit = null
+  let afterHit = -1
+  let clickX = 0
+  let clickY = 0
+  let clipBox = null
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await settleScroll()
+    clipBox = await page.locator('.wb-tllane[data-lane="video"] .clip').first().boundingBox()
+    // 点靠下的本体区域：上方 20px 是头栏，两端 7px 是修剪把手（把手会吃掉 pointerdown）
+    clickX = clipBox.x + clipBox.width * 0.55
+    clickY = clipBox.y + clipBox.height - 6
+    clickHit = await page.evaluate(({ x }) => {
+      const lane = document.querySelector('.wb-tltracks')
+      const laneRect = lane.getBoundingClientRect()
+      const head = document.querySelector('.playhead')
+      return {
+        scroll: lane.scrollLeft,
+        wantPx: x - laneRect.left + lane.scrollLeft,
+        beforePx: head ? parseFloat(head.style.left) : -1
+      }
+    }, { x: clickX })
+    await page.mouse.click(clickX, clickY)
+    await page.waitForTimeout(400)
+    const settled = await page.evaluate(() => {
+      const lane = document.querySelector('.wb-tltracks')
+      const head = document.querySelector('.playhead')
+      return { scroll: lane.scrollLeft, playhead: head ? parseFloat(head.style.left) : -1 }
+    })
+    afterHit = settled.playhead
+    if (Math.abs(settled.scroll - clickHit.scroll) < 0.5) break
+    /* 滚动在这几毫秒里动了 ⇒ 这一轮的"点哪儿"不可信，重来 */
+    await page.waitForTimeout(250)
+  }
   const movedPx = Math.abs(afterHit - clickHit.beforePx)
   check('单击片段会把播放头挪到点击处（点哪儿到哪儿，且确实动了）',
     movedPx >= 3 && Math.abs(afterHit - clickHit.wantPx) <= 3,

@@ -1,16 +1,19 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { KIND_LABEL } from '../assets.js'
 import {
   IconAddSquare,
+  IconClose,
   IconCreateVideo,
-  IconDownload,
   IconEnhance,
+  IconFilter,
   IconFolder,
+  IconGridView,
+  IconListView,
   IconPlus,
-  IconRefresh,
+  IconSearch,
+  IconStar,
   IconTalkingPhoto,
-  IconTrash,
-  IconUpload
+  IconTrash
 } from '../icons.jsx'
 import { showItem } from '../platform.js'
 import { useToast, timecode } from '../ui.jsx'
@@ -108,6 +111,30 @@ const TOOLS = [
   { key: 'text', label: '加文字', Icon: IconTalkingPhoto }
 ]
 
+/**
+ * 素材栏的排序 / 筛选口径。
+ *
+ * ⚠️ 这两组是**视图状态**，刻意不落设置：与「只看收藏」同理 ——
+ *    下次启动时素材库应该按"最近导入在前"复位，而不是停在上一轮筛出来的半空列表里
+ *    （用户会以为素材丢了）。
+ *
+ * ⚠️ 排序必须是**稳定的、可解释的**：`recent` 用素材进库时间（没有就按数组原序倒排），
+ *    `name` 用 `localeCompare('zh')`（默认的字典序会把中文全部排到英文后面，
+ *    那是按码位排，不是按读音）。三条都不可能返回 NaN，否则 sort 会静默乱序。
+ */
+const SORTS = [
+  { key: 'recent', label: '最近' },
+  { key: 'name', label: '名称' },
+  { key: 'duration', label: '时长' }
+]
+
+const KIND_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'video', label: '视频' },
+  { key: 'image', label: '图片' },
+  { key: 'audio', label: '音频' }
+]
+
 export default function MediaPanel({
   assets,
   filterLabel,
@@ -118,32 +145,175 @@ export default function MediaPanel({
   onSelect,
   selection,
   onImport,
+  onToggleFavorite,
   onTool
 }) {
   const toast = useToast()
+  /**
+   * 「只看收藏」。
+   *
+   * 刻意做成**本地状态**而不是设置项：它是一个"临时视图"，
+   * 关掉应用再打开时应该回到全部素材 —— 谁会希望下次启动时素材库是空的、
+   * 还以为素材丢了。
+   *
+   * ⚠️ 过滤放在**渲染前**（visible）而不是在 map 里 if 掉：
+   *    空态要能显示一句"还没有收藏"，把 if 塞进 map 只会得到一片空白。
+   */
+  const [favOnly, setFavOnly] = useState(false)
+  /* 搜索 / 视图 / 排序 / 类型筛选 —— 四个都是真实生效的视图状态（无一项是装饰） */
+  const [query, setQuery] = useState('')
+  const [view, setView] = useState('grid')
+  const [sort, setSort] = useState('recent')
+  const [kindFilter, setKindFilter] = useState('all')
+
+  /* 类型筛选的显示名：与下拉选项同一份表，避免"下拉里叫图片、空态里叫图像" */
+  const kindText = (key) => KIND_FILTERS.find((item) => item.key === key)?.label || '全部'
+
+  /**
+   * 素材管道：收藏筛选 → 类型筛选 → 文件名搜索 → 排序。
+   *
+   * ⚠️ 全部在**渲染前**算完（不是 map 里 if 掉），因为空态要能说清"为什么空"：
+   *    是没素材、还是没收藏、还是搜索没命中 —— 三者给同一片空白，用户只会以为素材丢了。
+   */
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const pool = assets.filter((asset) => {
+      if (favOnly && !asset.favorite) return false
+      if (kindFilter !== 'all' && asset.kind !== kindFilter) return false
+      /* 文件名搜索：名称 + 类型名一起搜（"视频" 能搜出全部视频），不搜路径 */
+      if (!q) return true
+      const hay = `${asset.name || ''} ${KIND_LABEL[asset.kind] || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+    const out = [...pool]
+    if (sort === 'name') {
+      out.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh'))
+    } else if (sort === 'duration') {
+      out.sort((a, b) => (Number(b.duration) || 0) - (Number(a.duration) || 0))
+    } else {
+      /* 最近导入：有 addedAt 按它倒排，没有就把原数组倒过来（导入是 append，尾部最新） */
+      out.sort((a, b) => {
+        const ta = Number(a.addedAt) || 0
+        const tb = Number(b.addedAt) || 0
+        if (ta && tb && ta !== tb) return tb - ta
+        return 0
+      })
+      if (!out.some((asset) => Number(asset.addedAt))) out.reverse()
+    }
+    return out
+  }, [assets, favOnly, kindFilter, query, sort])
+
+  /** 空列表时的解释：三种"空"的原因不一样，说明也必须不一样 */
+  const emptyReason = query.trim()
+    ? `没有文件名包含「${query.trim()}」的素材。`
+    : kindFilter !== 'all'
+      ? `没有${kindText(kindFilter)}类素材。换成「全部」看看。`
+      : favOnly
+        ? '还没有收藏的素材。把鼠标移到素材卡上，点卡片右下角的星标即可收藏。'
+        : ''
 
   /* ------------------------------- 素材 ------------------------------- */
 
   return (
     <section className="wb-media">
-      {/* 空态时中栏顶部不放任何东西（与参考一致）；已有素材才补一条导入入口 */}
-      {assets.length ? (
-        <div className="wb-mediabar">
-          <span>{filterLabel || '素材'}</span>
-          <span>{assets.length} 个</span>
-          <span className="wb-grow" />
+      {/*
+        素材栏横条（参考实测形制）：左侧青色「导入」主按钮 + 搜索框 + 右端视图/排序/筛选。
+        ⚠️ 这一条**常驻**（空态也画）：参考里它就是素材区的第一行，
+           空态隐藏它会让"导入"入口只剩画面正中那一个 —— 用户刚删空素材库时，
+           会发现顶部的导入按钮凭空消失了。
+      */}
+      <div className="wb-mediabar">
+        <button
+          className="wb-mb-import"
+          type="button"
+          onClick={onImport}
+          data-import-btn="1"
+          title="从电脑导入视频 / 音频 / 图片"
+        >
+          <IconPlus size={12} />
+          导入
+        </button>
+        <button
+          className="wb-mb-viewbtn"
+          type="button"
+          onClick={() => setView((value) => (value === 'grid' ? 'list' : 'grid'))}
+          title={view === 'grid' ? '切换到列表视图' : '切换到网格视图'}
+          data-media-view-toggle="1"
+        >
+          {view === 'grid' ? <IconGridView size={14} /> : <IconListView size={14} />}
+        </button>
+
+        <label className="wb-mb-search">
+          <IconSearch size={13} />
+          <input
+            type="search"
+            value={query}
+            placeholder="搜索文件名"
+            data-media-search="1"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setQuery('')
+            }}
+          />
+          {query ? (
+            <button type="button" title="清空搜索" data-media-search-clear="1" onClick={() => setQuery('')}>
+              <IconClose size={11} />
+            </button>
+          ) : null}
+        </label>
+
+        <div className="wb-mb-right">
           <button
-            className="btn small primary"
             type="button"
-            onClick={onImport}
-            data-import-btn="1"
-            title="从电脑导入视频 / 音频 / 图片"
+            className={`wb-mb-ico${favOnly ? ' on' : ''}`}
+            onClick={() => setFavOnly((value) => !value)}
+            data-media-fav-filter="1"
+            aria-pressed={favOnly}
+            title={favOnly ? '显示全部素材' : '只看收藏的素材'}
           >
-            <IconUpload size={13} />
-            导入素材
+            <IconStar size={13} />
           </button>
+          <button
+            type="button"
+            className={`wb-mb-ico${view === 'grid' ? ' on' : ''}`}
+            onClick={() => setView('grid')}
+            aria-pressed={view === 'grid'}
+            data-media-view="grid"
+            title="网格视图"
+          >
+            <IconGridView size={14} />
+          </button>
+          <button
+            type="button"
+            className={`wb-mb-ico${view === 'list' ? ' on' : ''}`}
+            onClick={() => setView('list')}
+            aria-pressed={view === 'list'}
+            data-media-view="list"
+            title="列表视图"
+          >
+            <IconListView size={14} />
+          </button>
+          <label className="wb-mb-select" title="排序方式">
+            <select value={sort} data-media-sort="1" onChange={(event) => setSort(event.target.value)}>
+              {SORTS.map((item) => (
+                <option key={item.key} value={item.key}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="wb-mb-select is-icon" title="按类型筛选">
+            <IconFilter size={13} />
+            <select value={kindFilter} data-media-kind="1" onChange={(event) => setKindFilter(event.target.value)}>
+              {KIND_FILTERS.map((item) => (
+                <option key={item.key} value={item.key}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
-      ) : null}
+      </div>
 
       <div className="wb-media-body">
         {!assets.length ? (
@@ -155,68 +325,95 @@ export default function MediaPanel({
             <small>拖放或单击此处添加视频、音频、照片和字幕。</small>
           </div>
         ) : (
-          <div className="wb-grid">
-            {assets.map((asset) => (
-              <div
-                key={asset.id}
-                className={`media-card ${selection?.assetId === asset.id ? 'selected' : ''}`}
-                onClick={() => onSelect && onSelect(asset)}
-                role="button"
-                tabIndex={0}
-                draggable
-                onDragStart={(event) => {
-                  // 自定义 MIME 带上素材 id；text/plain 是兜底，某些环境只认它
-                  event.dataTransfer.setData('application/x-yjai-asset', asset.id)
-                  event.dataTransfer.setData('text/plain', asset.name)
-                  event.dataTransfer.effectAllowed = 'copy'
-                }}
-                title="拖到下方时间线即可加入片段"
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') onSelect && onSelect(asset)
-                }}
-              >
-                <Thumb asset={asset} />
-                <div className="media-meta">
-                  <strong title={asset.name}>{asset.name}</strong>
-                  <small>{assetSummary(asset)}</small>
-                </div>
-                <div className="media-actions">
-                  <button
-                    type="button"
-                    title="加入时间线"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onAddToTimeline(asset)
-                    }}
-                  >
-                    <IconPlus size={12} />
-                  </button>
-                  {asset.path ? (
-                    <button
-                      type="button"
-                      title="在文件夹中显示"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        void showItem(asset.path)
-                      }}
-                    >
-                      <IconFolder size={12} />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    title="删除素材"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onRemoveAsset(asset.id)
-                    }}
-                  >
-                    <IconTrash size={12} />
-                  </button>
-                </div>
+          <>
+            {/* 分组标题（参考的「全部」那一行）：随左栏选中项与类型筛选变化 */}
+            <div className="wb-media-group" data-media-group="1">
+              <span>{kindFilter === 'all' ? filterLabel || '全部' : kindText(kindFilter)}</span>
+              <em>{visible.length}</em>
+              {query.trim() ? <b>搜索「{query.trim()}」</b> : null}
+            </div>
+            {emptyReason ? (
+              <div className="empty" data-media-empty="1">
+                {emptyReason}
               </div>
-            ))}
-          </div>
+            ) : (
+              <div className={`wb-grid${view === 'list' ? ' is-list' : ''}`} data-media-layout={view}>
+                {visible.map((asset) => (
+                  <div
+                    key={asset.id}
+                    className={`media-card ${selection?.assetId === asset.id ? 'selected' : ''}`}
+                    onClick={() => onSelect && onSelect(asset)}
+                    role="button"
+                    tabIndex={0}
+                    draggable
+                    onDragStart={(event) => {
+                      // 自定义 MIME 带上素材 id；text/plain 是兜底，某些环境只认它
+                      event.dataTransfer.setData('application/x-yjai-asset', asset.id)
+                      event.dataTransfer.setData('text/plain', asset.name)
+                      event.dataTransfer.effectAllowed = 'copy'
+                    }}
+                    title="拖到下方时间线即可加入片段"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') onSelect && onSelect(asset)
+                    }}
+                  >
+                    <Thumb asset={asset} />
+                    <div className="media-meta">
+                      <strong title={asset.name}>{asset.name}</strong>
+                      <small>{assetSummary(asset)}</small>
+                    </div>
+                    <div className="media-actions">
+                      <button
+                        type="button"
+                        className={asset.favorite ? 'is-on' : ''}
+                        title={asset.favorite ? '取消收藏' : '收藏这个素材'}
+                        data-fav-toggle={asset.id}
+                        aria-pressed={!!asset.favorite}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onToggleFavorite && onToggleFavorite(asset.id)
+                        }}
+                      >
+                        <IconStar size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        title="加入时间线"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onAddToTimeline(asset)
+                        }}
+                      >
+                        <IconPlus size={12} />
+                      </button>
+                      {asset.path ? (
+                        <button
+                          type="button"
+                          title="在文件夹中显示"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void showItem(asset.path)
+                          }}
+                        >
+                          <IconFolder size={12} />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        title="删除素材"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onRemoveAsset(asset.id)
+                        }}
+                      >
+                        <IconTrash size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 

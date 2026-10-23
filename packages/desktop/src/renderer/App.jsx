@@ -13,16 +13,63 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   appInfo, getSetting, setSetting,
   pickMedia, statMedia, pathForFile,
+  pickFonts, allowFontPaths,
   listDrafts, saveDraft, loadDraft, removeDraft
 } from './platform.js'
+/* 自定义字体：注册进 document.fonts（预览靠家族名，导出靠片段上的字体路径） */
+import { registerFonts } from './fonts.js'
 import { localAssetsFrom, probeMedia } from './assets.js'
 import { compositeAt, effectiveClips } from './composite.js'
 import { PIP_DEFAULT_ANCHOR, PIP_DEFAULT_SIZE, pipAnchor } from './pip.js'
 import { textStyleDef } from './textStyles.js'
-import { EPSILON, MIN_CLIP_SECONDS, clipSpeed, replacePatch, speedPatch } from './trim.js'
+import {
+  EPSILON,
+  MIN_CLIP_SECONDS,
+  clipSpeed,
+  curveSourceTime,
+  linkMovePatches,
+  readCurve,
+  replacePatch,
+  speedPatch
+} from './trim.js'
+/* 时间线标记（纯逻辑，见 markers.js 的说明：它不进成片，所以只在渲染层闭环） */
+import { markerIndexAt, normalizeMarkers, stepMarker } from './markers.js'
+/* 时间区域：删除 / 复制 / 剪切 / 粘贴 / 只导出区间。
+   纯逻辑在 shared/region.js —— 导出侧（主进程）用的是**同一份**，
+   否则"预览里删掉的区间范围"与"成片里删掉的范围"会差一点点，而且谁都不报错。 */
+import {
+  copyRegion as copyRegionOf,
+  normalizeRegion,
+  pasteRegion as pasteRegionAt,
+  regionSpan,
+  removeRegion
+} from '../shared/region.js'
 import { timecode, useToast } from './ui.jsx'
+/* 画面层级（自由层级）：比较与"上移/下移"的算术，导出侧用的是同一份 */
+import * as layersTable from '../shared/layers.js'
+/* 场景切换检测：解析与"源秒 → 时间线秒"的换算，与主进程同一份 */
+import * as scenesTable from '../shared/scenes.js'
+/* 预览画质 / 代理：档位表与代理文件名，主进程用的是同一份（导出永远用原片） */
+import * as proxyTable from '../shared/proxy.js'
+/* 录音配音：麦克风在渲染层采，落盘在主进程（recording:save） */
+import Recorder from './components/Recorder.jsx'
 /** 画面比例真源（与导出共用同一份表） */
 import { DEFAULT_ASPECT, normalizeAspect } from '../shared/aspect.js'
+/** 复合片段：新建 / 展开 / 解除。展开这一支是预览与导出**同一个出口** */
+import { expandCompounds, isCompound, makeCompound, ungroupCompound } from '../shared/compound.js'
+/* 多机位：与复合片段同一套"展开"思路，但内部时间线是**由切换点算出来**的 */
+import {
+  angleIndexAt,
+  audioOf,
+  expandMulticams,
+  isMulticam,
+  makeMulticam,
+  multicamSpan,
+  segmentsOf,
+  setAudio as setMulticamAudio,
+  setCut as setMulticamCut,
+  ungroupMulticam
+} from '../shared/multicam.js'
 import {
   ACTIONS,
   clampZoom,
@@ -56,7 +103,7 @@ const DEFAULT_CLIP_SECONDS = 5
 /* 默认三列比例 = 布局基线（616/676/439 那组实测值的延续）；时间线默认高
    跟窗口走（约 32%），一旦拖过就固定成 px。值域钳制放在两处：
    JS 里钳"存进 settings 的值"，CSS clamp 兜底"运行时的任意值"。 */
-const LAYOUT_DEFAULTS = { treeW: 150, centerFr: 639, playerFr: 676, infoFr: 439, tlH: null }
+const LAYOUT_DEFAULTS = { treeW: 150, centerFr: 504, playerFr: 740, infoFr: 494, tlH: null }
 const LAYOUT_TL_DEFAULT = 'clamp(140px, 32vh, 70vh)'
 const CENTER_FR_MIN = 220
 const PLAYER_FR_MIN = 300
@@ -109,6 +156,27 @@ export default function App() {
   const [zoom, setZoom] = useState(1)
   const [projectName, setProjectName] = useState('未命名项目')
   const [exportOpen, setExportOpen] = useState(false)
+
+  /* ---------------------------- 时间区域 ---------------------------- */
+  /**
+   * 时间区域：`{ start, end }`（秒），`end` 可以是 **null** —— 那表示"只标了入点"。
+   *
+   * 为什么允许半开状态：按 I 时用户还没决定出点，这时强行编一个 `start + 3 秒`
+   * 等于替他做了决定，而他接着按 O 时又会覆盖掉 —— 界面上会闪一下再变，像 bug。
+   * 半开时只在标尺上画一条入点线并提示"按 O 标出点"，不存在"猜"这件事。
+   *
+   * 区域**不进草稿**：它是一次性的选区，和"选中哪个片段"同类；
+   * 存进草稿反而会让下次打开时莫名其妙出现一段高亮。
+   */
+  const [region, setRegion] = useState(null)
+  const regionRef = useRef(null)
+  regionRef.current = region
+  /** 复制的区间内容：`{items, span}`，粘贴到播放头时用（只在本次会话有效） */
+  const [regionClip, setRegionClip] = useState(null)
+  /** 录音配音面板开着没有（麦克风只在面板里被打开，见 components/Recorder.jsx） */
+  const [recorderOpen, setRecorderOpen] = useState(false)
+  /** 录音中 / 保存中：这期间不许用 Esc 关面板（关掉会连麦克风一起放掉，条目全丢） */
+  const [recorderBusy, setRecorderBusy] = useState(false)
 
   /* ---------------------------- 快捷键 ---------------------------- */
 
@@ -296,6 +364,274 @@ export default function App() {
     setSetting('trackState', trackState).catch(() => {})
   }, [trackState])
 
+  /**
+   * 时间线标记（用户标记）。
+   *
+   * 每项是**时刻（秒）**，不是一个对象：标记没有名字、没有颜色、没有轨道，
+   * 它唯一的信息就是"这一秒"。存成对象只会让人以为以后要加字段，实际永远用不到。
+   * 排序 + 去重在这一层做，画的时候不用再管（乱序的标记点会让"跳到上一个标记"跳反）。
+   *
+   * ⚠️ 它进 settings 而不是只看草稿：标记是"打点"，跨草稿也该留着（同一套素材反复用），
+   *    和轨道四态一样属于编辑器偏好。真源唯一，预览/导出都不读它（标记不进成片）。
+   */
+  const [markers, setMarkers] = useState([])
+  useEffect(() => {
+    let alive = true
+    getSetting('markers').then((saved) => {
+      if (!alive || !Array.isArray(saved)) return
+      setMarkers(normalizeMarkers(saved))
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  useEffect(() => {
+    setSetting('markers', markers).catch(() => {})
+  }, [markers])
+
+  /** 加/删标记：同一帧上再点一次就取消（剪辑软件里都是这个手感） */
+  const toggleMarkerAt = useCallback((at) => {
+    const t = Math.max(0, Number(at) || 0)
+    setMarkers((list) => {
+      /* 阈值只在 markers.js 里定义一次：这里自己写 0.12，将来改阈值就会出现
+         "点下去没删掉/删错一个"这种只有手快才复现的怪事 */
+      const hit = markerIndexAt(list, t)
+      if (hit >= 0) return list.filter((_, i) => i !== hit)
+      return normalizeMarkers([...list, t])
+    })
+  }, [])
+
+  /**
+   * 自定义字体列表（settings.fonts）。
+   *
+   * 每项 `{ id, name, path, url }`：id 是源路径的短哈希（重复导入不会变成两条），
+   * path 给导出（drawtext 的 fontfile），url 给预览（fetch → FontFace）。
+   *
+   * ⚠️ 启动时必须做两件事，缺一件都会静默失效：
+   *   1. allowFontPaths —— 白名单是进程内存态，重启后是空的，不重新登记就 403；
+   *   2. registerFonts  —— 不注册进 document.fonts，CSS 里的家族名等于不存在，
+   *      预览会**安静地**退回系统字体（界面上完全看不出来）。
+   */
+  const [fonts, setFonts] = useState([])
+  useEffect(() => {
+    let alive = true
+    getSetting('fonts').then(async (saved) => {
+      if (!alive || !Array.isArray(saved) || !saved.length) return
+      const list = saved.filter((item) => item && item.id && item.path)
+      setFonts(list)
+      await allowFontPaths(list.map((item) => item.path))
+      if (!alive) return
+      await registerFonts(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  /** 导入字体：选文件 → 复制入库 → 注册 → 写进 settings */
+  const importFonts = useCallback(async () => {
+    const picked = await pickFonts()
+    if (!picked.length) return []
+    await registerFonts(picked)
+    setFonts((prev) => {
+      const merged = [...prev]
+      for (const font of picked) {
+        const hit = merged.findIndex((item) => item.id === font.id)
+        if (hit >= 0) merged[hit] = font
+        else merged.push(font)
+      }
+      setSetting('fonts', merged).catch(() => {})
+      return merged
+    })
+    toast.good(`已导入 ${picked.length} 个字体`)
+    return picked
+  }, [toast])
+
+  /**
+   * 导入方式：'link' 引用原位（默认，省空间）/ 'copy' 复制进草稿（原文件移走也不断）。
+   *
+   * ⚠️ 它只影响**导入这一刻**，不改变已有素材的路径 ——
+   *    所以不做"改设置时把所有素材搬一遍"这种危险动作（素材可能正在被预览占用）。
+   */
+  const [importMode, setImportMode] = useState('link')
+  useEffect(() => {
+    let alive = true
+    getSetting('importMode').then((saved) => {
+      if (!alive) return
+      if (saved === 'copy' || saved === 'link') setImportMode(saved)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  const changeImportMode = useCallback((next) => {
+    const value = next === 'copy' ? 'copy' : 'link'
+    setImportMode(value)
+    setSetting('importMode', value).catch(() => {})
+  }, [])
+
+  /**
+   * 预览画质：'full' 原片 / 'smooth' 720p 代理 / 'fast' 540p 代理。
+   *
+   * ⚠️ 只影响**预览取哪个文件**。素材表里的 url、片段上的 path 一律不动 ——
+   *    导出读的是 `clip.path`，结构上就碰不到代理（见 shared/proxy.js 的说明）。
+   *
+   * 代理是**按需生成**的：切到 720p 之后才为"真的在时间线上用到的素材"各跑一次 ffmpeg，
+   * 生成完缓存进 `userData/proxies`，下次直接复用（比源文件新才算有效）。
+   * 不在打开草稿时全量生成 —— 那会让打开一个 20 段素材的草稿变成"等 10 分钟"。
+   */
+  const [previewQuality, setPreviewQuality] = useState('full')
+  /**
+   * `{ [原片 url]: { url, height, state } }`：state = 'pending' | 'ready' | 'failed'
+   *
+   * ⚠️ 键是**原片的 url**，不是 assetId。早先按 assetId 建表，结果"没有 assetId 的片段"
+   *    （旧草稿、程序构造的片段）永远拿不到代理 —— 切了档位、什么都没发生，
+   *    而控制台一片安静。url 是"这一路画面到底读哪个文件"的唯一入口，按它建表就不会漏。
+   */
+  const [proxyMap, setProxyMap] = useState({})
+  const proxyAskedRef = useRef(new Set())
+  /* "这一帧的合成结果"存一份 ref 给下面的代理 effect 读：
+     effect 的依赖里放不进整个 composite（每帧都变），会在播放时引爆重渲染 */
+  const previewCompositeRef = useRef(null)
+
+  useEffect(() => {
+    let alive = true
+    getSetting('previewQuality').then((saved) => {
+      if (!alive) return
+      const value = proxyTable.normalizeQuality(saved)
+      if (value !== 'full') setPreviewQuality(value)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const changePreviewQuality = useCallback((next) => {
+    const value = proxyTable.normalizeQuality(next)
+    setPreviewQuality(value)
+    setSetting('previewQuality', value).catch(() => {})
+    if (value === 'full') {
+      /* 切回原片就清空映射：留着会让"下一次切到代理"以为已经生成好了 */
+      proxyAskedRef.current.clear()
+      setProxyMap({})
+      toast('预览画质：完整（原片）')
+      return
+    }
+    toast(`预览画质：${proxyTable.QUALITY_LABELS[value]}（导出仍用原片）`)
+  }, [toast])
+
+  /* 按需生成代理的那条 effect 挪到下面了（它依赖 activeClips / composite，
+     而两者都在本组件靠后位置才声明 —— 依赖数组在**渲染期**求值，
+     写在这里会踩 `Cannot access 'activeClips' before initialization`，
+     整棵树白屏、页面只留一行 TDZ 报错）。见 previewCompositeRef 赋值处。 */
+
+  /**
+   * 预览专用的素材表：把"已经在代理里就绪"的视频素材换成代理 url。
+   * ⚠️ 只在预览里用它；导出与草稿存储仍然用 `assets`（原片）。
+   */
+  const previewAssets = useMemo(() => {
+    if (!proxyTable.needsProxy(previewQuality)) return assets
+    const hits = Object.entries(proxyMap).filter(([, value]) => value && value.state === 'ready' && value.url)
+    if (!hits.length) return assets
+    const byUrl = new Map(hits)
+    return assets.map((asset) => {
+      const hit = byUrl.get(asset.url)
+      return hit ? { ...asset, url: hit.url, proxyUrl: hit.url } : asset
+    })
+  }, [assets, previewQuality, proxyMap])
+
+  /**
+   * 预览专用的片段表：片段自己记了 url（没有 assetId）时，素材表那一路替换不到它，
+   * 于是再按 `clip.url` 替换一次。两处都做 == "不管片段怎么来的，预览都读代理"。
+   *
+   * ⚠️ 这份只喂 `compositeAt`（预览合成），**不写回 clips**：
+   *    写回去就会连带改动草稿与导出（`render.js` 读的是 clips 上的 path/url）。
+   * ⚠️ 它住在 `activeClips` **后面**（见下方合成器一段）：useMemo 的回调在渲染期就执行，
+   *    写在这里等于在 activeClips 解构完之前读它 ⇒ TDZ，白屏。
+   */
+  const makePreviewClips = (list) => {
+    if (!proxyTable.needsProxy(previewQuality)) return list
+    const hits = Object.entries(proxyMap).filter(([, value]) => value && value.state === 'ready' && value.url)
+    if (!hits.length) return list
+    const byUrl = new Map(hits)
+    return list.map((clip) => {
+      const hit = byUrl.get(clip.url)
+      return hit ? { ...clip, url: hit.url } : clip
+    })
+  }
+
+  /**
+   * HDR 体检结果：`{ [path]: { hdr, label, hint } }`。
+   *
+   * 为什么不在渲染层自己判断：HDR 的唯一可靠信号是**容器/码流的 color_transfer**
+   * （smpte2084 / arib-std-b67），位深骗人（10-bit 也可能是 SDR）。那只有 ffprobe 知道。
+   * 探到的结果只用于**两件事**：右栏如实标一行「色彩」，以及导入时提示一次。
+   * 导出侧的色调映射**不依赖**这个状态 —— 主进程自己会再探一次（谁也不能靠界面状态
+   * 决定成片对不对）。
+   */
+  const [hdrMap, setHdrMap] = useState({})
+  const hdrAskedRef = useRef(new Set())
+
+  useEffect(() => {
+    if (!window.yjai?.media?.hdr) return undefined
+    const paths = assets
+      .filter((asset) => asset && asset.path && asset.kind === 'video')
+      .map((asset) => asset.path)
+      .filter((item) => !hdrAskedRef.current.has(item))
+    if (!paths.length) return undefined
+    paths.forEach((item) => hdrAskedRef.current.add(item))
+    let alive = true
+    Promise.resolve(window.yjai.media.hdr(paths))
+      .then((list) => {
+        if (!alive || !Array.isArray(list) || !list.length) return
+        setHdrMap((prev) => {
+          const next = { ...prev }
+          for (const item of list) next[item.path] = item
+          return next
+        })
+        const found = list.filter((item) => item && item.hdr)
+        /* 只说一次：素材一多会刷屏，而且这话本来就只需要知道一次 */
+        if (found.length) {
+          toast(`检测到 ${found.length} 个 HDR 素材（${found[0].label}）：导出会自动转成 SDR，预览可能略灰`)
+        }
+      })
+      .catch(() => {
+        /* 探不出来就不标 —— 不能靠猜 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [assets, toast])
+
+  /**
+   * 剪辑联动：拖动片段时，同一源素材的画面与声音一起动。
+   *
+   * 默认**开**（这是剪辑软件里的常态），关掉之后每个片段各走各的 ——
+   * 做"音画错位"这类效果时用户会主动关掉它。
+   *
+   * ⚠️ 用 ref 保存一份给 dragClip 读：dragClip 是 useCallback([])，
+   *    闭包里读 state 会永远读到第一次渲染时的值 ⇒ 开关点了没反应。
+   */
+  const [linkEnabled, setLinkEnabled] = useState(true)
+  const linkRef = useRef(true)
+  useEffect(() => {
+    let alive = true
+    getSetting('linkEnabled').then((saved) => {
+      if (!alive || typeof saved !== 'boolean') return
+      setLinkEnabled(saved)
+      linkRef.current = saved
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  const changeLinkEnabled = useCallback((next) => {
+    const value = Boolean(next)
+    setLinkEnabled(value)
+    linkRef.current = value
+    setSetting('linkEnabled', value).catch(() => {})
+  }, [])
+
   /** 轨道开关：整体替换式更新（Timeline 只传自己关心的那一份补丁） */
   const changeTrackState = useCallback((next) => {
     setTrackState(normalizeTrackState(next))
@@ -457,6 +793,27 @@ export default function App() {
 
   /* ---------------------- 草稿：保存 / 打开 / 自动保存 ---------------------- */
 
+  /**
+   * 当前工作区的草稿数据（**落盘与打包共用的唯一一份**）。
+   *
+   * 早先这段对象字面量只写在 persistDraft 里，打包素材包时又抄了一遍 ——
+   * 抄漏一个字段（比如 `aspect`）的后果是"包导到对面比例变回 16:9"，
+   * 而两边单独看都"保存成功"。所以只留这一个出口。
+   */
+  const draftDataOf = useCallback(
+    () => ({
+      clips: clipsRef.current,
+      assets,
+      playhead,
+      volume,
+      zoom,
+      /* 画面比例跟着**项目**走，不跟着应用走（理由见 aspect 的声明处） */
+      aspect,
+      createdAt: createdAt || new Date().toISOString()
+    }),
+    [aspect, assets, createdAt, playhead, volume, zoom]
+  )
+
   /** 把当前工作区写进当前草稿（没有就新建）；返回草稿摘要，失败返回 null */
   const persistDraft = useCallback(
     async ({ silent = true, name } = {}) => {
@@ -465,16 +822,7 @@ export default function App() {
       const summary = await saveDraft({
         id: draftId || undefined,
         name: name || projectName,
-        data: {
-          clips: clipsRef.current,
-          assets,
-          playhead,
-          volume,
-          zoom,
-          /* 画面比例跟着**项目**走，不跟着应用走（理由见 aspect 的声明处） */
-          aspect,
-          createdAt: createdAtValue
-        }
+        data: draftDataOf()
       })
       if (!summary) {
         if (!silent) toast('草稿保存失败：本地目录不可写')
@@ -493,8 +841,58 @@ export default function App() {
       if (!silent) toast(`已保存「${summary.name}」`)
       return summary
     },
-    [assets, aspect, createdAt, draftId, playhead, projectName, toast, volume, zoom]
+    [createdAt, draftDataOf, draftId, projectName, toast]
   )
+
+  /**
+   * 导出素材包：草稿 + 它引用的每一个素材 → 一个 `.yjpack`。
+   *
+   * 顺序刻意是「先落盘、再打包」：包里的 draft.json 必须是**用户眼前这一版**，
+   * 否则会出现"包打好了，但里面少我刚拖进去的那一段"（而且完全看不出来）。
+   * 素材缺失不阻断导出，但必须说出来 —— 静默打出半个包，到对面就是黑帧。
+   */
+  const handleExportPack = useCallback(async () => {
+    if (!clipsRef.current.length) {
+      toast.bad('时间线是空的，没有可打包的内容')
+      return
+    }
+    if (!window.yjai?.pack?.export) {
+      toast.bad('当前环境不支持导出素材包')
+      return
+    }
+    const saved = await persistDraft({ silent: true })
+    if (!saved) {
+      /* 落盘失败仍然允许打包（用户可以只要素材），但要说清"包里的草稿可能不是最新" */
+      toast.bad('草稿保存失败：包里的草稿可能不是最新一版')
+    }
+    const inspected = await window.yjai.pack.inspect(draftDataOf()).catch(() => null)
+    /* 体检结果只用来把"素材到底缺几个"提前算清楚（也便于界面/闸门核对）；
+       真正阻断与否由下面的导出结果决定 —— 缺文件不该阻断，但必须说出来。 */
+    if (inspected && inspected.missing && inspected.missing.length) {
+      toast.bad(`有 ${inspected.missing.length} 个素材找不到，将按离线导出`)
+    }
+    const result = await window.yjai.pack.export({
+      name: saved?.name || projectName || '工程',
+      data: draftDataOf()
+    })
+    if (!result || result.canceled) return
+    if (!result.ok) {
+      toast.bad(result.error || '导出素材包失败')
+      return
+    }
+    const sizeText = `${(Number(result.bytes || 0) / (1024 * 1024)).toFixed(1)} MB`
+    if (result.missing && result.missing.length) {
+      /* 缺素材要**说清是哪几个**（前三个名字），只说数字等于没说 */
+      const names = result.missing.slice(0, 3).map((item) => String(item.path).split(/[\\/]/).pop()).join('、')
+      toast.bad(
+        `素材包已导出（${result.packed} 个素材 / ${sizeText}），但有 ${result.missing.length} 个素材找不到：${names}${
+          result.missing.length > 3 ? ' 等' : ''
+        }`
+      )
+      return
+    }
+    toast(`素材包已导出：${result.packed} 个素材 / ${sizeText}`)
+  }, [draftDataOf, persistDraft, projectName, toast])
 
   /**
    * 自动保存：内容变了 1.2 秒后落盘。
@@ -608,6 +1006,31 @@ export default function App() {
     },
     [toast]
   )
+
+  /**
+   * 导入素材包：主进程解开并落成**新草稿**，这里再把它打开。
+   *
+   * 不覆盖同名草稿是刻意的 —— 包里是别人机器上的工程，
+   * 覆盖会不可逆地冲掉用户自己的东西。
+   */
+  const handleImportPack = useCallback(async () => {
+    if (!window.yjai?.pack?.import) {
+      toast.bad('当前环境不支持导入素材包')
+      return
+    }
+    const result = await window.yjai.pack.import()
+    if (!result || result.canceled) return
+    if (!result.ok) {
+      toast.bad(result.error || '导入素材包失败')
+      return
+    }
+    const list = await listDrafts()
+    setDrafts(list)
+    await handleOpenDraft({ id: result.id })
+    const missingCount = Array.isArray(result.missing) ? result.missing.length : 0
+    if (missingCount) toast.bad(`已导入「${result.name}」，但 ${missingCount} 个素材找不到（包本身就不完整）`)
+    else toast(`已导入「${result.name}」：${result.mediaCount} 个素材`)
+  }, [handleOpenDraft, toast])
 
   const handleDeleteDraft = useCallback(
     async (draft) => {
@@ -761,6 +1184,40 @@ export default function App() {
   )
 
   /**
+   * 选中片段（支持 Ctrl + 点选的多选）。
+   *
+   * 多选的**唯一消费者**目前是「新建复合片段」：选中集合记在 `selection.clipIds`，
+   * 而 `selection.clipId` 仍然是"主选中"——检查器、播放头跟随、角标全都只认它。
+   * 这样多选是**加法**，不是改掉原来的单选语义：任何只读 clipId 的地方行为不变，
+   * 不会出现"多选之后右栏空了"这种连带问题。
+   *
+   * @param {object|null} clip 片段（null = 取消选中）
+   * @param {{additive?: boolean}} [options] additive：Ctrl / Cmd 点选，切换这一段的选中态
+   */
+  const selectClip = useCallback((clip, options = {}) => {
+    if (!clip) {
+      setSelection(null)
+      return
+    }
+    setSelection((prev) => {
+      const base = Array.isArray(prev?.clipIds) && prev.clipIds.length
+        ? prev.clipIds
+        : prev?.clipId
+          ? [prev.clipId]
+          : []
+      if (!options.additive) {
+        return { ...(prev || {}), type: 'clip', clipId: clip.id, assetId: clip.assetId || '', clipIds: [clip.id] }
+      }
+      const has = base.includes(clip.id)
+      const nextIds = has ? base.filter((id) => id !== clip.id) : [...base, clip.id]
+      if (!nextIds.length) return null
+      /* 取消勾选的是主选中时，主选中顺位给集合里的最后一个 —— 右栏不能突然变空 */
+      const primary = has ? nextIds[nextIds.length - 1] : clip.id
+      return { ...(prev || {}), type: 'clip', clipId: primary, assetId: clip.assetId || '', clipIds: nextIds }
+    })
+  }, [])
+
+  /**
    * 删除片段。锁定轨上的片段拒删 —— 与参考一致，锁定拦的是结构性编辑；
    * 拒绝时明确说一句，不能"点了没反应"。
    */
@@ -772,7 +1229,18 @@ export default function App() {
         return
       }
       commitClips((list) => list.filter((item) => item.id !== clipId))
-      setSelection((current) => (current?.clipId === clipId ? null : current))
+      setSelection((current) => {
+        if (!current) return current
+        /* 多选集里也有它 ⇒ 从集合里摘掉，而不是只判断"主选中是不是它" */
+        const ids = (Array.isArray(current.clipIds) && current.clipIds.length
+          ? current.clipIds
+          : current.clipId
+            ? [current.clipId]
+            : []
+        ).filter((id) => id !== clipId)
+        if (!ids.length) return null
+        return { ...current, clipId: current.clipId === clipId ? ids[ids.length - 1] : current.clipId, clipIds: ids }
+      })
     },
     [commitClips, toast]
   )
@@ -860,6 +1328,20 @@ export default function App() {
     [commitClips, toast]
   )
 
+  /**
+   * 收藏 / 取消收藏一个素材。
+   *
+   * 存在 asset 上（而不是另开一张 id 列表）：素材本身就是草稿的一部分，
+   * `favorite` 跟着 assets 一起落盘，不需要"启动时按 id 回填"这一步 ——
+   * 那种做法在素材被删除/重导入后会留下永远对不上的幽灵 id。
+   *
+   * ⚠️ 用 setAssets 的函数式更新而不是读闭包里的 assets：
+   *    连点两下星标时，第二下读到的可能是旧列表，收藏会"闪一下又没了"。
+   */
+  const toggleAssetFavorite = useCallback((assetId) => {
+    setAssets((list) => list.map((item) => (item.id === assetId ? { ...item, favorite: !item.favorite } : item)))
+  }, [])
+
   const removeAsset = useCallback(
     (assetId) => {
       setAssets((list) => list.filter((item) => item.id !== assetId))
@@ -874,11 +1356,438 @@ export default function App() {
   /** 拖动片段改起点（拖动过程中高频调用，不进撤销栈 —— 快照由 pointerdown 记） */
   const dragClip = useCallback((clipId, patch) => {
     setClips((list) => {
+      /* 只有"平移起点"才联动；修剪 / 倍速 / 其它属性补丁一律只作用于目标片段。
+         ⚠️ 修剪也联动的话，拖一下右端会让整组一起变长 —— 那不是剪辑软件的行为，
+            而且会让"音画同步"这个前提在用户完全没预期的情况下被破坏。 */
+      if (patch && typeof patch.start === 'number' && !('duration' in patch) && !('offset' in patch)) {
+        const group = linkMovePatches(list, clipId, patch.start, linkRef.current)
+        const byId = new Map(group.map((item) => [item.id, item.start]))
+        const next = list.map((item) =>
+          byId.has(item.id) ? { ...item, start: byId.get(item.id), ...(item.id === clipId ? patch : {}) } : item
+        )
+        clipsRef.current = next
+        return next
+      }
       const next = list.map((item) => (item.id === clipId ? { ...item, ...patch } : item))
       clipsRef.current = next
       return next
     })
   }, [])
+
+  /**
+   * 画面层级：上移 / 下移一层（右键菜单）。
+   *
+   * 算术全在 `shared/layers.js`（`moveLayer` 返回的是**补丁数组**），
+   * 这里只负责把补丁打回片段表 —— 顺序的判定不能在这里再写一遍，
+   * 导出侧（主进程）排 overlay 链用的是同一个比较函数。
+   *
+   * 为什么要"重新编号"而不是 z±1：两段画中画同 z 时 z±1 反而可能不动，
+   * 用户点了没反应，而面板上什么提示都没有。重新编号后"点一次动一格"永远成立。
+   */
+  const moveLayerOf = useCallback(
+    (clipId, dir) => {
+      const patches = layersTable.moveLayer(clipsRef.current, clipId, dir)
+      if (!patches.length) {
+        toast(dir > 0 ? '已经在最上层了' : '已经在最下层了')
+        return
+      }
+      const byId = new Map(patches.map((item) => [item.id, item.z]))
+      commitClips((list) => list.map((item) => (byId.has(item.id) ? { ...item, z: byId.get(item.id) } : item)))
+      toast(dir > 0 ? '上移一层' : '下移一层')
+    },
+    [commitClips]
+  )
+
+  /**
+   * 复制一个片段（Alt + 拖动时用）。
+   *
+   * 为什么必须**同步返回新 id**：拖动是"按下那一刻决定拖谁、之后每帧改它"的模型，
+   * 而 React 的 state 要等到下一帧才把新片段交给 Timeline —— 返回 Promise 或
+   * 让调用方下一帧再找"最新的那个"都会在快速拖动时抓错片段。
+   * 这里在 commitClips 里同步写入 clipsRef，所以返回的 id 立刻可被 onDragClip 修改。
+   *
+   * 复制件的起点先与原片段重合，随后由拖动接管 —— 用户看到的是"拖出来的那一份"，
+   * 不是"凭空多出来一份、我拖的是原来的"。
+   */
+  const duplicateClip = useCallback(
+    (clipId) => {
+      const src = clipsRef.current.find((item) => item.id === clipId)
+      if (!src) return null
+      const id = nextId('clip')
+      commitClips((list) => [...list, { ...src, id }])
+      return id
+    },
+    [commitClips]
+  )
+
+  /**
+   * 新建复合片段（右键菜单「新建复合片段」）。
+   *
+   * 时间线上选中的这几段被**收进去**，位置上换成**一个**片段。
+   * 内部布局、坐标换算、展开规则全在 `shared/compound.js`（纯函数，另有闸门钉住），
+   * 这里只负责发号、落历史、给提示 —— 三处各算一遍是会算出三个数的。
+   *
+   * 允许只选一段：参考客户端也是这个行为（等于把这一段"封"起来，
+   * 之后要么整体搬、要么当嵌套的起点），而且它让"先复合再加东西"这条路径走得通。
+   */
+  const createCompound = useCallback(
+    (ids) => {
+      const wanted = (Array.isArray(ids) ? ids : [ids]).filter(Boolean)
+      if (!wanted.length) {
+        toast.bad('先在时间线上选中要合成的片段（Ctrl + 点选可多选）')
+        return
+      }
+      const chosen = clipsRef.current.filter((item) => wanted.includes(item.id))
+      const locked = chosen.find((item) => (trackStateRef.current.locked || []).includes(item.track))
+      if (locked) {
+        toast.bad(`「${locked.name}」所在轨道已锁定，先解锁再合成`)
+        return
+      }
+      const built = makeCompound(clipsRef.current, wanted, { id: nextId('clip') })
+      if (!built) {
+        toast.bad('选中的片段太短，没法合成复合片段')
+        return
+      }
+      commitClips(() => [...built.rest, built.clip])
+      setSelection({ type: 'clip', clipId: built.clip.id, clipIds: [built.clip.id], assetId: '' })
+      toast.good(`已合成复合片段（内部 ${built.clip.compound.children.length} 段，${built.clip.duration.toFixed(2)} 秒）`)
+    },
+    [commitClips, toast]
+  )
+
+  /**
+   * 解除复合片段：内部片段按**当前裁剪与倍速**还原到时间线上。
+   *
+   * ⚠️ 子片段 id 一律重发（见 shared/compound.js 里 ungroupCompound 的说明）：
+   *    同一个复合片段可能被复制过，各自解除时撞 id 会让"删一个动两个"跟着草稿走。
+   */
+  const ungroupClip = useCallback(
+    (clipId) => {
+      const target = clipsRef.current.find((item) => item.id === clipId)
+      if (!target || !isCompound(target)) {
+        toast.bad('这个片段不是复合片段')
+        return
+      }
+      if ((trackStateRef.current.locked || []).includes(target.track)) {
+        toast.bad('该轨已锁定，先解锁再解除复合')
+        return
+      }
+      const kids = ungroupCompound(target, () => nextId('clip'))
+      if (!kids.length) {
+        toast.bad('复合片段内部是空的，没法解除')
+        return
+      }
+      commitClips((list) => [...list.filter((item) => item.id !== clipId), ...kids])
+      setSelection({ type: 'clip', clipId: kids[0].id, clipIds: [kids[0].id], assetId: kids[0].assetId || '' })
+      toast.good(`已解除复合片段，还原 ${kids.length} 段`)
+    },
+    [commitClips, toast]
+  )
+
+  /* ------------------------- 时间区域（区间操作） -------------------------
+     「时间区域」= 时间线上框出来的一段 [start, end)，对它做整体操作：
+     删除（后面内容前移）/ 复制 / 剪切 / 粘贴到播放头 / 只导出这一段。
+     算术全在 shared/region.js（导出侧读的是同一份），这里只负责状态与提示。 */
+
+  /** 当前**生效**的区域：两端都标了、且够长。半开（只标了入点）时返回 null */
+  const liveRegion = useCallback(() => {
+    const raw = regionRef.current
+    if (!raw || raw.end === null || raw.end === undefined) return null
+    return normalizeRegion(raw.start, raw.end)
+  }, [])
+
+  /**
+   * 标入点 / 出点（标尺 Shift+拖动、I / O 键、拖两端手柄，全部走这一个入口）。
+   *
+   * 语义三条，都是为了"不替用户做决定"：
+   *   · 标入点：只保留终点（若终点在入点之后），否则终点清空 —— **不编一个长度**；
+   *   · 标出点：没有区域时入点默认 0（"从头到播放头"），有区域时保留入点；
+   *   · 出点比入点短 ⇒ 报一句，不改状态。静默忽略会让人以为按键没接上。
+   */
+  const setRegionRange = useCallback(
+    (a, b) => {
+      const start = Math.max(0, Number(a) || 0)
+      const end = Math.max(0, Number(b) || 0)
+      const merged = normalizeRegion(start, end)
+      if (!merged) {
+        /* 拖得太短 / 点了一下：当作"取消区域"，不弹提示（Shift+点错一下不该被教育） */
+        setRegion(null)
+        return false
+      }
+      setRegion(merged)
+      return true
+    },
+    []
+  )
+
+  const markRegion = useCallback(
+    (which, at) => {
+      const t = Math.max(0, Number(at) || 0)
+      const cur = regionRef.current
+      if (which === 'in') {
+        const keepEnd = cur && cur.end !== null && cur.end !== undefined && cur.end > t + 0.05 ? cur.end : null
+        setRegion({ start: Number(t.toFixed(4)), end: keepEnd })
+        toast(keepEnd ? '已标入点' : '已标入点：把播放头移到结束处，按 O 标出点')
+        return
+      }
+      const start = cur && cur.start !== null && cur.start !== undefined ? Number(cur.start) : 0
+      if (!(t - start >= 0.05)) {
+        toast.bad('出点必须在入点之后（至少 0.05 秒）')
+        return
+      }
+      setRegion({ start: Number(start.toFixed(4)), end: Number(t.toFixed(4)) })
+      toast.good(`已标出点（区间 ${(t - start).toFixed(2)} 秒）`)
+    },
+    [toast]
+  )
+
+  /**
+   * 录音落成片段：素材入库 + 音频轨在**播放头**处插一段。
+   *
+   * 为什么不信 asset.duration 就够：MediaRecorder 产的 webm 没有时长，
+   * 主进程拿的是渲染层测出来的墙钟时间（见 recording:save 的注释）；
+   * 这里再兜一层（asset.duration 优先，缺了用调用方给的 duration），
+   * 免得某一边将来改了字段，落成 0 秒 —— 0 秒片段在时间线上是一根看不见的细线。
+   */
+  const addRecordingClip = useCallback(
+    (row, measured) => {
+      if (!row || !row.url) {
+        toast.bad('录音已保存，但拿不到可播放的地址')
+        return
+      }
+      const seconds = Number(row.duration) > 0 ? Number(row.duration) : Number(measured) > 0 ? Number(measured) : 0
+      if (!(seconds > 0.05)) {
+        toast.bad('录音太短，没有插入到时间线')
+        return
+      }
+      const asset = {
+        id: nextId('asset'),
+        name: row.name || '配音',
+        kind: 'audio',
+        url: row.url,
+        path: row.path || '',
+        size: row.size || 0,
+        source: 'local',
+        duration: seconds,
+        createdAt: new Date().toISOString()
+      }
+      setAssets((prev) => [asset, ...prev.filter((item) => item.url !== asset.url)])
+      const id = nextId('clip')
+      const start = Math.max(0, Number(playhead) || 0)
+      commitClips((list) => [
+        ...list,
+        {
+          id,
+          track: 'audio',
+          assetId: asset.id,
+          name: asset.name,
+          url: asset.url,
+          path: asset.path,
+          kind: 'audio',
+          text: '',
+          start,
+          duration: Number(seconds.toFixed(3)),
+          offset: 0,
+          /* 源就是这一段本身：往后拖没有更多内容（拖出去会是静音，长度上限靠它兜） */
+          sourceDuration: Number(seconds.toFixed(3))
+        }
+      ])
+      setSelection({ type: 'clip', clipId: id, clipIds: [id], assetId: asset.id })
+      toast.good(`已插入配音片段（${seconds.toFixed(2)} 秒）到 ${timecode(start, false)}`)
+    },
+    [commitClips, playhead, toast]
+  )
+
+  /** 删除区域：区间内容消失，后面的内容整体前移（ripple） */
+  const deleteRegion = useCallback(() => {
+    const target = liveRegion()
+    if (!target) {
+      toast('先在标尺上 Shift + 拖动框出一段区间（或按 I / O 标入点与出点）')
+      return
+    }
+    if (!clipsRef.current.length) {
+      toast('时间线还是空的，没有可删的内容')
+      return
+    }
+    const span = regionSpan(target)
+    commitClips((list) => removeRegion(list, target))
+    /* 标记也要跟着结算：区间内的删掉、区间之后的左移 span。
+       只挪片段不挪标记，标记就会"指到别的画面上"——踩点标记从此错开 span 秒。 */
+    setMarkers((list) =>
+      (Array.isArray(list) ? list : [])
+        .filter((at) => at < target.start - 1e-4 || at > target.end + 1e-4)
+        .map((at) => (at > target.end ? Math.max(0, Number((at - span).toFixed(4))) : at))
+    )
+    setRegion(null)
+    toast.good(`已删除 ${timecode(target.start, false)} – ${timecode(target.end, false)} 的区间：后面内容前移 ${span.toFixed(2)} 秒`)
+  }, [commitClips, liveRegion, toast])
+
+  /** 复制区域内容（进会话内剪贴板）。返回取到的内容，剪切复用它避免算两遍 */
+  const copyRegionContent = useCallback(() => {
+    const target = liveRegion()
+    if (!target) {
+      toast('先在标尺上 Shift + 拖动框出一段区间（或按 I / O 标入点与出点）')
+      return null
+    }
+    const picked = copyRegionOf(clipsRef.current, target)
+    if (!picked.items.length) {
+      toast('这段区间里没有片段')
+      return null
+    }
+    setRegionClip(picked)
+    toast.good(`已复制 ${picked.items.length} 段（${picked.span.toFixed(2)} 秒）`)
+    return picked
+  }, [liveRegion, toast])
+
+  /** 剪切区域：复制 + 删除。中途失败（区间里没内容）就什么都不做，不删空 */
+  const cutRegionContent = useCallback(() => {
+    const picked = copyRegionContent()
+    if (!picked) return
+    const target = liveRegion()
+    if (!target) return
+    const span = regionSpan(target)
+    commitClips((list) => removeRegion(list, target))
+    setMarkers((list) =>
+      (Array.isArray(list) ? list : [])
+        .filter((at) => at < target.start - 1e-4 || at > target.end + 1e-4)
+        .map((at) => (at > target.end ? Math.max(0, Number((at - span).toFixed(4))) : at))
+    )
+    setRegion(null)
+  }, [commitClips, copyRegionContent, liveRegion])
+
+  /** 粘贴到播放头。落点由播放头决定，方向键移一下再粘 = 常用的"盖到某处" */
+  const pasteRegionContent = useCallback(() => {
+    if (!regionClip || !regionClip.items.length) {
+      toast('还没有复制过区间内容：先框一段区间，点「复制」')
+      return
+    }
+    const at = Math.max(0, Number(playhead) || 0)
+    const fresh = pasteRegionAt(regionClip.items, at, () => nextId('clip'))
+    commitClips((list) => [...list, ...fresh])
+    setSelection({ type: 'clip', clipId: fresh[0].id, clipIds: fresh.map((item) => item.id), assetId: fresh[0].assetId || '' })
+    toast.good(`已粘贴 ${fresh.length} 段到播放头（${timecode(at, false)}）`)
+  }, [commitClips, playhead, regionClip, toast])
+
+  /** 「只导出区域」：打开导出面板，面板会带上这个区间（载荷 options.range） */
+  const exportRegion = useCallback(() => {
+    if (!liveRegion()) {
+      toast('先在标尺上框出一段区间')
+      return
+    }
+    setExportOpen(true)
+  }, [liveRegion, toast])
+
+  /**
+   * 新建多机位片段（右键菜单「新建多机位」）。
+   *
+   * 与复合片段不同，这里**必须至少两路**：一路的"多机位"在画面上与普通片段完全等价，
+   * 却多出机位面板与切换键这两个没有意义的入口（点了只会切到同一路，什么都没发生）。
+   * 所以不足两路时明确报错，不偷偷合成。
+   *
+   * 机位之间的"同步"取各片段在时间线上的相对起点（见 shared/multicam.js 的说明）——
+   * 这要求用户先把两路摆到画面对得上，界面上也是这么提示的。
+   */
+  const createMulticamClip = useCallback(
+    (ids) => {
+      const wanted = (Array.isArray(ids) ? ids : [ids]).filter(Boolean)
+      if (wanted.length < 2) {
+        toast.bad('多机位至少要选两段画面素材（Ctrl + 点选可多选）')
+        return
+      }
+      const chosen = clipsRef.current.filter((item) => wanted.includes(item.id))
+      const locked = chosen.find((item) => (trackStateRef.current.locked || []).includes(item.track))
+      if (locked) {
+        toast.bad(`「${locked.name}」所在轨道已锁定，先解锁再建多机位`)
+        return
+      }
+      const noSource = chosen.filter((item) => !(item.path || item.url))
+      if (noSource.length) {
+        toast.bad('选中的片段里有不能当机位的（复合片段 / 字幕没有可解码的画面源）')
+        return
+      }
+      const built = makeMulticam(clipsRef.current, wanted, { id: nextId('clip') })
+      if (!built) {
+        toast.bad('这些片段对不上：没有公共的重叠区间（或时长太短），没法建成多机位')
+        return
+      }
+      commitClips(() => [...built.rest, built.clip])
+      setSelection({ type: 'clip', clipId: built.clip.id, clipIds: [built.clip.id], assetId: '' })
+      toast.good(`已建立多机位片段（${built.clip.multicam.angles.length} 路，${built.clip.duration.toFixed(2)} 秒）`)
+    },
+    [commitClips, toast]
+  )
+
+  /**
+   * 切换机位：在播放头所在处落一个切换点（之后一直用这一路，直到下一个切换点）。
+   *
+   * ⚠️ 播放头 → **节目时间**的换算必须乘倍速：`cuts[].at` 是内部秒，播 2 倍速时
+   *    时间线上过 1 秒、节目里已经走了 2 秒。少乘这一下，切换点会落在"比按下的地方早一半"，
+   *    而成片与预览**同错**（同错最难查：画面上看是"切早了"，但怎么对数都对不上）。
+   */
+  const switchMulticamAngle = useCallback(
+    (clipId, angleIndex, at = playhead) => {
+      const target = clipsRef.current.find((item) => item.id === clipId)
+      if (!target || !isMulticam(target)) {
+        toast.bad('这个片段不是多机位片段')
+        return
+      }
+      if ((trackStateRef.current.locked || []).includes(target.track)) {
+        toast.bad('该轨已锁定，先解锁再切换机位')
+        return
+      }
+      const span = multicamSpan(target)
+      const rate = clipSpeed(target) || 1
+      /* 播放头在多机位片段之外时夹到两端：落在片段上就是"从这一刻起用这一路"，
+         夹到边界等于"从片段开头 / 把最后一个切换点改掉"，都是用户能预期的结果。 */
+      const local = (Number(at) - Number(target.start)) * rate + Number(target.offset || 0)
+      const p = Math.min(span, Math.max(0, local))
+      const patch = setMulticamCut(target, p, angleIndex)
+      if (!patch) return
+      commitClips((list) => list.map((item) => (item.id === clipId ? { ...item, ...patch } : item)))
+      const angle = target.multicam.angles[angleIndex]
+      toast.good(`已切到「${angle?.name || `机位 ${angleIndex + 1}`}」（节目 ${p.toFixed(2)} 秒处）`)
+    },
+    [commitClips, playhead, toast]
+  )
+
+  /** 取声方式：单一机位 / 跟着画面切 / 静音（三种在展开时走三条不同的路） */
+  const changeMulticamAudio = useCallback(
+    (clipId, mode, angleIndex) => {
+      const target = clipsRef.current.find((item) => item.id === clipId)
+      if (!target || !isMulticam(target)) return
+      const patch = setMulticamAudio(target, mode, angleIndex)
+      if (!patch) return
+      commitClips((list) => list.map((item) => (item.id === clipId ? { ...item, ...patch } : item)))
+    },
+    [commitClips]
+  )
+
+  /**
+   * 解除多机位：把**当前切换结果**摊回时间线（每个区间一段画面 + 一条取声音轨）。
+   * id 一律重发，理由与解除复合完全相同（同一个多机位可能被复制过多份）。
+   */
+  const ungroupMulticamClip = useCallback(
+    (clipId) => {
+      const target = clipsRef.current.find((item) => item.id === clipId)
+      if (!target || !isMulticam(target)) {
+        toast.bad('这个片段不是多机位片段')
+        return
+      }
+      if ((trackStateRef.current.locked || []).includes(target.track)) {
+        toast.bad('该轨已锁定，先解锁再解除多机位')
+        return
+      }
+      const kids = ungroupMulticam(target, () => nextId('clip'))
+      if (!kids.length) {
+        toast.bad('多机位片段是空的，没法解除')
+        return
+      }
+      commitClips((list) => [...list.filter((item) => item.id !== clipId), ...kids])
+      setSelection({ type: 'clip', clipId: kids[0].id, clipIds: [kids[0].id], assetId: kids[0].assetId || '' })
+      toast.good(`已解除多机位，还原 ${kids.length} 段`)
+    },
+    [commitClips, toast]
+  )
 
   /**
    * 在 `at` 秒处把某个片段切成两段。
@@ -906,19 +1815,29 @@ export default function App() {
         toast.bad('播放头不在这个片段内部，无法分割')
         return false
       }
-      // 右半段的入点要跟着往右挪，否则导出时它会把源文件从头再播一遍
+      /**
+       * 右半段的入点要跟着往右挪，否则导出时它会把源文件从头再播一遍。
+       *
+       * ⚠️ 挪多少要**乘倍速**：offset 是源素材里的秒数，而 `at - start` 是时间线上的秒数。
+       *    2 倍速片段上往右切 1 秒，源里已经过去了 2 秒 —— 少乘这一下，
+       *    切出来的右半段会从"比正确位置早一半"的地方开始播（画面回头跳一下，且不报错）。
+       *    有曲线时按曲线累计面积算（`curveSourceTime`），与单段的源消耗同一个口径。
+       */
       const base = Number(target.offset) || 0
+      const cutOffset = readCurve(target)
+        ? curveSourceTime(target, at)
+        : base + (at - target.start) * clipSpeed(target)
       const left = { ...target, duration: at - target.start }
       const right = {
         ...target,
         id: nextId('clip'),
         start: at,
         duration: target.start + target.duration - at,
-        offset: base + (at - target.start)
+        offset: Number(Number(cutOffset).toFixed(4))
       }
       commitClips((list) => list.flatMap((item) => (item.id === target.id ? [left, right] : [item])))
       // 选中右半段：用户接着多半就是想修剪它
-      setSelection({ type: 'clip', clipId: right.id, assetId: right.assetId })
+      setSelection({ type: 'clip', clipId: right.id, clipIds: [right.id], assetId: right.assetId })
       toast.good('已在播放头处分割')
       return true
     },
@@ -929,6 +1848,62 @@ export default function App() {
   const splitClip = useCallback(() => {
     splitClipAt(selection?.clipId || '', playhead)
   }, [playhead, selection, splitClipAt])
+
+  /**
+   * 按场景分割（右键菜单）。
+   *
+   * 三步：主进程 ffmpeg 检测 → 渲染层把源秒换算成时间线秒（shared/scenes.js）
+   * → 在片段表上切成若干段。每一步都要"说不出来原因就不动手"：
+   *   · 倒放 / 曲线变速片段不支持（换算口径对不齐，见 shared/scenes.js 的说明）；
+   *   · 图片、文字素材没有"场景"可言；
+   *   · 一个切点都没检出来是**合法结果**，要如实说"整段就是一个镜头"，
+   *     不能静默什么都不做 —— 那样用户会以为按钮坏了。
+   */
+  const splitByScenes = useCallback(
+    async (clipId) => {
+      const target = clipsRef.current.find((item) => item.id === clipId)
+      if (!target) return
+      const support = scenesTable.sceneSupport(target)
+      if (!support.ok) {
+        toast.bad(support.reason)
+        return
+      }
+      if (target.kind === 'image' || target.kind === 'text' || !target.url) {
+        toast.bad('这一段没有可分析的画面（图片 / 文字素材没有场景切换）')
+        return
+      }
+      if (trackStateRef.current.locked.includes(target.track)) {
+        toast.bad('轨道已锁定，解除锁定后才能分割')
+        return
+      }
+      toast('正在分析场景…')
+      let result = null
+      try {
+        result = await window.yjai.media.scenes({
+          url: target.url,
+          threshold: scenesTable.DEFAULT_THRESHOLD,
+          duration: Number(target.sourceDuration) || 0
+        })
+      } catch (error) {
+        toast.bad(`场景检测失败：${(error && error.message) || '未知原因'}`)
+        return
+      }
+      if (!result || !result.ok) {
+        toast.bad((result && result.error) || '场景检测失败')
+        return
+      }
+      const cuts = scenesTable.timelineCuts(target, result.scenes)
+      if (!cuts.length) {
+        toast('这一段没有检测到场景切换（整段就是一个镜头）')
+        return
+      }
+      commitClips((list) =>
+        list.flatMap((item) => (item.id === target.id ? scenesTable.splitByScenes(target, cuts, () => nextId('clip')) : [item]))
+      )
+      toast.good(`已按场景分割为 ${cuts.length + 1} 段`)
+    },
+    [commitClips, toast]
+  )
 
   /* ------------------------------ 本地导入 ------------------------------ */
 
@@ -974,12 +1949,14 @@ export default function App() {
   )
 
   const handlePickMedia = useCallback(async () => {
-    const rows = await pickMedia()
+    /* mode 必须在**选文件之前**就定：主进程拿到对话框结果后立刻要决定
+       "引用原路径"还是"复制一份到素材目录"（见 media:pick 的注释）。 */
+    const rows = await pickMedia({ mode: importMode })
     if (!rows.length) return
     const created = await importLocalMedia(rows)
     // 导入后自动选中第一个，属性面板能立刻显示它
     if (created[0]) setSelection({ type: 'asset', assetId: created[0].id })
-  }, [importLocalMedia])
+  }, [importLocalMedia, importMode])
 
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
@@ -1050,19 +2027,35 @@ export default function App() {
    *    放到调用处去做，迟早有一个入口只写了 `speed` 忘了改 `duration` ——
    *    那种片段预览会照 2 倍速播、时间线上却还占着原长，
    *    于是后面的片段被它压住一截，而界面上没有任何提示。
+   *
+   * ⚠️ 还有第二件事：**后面的片段要跟着平移**（ripple）。
+   *    以前只改自己的 duration —— 变速把片段拉长（曲线让整段变慢、或设成 0.5x）之后，
+   *    它会**盖住后面那一段**：同一条轨上两个剪片叠在一起，时间线上一眼看去像坏了，
+   *    而播放时又是"上面那个赢"，用户根本不知道为什么后半段没播。
+   *    现在按 delta 把**同轨、原本在它之后**的片段整体平移，间隙与重叠都不会凭空出现。
+   *    只动同轨：跨轨（配乐、字幕、画中画）本来就按绝对时间摆放，不该被连带推走。
    */
   const patchClip = useCallback(
     (clipId, patch) => {
       if (!clipId) return
-      commitClips((list) =>
-        list.map((item) => {
-          if (item.id !== clipId) return item
-          if (Object.prototype.hasOwnProperty.call(patch || {}, 'speed')) {
-            return { ...item, ...patch, ...(speedPatch(item, patch.speed) || {}) }
+      commitClips((list) => {
+        const target = list.find((item) => item.id === clipId)
+        if (!target) return list
+        const withSpeed = Object.prototype.hasOwnProperty.call(patch || {}, 'speed')
+        const extra = withSpeed ? speedPatch(target, patch.speed) : null
+        if (!extra) {
+          return list.map((item) => (item.id === clipId ? { ...item, ...patch } : item))
+        }
+        const oldEnd = Number(target.start || 0) + Number(target.duration || 0)
+        const delta = Number(extra.duration) - Number(target.duration)
+        return list.map((item) => {
+          if (item.id === clipId) return { ...item, ...patch, ...extra }
+          if (Math.abs(delta) > 1e-6 && item.track === target.track && Number(item.start) >= oldEnd - EPSILON) {
+            return { ...item, start: Number((Number(item.start) + delta).toFixed(3)) }
           }
-          return { ...item, ...patch }
+          return item
         })
-      )
+      })
     },
     [commitClips]
   )
@@ -1375,25 +2368,99 @@ export default function App() {
   /**
    * 真正参与预览与导出的片段：停用的、隐藏轨上的、静音轨上的音频一律退出。
    * 时间线显示仍用全量 clips（停用的片段要留在原地变灰，不能凭空消失）。
+   *
+   * ⚠️ 顺序不能反：**先展开复合片段，再结算轨道开关**。
+   *    反过来的话，复合片段内部放在音频轨上的那几段会绕过「外层视频轨被静音」
+   *    这件事 —— 画面静了、声音还在响，而成片里也一样（两处同错，对不上账更难查）。
    */
   const activeClips = useMemo(
-    () => effectiveClips(clips, trackState),
+    () =>
+      effectiveClips(
+        /* 先摊平多机位（它内部不会包住复合片段），再摊平复合片段 —— 两道都跑，
+           单独任一道都会让另一类容器原样漏进合成器（而成片里它们是"没有 url 的片段"）。 */
+        expandCompounds(expandMulticams(clips, { trackState }), { trackState }),
+        trackState
+      ),
     [clips, trackState]
   )
 
   const composite = useMemo(
     () =>
-      compositeAt(activeClips, assets, playhead, {
+      compositeAt(makePreviewClips(activeClips), previewAssets, playhead, {
         fallbackClip: isSubtitleClip(selectedClip) ? null : selectedClip
       }),
-    [activeClips, assets, playhead, selectedClip]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeClips, previewAssets, previewQuality, proxyMap, playhead, selectedClip]
   )
+  /* 给"按需生成代理"那条 effect 读：它按合成结果判断今天要用哪些素材，
+     但不能把 composite 放进依赖（每帧都变，会让播放时不断重跑）。 */
+  previewCompositeRef.current = composite
 
-  /** 主层对应的片段：角标（调色）与画面特效跟它走，口径与预览画面同一个来源 */
-  const mainClip = useMemo(
-    () => (composite.main ? clips.find((item) => item.id === composite.main.id) || null : null),
-    [clips, composite.main]
-  )
+  /**
+   * 按需为"这一刻真的用到的视频素材"准备代理。
+   *
+   * 判据是素材在**预览合成结果里出现过**（主层 / 叠加层 / 字幕素材），
+   * 不是"素材库里有"。理由是后者会把整库素材都转一遍 —— 用户切个档位要等好几分钟。
+   *
+   * ⚠️ 这条 effect 必须住在 `activeClips` / `composite` **之后**：
+   *    依赖数组在渲染期求值，写在前面会 TDZ（白屏 + 一行 ReferenceError）。
+   */
+  useEffect(() => {
+    const height = proxyTable.heightFor(previewQuality)
+    if (!height) return undefined
+    if (!window.yjai?.media?.proxy) return undefined
+    const wanted = new Set()
+    /* 只给**视频**做代理：图片/字幕素材本来就是"一张图躺在那儿"，转成 mp4 只会更慢更糊；
+       音频轨没有视频流，`scale` 滤镜会直接报错。 */
+    for (const layer of previewCompositeRef.current?.layers || []) {
+      if (layer.url && layer.kind === 'video') wanted.add(layer.url)
+    }
+    for (const layer of previewCompositeRef.current?.pip || []) {
+      if (layer.url && layer.kind === 'video') wanted.add(layer.url)
+    }
+    let alive = true
+    for (const sourceUrl of wanted) {
+      /* 只给视频做代理：图片/字幕素材本来就是"一张图躺在那儿"，转成 mp4 只会更慢更糊 */
+      const key = `${sourceUrl}|${height}`
+      if (proxyAskedRef.current.has(key)) continue
+      proxyAskedRef.current.add(key)
+      setProxyMap((prev) => ({ ...prev, [sourceUrl]: { url: '', height, state: 'pending' } }))
+      Promise.resolve(window.yjai.media.proxy({ url: sourceUrl, height }))
+        .then((result) => {
+          if (!alive) return
+          if (!result || !result.ok || !result.url) {
+            setProxyMap((prev) => ({ ...prev, [sourceUrl]: { url: '', height, state: 'failed' } }))
+            /* 失败要**说出来**：静默回落原片会让人以为"这个档位没用" */
+            toast.bad((result && result.error) || '生成预览代理失败，仍用原片')
+            return
+          }
+          setProxyMap((prev) => ({ ...prev, [sourceUrl]: { url: result.url, height, state: 'ready' } }))
+        })
+        .catch(() => {
+          if (!alive) return
+          setProxyMap((prev) => ({ ...prev, [sourceUrl]: { url: '', height, state: 'failed' } }))
+        })
+    }
+    return () => {
+      alive = false
+    }
+    // 依赖 activeClips：换了片段、加了素材之后，"这一刻用到的素材"集合会变
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewQuality, activeClips, toast])
+
+  /**
+   * 主层对应的片段：角标（调色）与画面特效跟它走，口径与预览画面同一个来源。
+   *
+   * ⚠️ 复合片段的内部片段 id 是 `父id~子id`，在 clips 里**查不到** ——
+   *    查不到时退回它归属的那个复合片段（ownerId）：用户选中的是外层那一个，
+   *    角标与检查器本来就该跟着外层走。
+   */
+  const mainClip = useMemo(() => {
+    if (!composite.main) return null
+    const direct = clips.find((item) => item.id === composite.main.id)
+    if (direct) return direct
+    return composite.main.ownerId ? clips.find((item) => item.id === composite.main.ownerId) || null : null
+  }, [clips, composite.main])
 
   const timelineDuration = useMemo(
     () => Math.max(30, ...clips.map((item) => item.start + item.duration)) + 10,
@@ -1554,6 +2621,23 @@ export default function App() {
       toast('已清空时间线')
     },
     toggleSnap: () => setSnap((value) => !value),
+    /* 时间区域的三条键：入点 / 出点落在**播放头**，删除按当前区间结算 */
+    regionIn: () => markRegion('in', playhead),
+    regionOut: () => markRegion('out', playhead),
+    regionDelete: () => deleteRegion(),
+    /* 处理函数每次渲染整体重建，所以这里读 playhead 拿到的就是当前值
+       （不需要 ref 镜像 —— 那是在依赖表里不能放状态时才用的手段） */
+    toggleMarker: () => toggleMarkerAt(playhead),
+    prevMarker: () => {
+      const next = stepMarker(markers, playhead, -1)
+      if (next === null) return toast('播放头之前没有标记')
+      setPlayhead(next)
+    },
+    nextMarker: () => {
+      const next = stepMarker(markers, playhead, 1)
+      if (next === null) return toast('播放头之后没有标记')
+      setPlayhead(next)
+    },
     playPause: () => setPlaying((value) => !value),
     toStart: () => setPlayhead(0),
     toEnd: () => setPlayhead(contentEnd()),
@@ -1603,6 +2687,29 @@ export default function App() {
        * 且弹窗开着时组件那个监听器照样在跑，正是本项目「全工程只挂一个 keydown」
        * 这条约定要防的事。现在统一在这里。
        */
+      /**
+       * 导出面板的 Esc：它是一层自定义 `.mask`（不是 Modal 组件），没有自己的键盘处理。
+       * 不加这一条，从时间线「只导出」进来的用户按 Esc 会觉得界面卡住了 ——
+       * 而这层遮罩盖住整个工作台，点错地方只会关掉面板、什么都不会发生。
+       */
+      /* 录音面板同理：它是自定义 mask，Esc 要能关；但**录音中不许关** ——
+         关掉会把麦克风一起放掉，用户以为录好了，其实什么都没有。 */
+      if (event.key === 'Escape' && recorderOpen && !dialog) {
+        event.preventDefault()
+        if (recorderBusy) {
+          toast('正在录音，先按「停止录音」再关闭')
+          return
+        }
+        setRecorderOpen(false)
+        return
+      }
+
+      if (event.key === 'Escape' && exportOpen && !dialog) {
+        event.preventDefault()
+        setExportOpen(false)
+        return
+      }
+
       if (event.key === 'Escape' && !dialog && !exportOpen) {
         if (tlFull) {
           event.preventDefault()
@@ -1614,6 +2721,48 @@ export default function App() {
           toggleFullscreen()
           return
         }
+        /* 两个"退出"都不适用时：**取消选中**。
+           为什么要有：在预览里拖歪了、在时间线上点错了，参考客户端都是按 Esc 退出选中态；
+           没有它，用户只能去点一下空白处 —— 而预览里几乎不存在"空白"（画面铺满画布）。
+           ⚠️ 必须排在全屏之后：全屏时 Esc 的语义是"退出全屏"，不是"取消选中"。 */
+        if (selection) {
+          setSelection(null)
+          return
+        }
+      }
+
+      /**
+       * 多机位切角：**1–9** 直接切到第 N 路（参考客户端也是这么按的，剪辑台上最顺手）。
+       *
+       * 三个前提，缺一个都会误伤：
+       *   · 选中的片段确实是多机位（否则按 1 什么都不该发生，更不该去吃这个键）；
+       *   · 不带修饰键（Ctrl+1 之类留给以后的一倍速等动作）；
+       *   · 焦点不在输入框（重命名素材时敲数字必须是数字）。
+       * ⚠️ 这条不算 keymap 里的动作：机位序号是**数据**（有几路随素材变），
+       *    不是可重绑的键位；塞进 ACTIONS 会让「快捷键」页出现 9 条一样的条目。
+       */
+      if (
+        !dialog &&
+        !exportOpen &&
+        page === 'editor' &&
+        selectedClip &&
+        isMulticam(selectedClip) &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        /^[1-9]$/.test(event.key) &&
+        !isTypingTarget(event.target)
+      ) {
+        const index = Number(event.key) - 1
+        if (index >= selectedClip.multicam.angles.length) {
+          event.preventDefault()
+          toast.bad(`这个多机位只有 ${selectedClip.multicam.angles.length} 路`)
+          return
+        }
+        event.preventDefault()
+        switchMulticamAngle(selectedClip.id, index, playhead)
+        return
       }
 
       const combo = comboOf(event)
@@ -1644,7 +2793,24 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [dialog, exportOpen, keymap, page, tlFull, fullscreen, toggleFullscreen])
+    /* selectedClip / playhead / switchMulticamAngle 必须进依赖：它们变了而监听器不重挂，
+       按数字键就会切到"上一次渲染时选中的那一段"和旧播放头上。 */
+  }, [
+    dialog,
+    exportOpen,
+    keymap,
+    page,
+    tlFull,
+    fullscreen,
+    toggleFullscreen,
+    selection,
+    selectedClip,
+    playhead,
+    switchMulticamAngle,
+    toast,
+    recorderOpen,
+    recorderBusy
+  ])
 
   /** 中栏内容：面板型分类走 SidePanels，其余走素材网格 */
   const renderCenterPane = () => {
@@ -1694,6 +2860,7 @@ export default function App() {
         onSelect={(asset) => setSelection({ type: 'asset', assetId: asset.id })}
         selection={selection}
         onImport={handlePickMedia}
+        onToggleFavorite={toggleAssetFavorite}
       />
     )
   }
@@ -1735,6 +2902,9 @@ export default function App() {
             onOpenDraft={handleOpenDraft}
             onSaveDraft={() => persistDraft({ silent: false })}
             onSaveDraftAs={handleSaveDraftAs}
+            /* 素材包：导出 = 草稿 + 全部素材收成一个 .yjpack；导入 = 解成一份新草稿 */
+            onExportPack={handleExportPack}
+            onImportPack={handleImportPack}
             /* 「帮助」下拉：使用指引是 8 步引导并能跳到对应页，关于是本机构建信息 */
             onOpenGuide={() => setDialog('guide')}
             onAbout={() => setDialog('about')}
@@ -1823,12 +2993,19 @@ export default function App() {
               /* 画面比例：预览这里切，导出按同一个值裁（真源共用一份表） */
               aspect={aspect}
               onAspect={setAspect}
+              /* 预览里的直接操作：选中与时间线、右栏共用同一个 selection */
+              selectedClipId={selection?.clipId || null}
+              onSelectClip={(id) => setSelection(id ? { type: 'clip', clipId: id } : null)}
+              onPatchClip={patchClip}
+              onSnapshot={snapshotClips}
             />
 
             <Inspector
               asset={selectedClipAsset}
               clip={selectedClip}
               clips={clips}
+              /* HDR 标注：主进程 ffprobe 的结论，按 path 查 */
+              hdrOf={(filePath) => (filePath ? hdrMap[filePath] || null : null)}
               projectName={projectName}
               createdAt={createdAt}
               onProjectNameChange={changeProjectName}
@@ -1843,6 +3020,13 @@ export default function App() {
               onTimelineNameChange={changeTimelineName}
               inspTab={inspTab}
               onInspTab={setInspTab}
+              playhead={playhead}
+              /* 标记要进检查器：「按标记卡点」用它当重音点（曲线变速那一组） */
+              markers={markers}
+              /* 多机位：切角 / 取声方式 / 解除。播放头也一起给 —— 切角落在"这一刻" */
+              onSwitchMulticamAngle={switchMulticamAngle}
+              onMulticamAudio={changeMulticamAudio}
+              onUngroupMulticam={ungroupMulticamClip}
             />
 
             {/* 三根列宽分隔条，各占一条缝列（grid 列 2/4/6） */}
@@ -1887,9 +3071,39 @@ export default function App() {
             /* 轨道开关的真源在这里：预览/导出按 effectiveClips 结算（见上） */
             trackState={trackState}
             onTrackState={changeTrackState}
+            /* 用户标记：打点/跳转/清除。它不进成片，所以只给时间线用 */
+            /* 剪辑联动开关（默认开）：拖动片段时同源画面与声音一起动 */
+            linkEnabled={linkEnabled}
+            onToggleLink={() => changeLinkEnabled(!linkEnabled)}
+            markers={markers}
+            onToggleMarker={toggleMarkerAt}
+            onClearMarkers={() => setMarkers([])}
+            onStepMarker={(dir) => {
+              const next = stepMarker(markers, playhead, dir)
+              if (next === null) return
+              setPlayhead(next)
+            }}
             onToggleClipEnabled={toggleClipEnabled}
             onRevealClip={revealClip}
             onReplaceClip={replaceClipSource}
+            /* 复合片段：新建吃多选集合，解除吃当前那一个 */
+            onCreateCompound={createCompound}
+            onUngroupClip={ungroupClip}
+            onCreateMulticam={createMulticamClip}
+            onUngroupMulticam={ungroupMulticamClip}
+            /* 时间区域：状态在这里（导出面板也要读），时间线只负责画与手势 */
+            region={region}
+            regionClip={regionClip}
+            onRegionRange={setRegionRange}
+            onRegionMark={markRegion}
+            onRegionClear={() => setRegion(null)}
+            onRegionDelete={deleteRegion}
+            onRegionCopy={copyRegionContent}
+            onRegionCut={cutRegionContent}
+            onRegionPaste={pasteRegionContent}
+            onRegionExport={exportRegion}
+            /* 录音配音：入口在工具栏，面板挂在下面（它要读播放头、要落片段） */
+            onOpenRecorder={() => setRecorderOpen(true)}
             selection={selection}
             canUndo={pastRef.current.length > 0}
             canRedo={futureRef.current.length > 0}
@@ -1897,7 +3111,10 @@ export default function App() {
             snap={snap}
             onSnap={setSnap}
             onSeek={setPlayhead}
-            onSelect={(clip) => setSelection({ type: 'clip', clipId: clip.id, assetId: clip.assetId })}
+            /* `null` = 点空白处取消选中（与预览里点画面外同一口径）。 */
+            /* ⚠️ 第二个参数（`{additive}`）必须透传：Ctrl + 点选的多选态全靠它，
+               漏掉就变成"按了 Ctrl 也只是一次普通选中"（多选彻底失效，而界面看不出来）。 */
+            onSelect={(clip, options) => selectClip(clip, options)}
             onRemove={removeClip}
             onClear={() => {
               commitClips([])
@@ -1910,6 +3127,9 @@ export default function App() {
             onRedo={redo}
             onImport={handlePickMedia}
             onDragClip={dragClip}
+            onMoveLayer={moveLayerOf}
+            onSplitByScenes={splitByScenes}
+            onDuplicateClip={duplicateClip}
             onSnapshot={snapshotClips}
             onDropAsset={dropAssetOnTimeline}
             volume={volume}
@@ -1932,6 +3152,15 @@ export default function App() {
         </>
       )}
 
+      {/* 录音配音面板：只在工作台里出现的东西，但仍然挂在最外层 ——
+          它是一层遮罩，放进任何一块布局里都会跟着那块布局的 overflow 被裁。 */}
+      <Recorder
+        open={recorderOpen}
+        onClose={() => setRecorderOpen(false)}
+        onRecorded={addRecordingClip}
+        onBusyChange={setRecorderBusy}
+      />
+
       {exportOpen ? (
         <div className="mask" onClick={(event) => event.target === event.currentTarget && setExportOpen(false)}>
           <div className="modal wide" style={{ maxWidth: 560 }}>
@@ -1948,11 +3177,19 @@ export default function App() {
               <SidePanels
                 mode="export"
                 clips={clips}
+                /* ⚠️ 必须给**结算过**的片段表（停用的 / 隐藏轨 / 静音轨不清）：
+                   导出面板原来只拿到全量 clips，于是"预览里关掉的轨、成片里还在"——
+                   与预览同一份口径（effectiveClips）才对得上。
+                   顺带它已经展开过复合片段与多机位，渲染侧再展开一次是幂等的。 */
+                renderClips={activeClips}
                 projectName={projectName}
                 backdrop={backdrop}
                 /* 成片按预览里选的那个比例裁：少传它，导出就一律 16:9 ——
                    "预览切了 1:1、导出来还是横的"，且两边单独看都没错。 */
                 aspect={aspect}
+                /* 时间区域：「只导出这一段」用。传的是**当前生效**的区间
+                   （半开状态传 null ⇒ 面板不会出现那个开关）。 */
+                range={liveRegion()}
               />
             </div>
           </div>
@@ -1986,7 +3223,15 @@ export default function App() {
           onClose={() => setDialog(null)}
           keymap={keymap}
           onKeymapChange={changeKeymap}
+          /* 自定义字体：字幕检查器的字体下拉与「导入字体」按钮 */
+          fonts={fonts}
+          onImportFont={importFonts}
           hardwareAcceleration={hardwareAcceleration}
+          /* 导入方式：设置页的「保留原位 / 复制进草稿」，只影响之后导入的素材 */
+          importMode={importMode}
+          onImportModeChange={changeImportMode}
+          previewQuality={previewQuality}
+          onPreviewQualityChange={changePreviewQuality}
           onHardwareAccelerationChange={changeHardwareAcceleration}
           onRestart={restartApp}
         />

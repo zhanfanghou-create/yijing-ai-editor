@@ -80,6 +80,9 @@ export {
   IconZoomOut,
   IconSplit,
   IconMagnet,
+  IconLink,
+  IconStar,
+  IconFlag,
   IconRatio,
   IconCrown,
   IconHeadset,
@@ -102,11 +105,14 @@ export {
   IconDigitalHuman,
   IconObjectRemove,
   IconTransition,
+  IconMic,
   IconVoiceClone,
   IconVoiceChange,
   IconSfx,
   IconLyrics,
   IconSpeechCut,
   IconSingingPhoto,
-  IconDialogue
+  IconDialogue,
+  IconAdjust,
+  IconColorFilter
 } from './iconsLocal.jsx'

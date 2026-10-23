@@ -113,6 +113,8 @@ export default function TopBar({
   onOpenDraft,
   onSaveDraft,
   onSaveDraftAs,
+  onExportPack,
+  onImportPack,
   onOpenGuide,
   onAbout,
   railHidden = false,
@@ -134,7 +136,18 @@ export default function TopBar({
         }))
       : [{ key: 'recent-empty', label: '没有历史记录', disabled: true }]),
     { key: 'save', label: '保存草稿', hint: projectDirty ? '有未保存改动' : '已是最新', run: onSaveDraft },
-    { key: 'save-as', label: '将草稿另存为', run: onSaveDraftAs }
+    { key: 'save-as', label: '将草稿另存为', run: onSaveDraftAs },
+    /* 素材包：把草稿与它引用的全部素材收成一个 .yjpack（换机器也能接着剪），
+       以及把别人给的包解开存成新草稿。两项都是**真动作**，不是占位。 */
+    { key: 'pack-head', label: '素材包', group: true },
+    {
+      key: 'pack-export',
+      label: '导出素材包',
+      hint: '草稿 + 全部素材',
+      title: '把这份草稿和它用到的素材打成一个 .yjpack',
+      run: onExportPack
+    },
+    { key: 'pack-import', label: '导入素材包', title: '打开 .yjpack（存成一份新草稿）', run: onImportPack }
   ]
   const helpItems = [
     { key: 'guide', label: '使用指引', run: onOpenGuide },
@@ -220,7 +233,7 @@ export default function TopBar({
           disabled={!canExport}
           title={canExport ? '导出成片' : '时间线上还没有内容，先加一段素材'}
         >
-          <IconExportCircle size={18} />
+          <IconExportCircle size={16} />
           导出
         </button>
 
@@ -231,7 +244,7 @@ export default function TopBar({
              我们原来一直画「最大化」，跟参考截图对不上 —— 不是图标画错，是状态没接。 */
           <div className="wb-winbtns">
             <button type="button" onClick={() => bridge.window.minimize()} aria-label="最小化">
-              <IconMinimize size={24} />
+              <IconMinimize size={22} />
             </button>
             <button
               type="button"
@@ -239,10 +252,10 @@ export default function TopBar({
               aria-label={maximized ? '还原' : '最大化'}
               title={maximized ? '还原' : '最大化'}
             >
-              {maximized ? <IconRestore size={25} /> : <IconMaximize size={27} />}
+              {maximized ? <IconRestore size={22} /> : <IconMaximize size={22} />}
             </button>
             <button className="danger" type="button" onClick={() => bridge.window.close()} aria-label="关闭">
-              <IconClose size={21} />
+              <IconClose size={22} />
             </button>
           </div>
         ) : null}

@@ -46,12 +46,34 @@ const KEY_PRESETS = [
 ]
 const DEFAULT_KEY_COLOR = '#00B140'
 
-/** 蒙版形状 */
+/**
+ * 蒙版形状。
+ *
+ * `linear` / `mirror` 是**带方向的条带**：
+ *   · linear —— 按 `axis` 决定横向还是纵向的一条带（位置与宽度可调）；
+ *   · mirror —— 同一条带，但强制居中（左右/上下对称），x/y 不起作用。
+ * 两者与 rect 走同一套解析式（布尔区间 + 羽化），所以预览的渐变与导出的
+ * geq 表达式是同一个几何，不存在"预览软边、成片硬边"。
+ */
 const MASK_SHAPES = [
   { key: 'none', label: '无' },
   { key: 'rect', label: '矩形' },
   { key: 'circle', label: '圆形' },
-  { key: 'ellipse', label: '椭圆' }
+  { key: 'ellipse', label: '椭圆' },
+  { key: 'linear', label: '线性' },
+  { key: 'mirror', label: '镜面' }
+]
+
+/** 条带类蒙版的朝向：横向（沿 X 取带）/ 纵向（沿 Y 取带） */
+const MASK_AXES = [
+  { key: 'x', label: '横向' },
+  { key: 'y', label: '纵向' }
+]
+
+/** 镜像（左右 / 上下）。两轴可同时开，等价于旋转 180° */
+const MIRROR_AXES = [
+  { key: 'h', label: '左右' },
+  { key: 'v', label: '上下' }
 ]
 /** 蒙版羽化上限（基准 px） */
 const MASK_FEATHER_MAX = 200
@@ -60,6 +82,32 @@ const MASK_FEATHER_MAX = 200
 const STROKE_MAX = 40
 const SHADOW_MAX_OFFSET = 200
 const SHADOW_MAX_BLUR = 200
+/** 内阴影的扩散上限（基准 px）。它与外阴影的 blur 不是一回事：spread 是"边缘内缩多少" */
+const SHADOW_MAX_SPREAD = 200
+
+/**
+ * 描边样式。
+ *
+ * ⚠️ 这里**只收两端都能真做出来的**样式：
+ *   · solid  —— 沿画面**轮廓**外扩一圈（预览 8 向 drop-shadow / 导出 dilation 环）；
+ *   · double —— 沿轮廓两圈同心（宽的在外、窄的在内，两色可不同）；
+ *   · glow   —— 沿轮廓的羽化光晕（导出是 dilation + 大 sigma 高斯）；
+ *   · dashed —— **沿画框四边**的虚线框（不是沿轮廓）。
+ *
+ * 为什么虚线只能做矩形边框：沿"任意 alpha 轮廓"的虚线要求把轮廓描成路径再按
+ * dash 切开 —— 视频里没有轮廓路径，只有逐像素 alpha。硬做出来的东西要么只在
+ * 特定形状上对、要么在导出里根本不存在。所以这一种的定位如实写成"画框虚线边框"，
+ * 界面上也这么叫，不冒充"沿轮廓的虚线描边"。
+ */
+const STROKE_STYLES = [
+  { key: 'solid', label: '实线' },
+  { key: 'double', label: '双线' },
+  { key: 'glow', label: '发光' },
+  { key: 'dashed', label: '虚线框' }
+]
+
+/** 虚线的段长 / 间隔上限（基准 px） */
+const DASH_MAX = 120
 
 /**
  * 混合模式。
@@ -119,6 +167,13 @@ const ffColorOf = (rgb) => `0x${hexOf(rgb).slice(1)}`
 
 const isHexColor = (value) => /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || '').trim())
 
+/**
+ * 自由变形（四角透视）住在 `effects.warp` 里，但**换算不在本文件** ——
+ * 单应矩阵、CSS matrix3d、ffmpeg perspective 三段全在 `shared/warp.js`。
+ * 这里只做一件事：把它读成规范化结构，并参与"这层到底中不中性"的判定。
+ */
+const warpTable = require('./warp.js')
+
 /** 读一组效果参数：缺省 / 脏数据一律回落中性值，不抛错、不产生 NaN */
 function readEffects(src) {
   const s = src && typeof src === 'object' ? src : {}
@@ -126,9 +181,23 @@ function readEffects(src) {
   const mask = s.mask && typeof s.mask === 'object' ? s.mask : {}
   const stroke = s.stroke && typeof s.stroke === 'object' ? s.stroke : {}
   const shadow = s.shadow && typeof s.shadow === 'object' ? s.shadow : {}
+  const corners = s.corners && typeof s.corners === 'object' ? s.corners : {}
+  const mirror = s.mirror && typeof s.mirror === 'object' ? s.mirror : {}
   const blendKey = String(s.blend || 'normal')
   return {
     radius: clamp(num(s.radius, 0), 0, RADIUS_MAX),
+    /* 四角独立圆角：`on` 为真时**优先于** radius（radius 作为整体值留给旧草稿） */
+    corners: {
+      on: Boolean(corners.on),
+      tl: clamp(num(corners.tl, 0), 0, RADIUS_MAX),
+      tr: clamp(num(corners.tr, 0), 0, RADIUS_MAX),
+      br: clamp(num(corners.br, 0), 0, RADIUS_MAX),
+      bl: clamp(num(corners.bl, 0), 0, RADIUS_MAX)
+    },
+    mirror: {
+      h: Boolean(mirror.h),
+      v: Boolean(mirror.v)
+    },
     skewX: clamp(num(s.skewX, 0), -SKEW_LIMIT, SKEW_LIMIT),
     skewY: clamp(num(s.skewY, 0), -SKEW_LIMIT, SKEW_LIMIT),
     blend: BLEND_MODES.some((item) => item.key === blendKey) ? blendKey : 'normal',
@@ -139,6 +208,7 @@ function readEffects(src) {
     },
     mask: {
       shape: MASK_SHAPES.some((item) => item.key === mask.shape) ? mask.shape : 'none',
+      axis: MASK_AXES.some((item) => item.key === mask.axis) ? mask.axis : 'x',
       x: clamp(num(mask.x, 50), -50, 150),
       y: clamp(num(mask.y, 50), -50, 150),
       w: clamp(num(mask.w, 60), 2, 200),
@@ -148,16 +218,28 @@ function readEffects(src) {
     stroke: {
       on: Boolean(stroke.on),
       width: clamp(num(stroke.width, 3), 0, STROKE_MAX),
-      color: isHexColor(stroke.color) ? String(stroke.color) : '#ffffff'
+      color: isHexColor(stroke.color) ? String(stroke.color) : '#ffffff',
+      style: STROKE_STYLES.some((item) => item.key === stroke.style) ? stroke.style : 'solid',
+      /* 双线的内圈颜色（只有 double 用得上，其余样式忽略） */
+      color2: isHexColor(stroke.color2) ? String(stroke.color2) : '#000000',
+      /* 虚线的段长与间隔（只有 dashed 用得上） */
+      dash: clamp(num(stroke.dash, 18), 2, DASH_MAX),
+      gap: clamp(num(stroke.gap, 12), 2, DASH_MAX)
     },
     shadow: {
       on: Boolean(shadow.on),
+      /* 内阴影：阴影落在画面**里面**（沿轮廓向内散开）。与外阴影共用偏移/模糊/颜色，
+         额外多一个 spread（边缘内缩的厚度）。两个可以同时开。 */
+      inner: Boolean(shadow.inner),
       x: clamp(num(shadow.x, 8), -SHADOW_MAX_OFFSET, SHADOW_MAX_OFFSET),
       y: clamp(num(shadow.y, 8), -SHADOW_MAX_OFFSET, SHADOW_MAX_OFFSET),
       blur: clamp(num(shadow.blur, 12), 0, SHADOW_MAX_BLUR),
+      spread: clamp(num(shadow.spread, 10), 0, SHADOW_MAX_SPREAD),
       color: isHexColor(shadow.color) ? String(shadow.color) : '#000000',
       opacity: clamp(num(shadow.opacity, 60), 0, 100)
-    }
+    },
+    /* 自由变形（四角透视）—— 换算全在 shared/warp.js，这里只做规范化 */
+    warp: warpTable.readWarp(s.warp)
   }
 }
 
@@ -166,28 +248,86 @@ function isNeutralEffects(fx) {
   if (!fx) return true
   return (
     fx.radius < 0.01 &&
+    !hasCorners(fx) &&
+    !fx.mirror.h &&
+    !fx.mirror.v &&
     Math.abs(fx.skewX) < 0.01 &&
     Math.abs(fx.skewY) < 0.01 &&
     fx.blend === 'normal' &&
     !fx.key.on &&
     fx.mask.shape === 'none' &&
     !fx.stroke.on &&
-    !fx.shadow.on
+    !fx.shadow.on &&
+    !hasWarp(fx)
   )
 }
 
-/** 是否有"剪裁类"效果（圆角 / 蒙版）—— 预览据此决定要不要插一个遮罩盒 */
-const hasClip = (fx) => Boolean(fx) && (fx.radius >= 0.01 || fx.mask.shape !== 'none')
+/** 四角圆角里有没有真的设了值（`on` 开着但四角全 0 = 等于没开） */
+const hasCorners = (fx) =>
+  Boolean(fx && fx.corners && fx.corners.on) &&
+  [fx.corners.tl, fx.corners.tr, fx.corners.br, fx.corners.bl].some((value) => num(value) > 0.01)
+
+/** 是否镜像（任一轴） */
+const hasMirror = (fx) => Boolean(fx && (fx.mirror.h || fx.mirror.v))
+
+/** 是否有"剪裁类"效果（圆角 / 四角圆角 / 蒙版）—— 预览据此决定要不要插一个遮罩盒 */
+const hasClip = (fx) =>
+  Boolean(fx) && (fx.radius >= 0.01 || hasCorners(fx) || (fx.mask && fx.mask.shape !== 'none'))
 
 /** 是否有会在 filter 链上多加东西的效果（描边 / 阴影） */
 const hasFilterFx = (fx) => Boolean(fx) && (fx.stroke.on || fx.shadow.on)
 
+/** 是否开了自由变形（四角透视） */
+const hasWarp = (fx) => Boolean(fx) && !warpTable.isNeutralWarp(fx.warp)
+
+/**
+ * 阴影是**外阴影**还是**内阴影**。
+ *
+ * ⚠️ `shadow.inner` 是**模式**而不是"叠加开关"：`on + inner` = 内阴影，
+ *    `on` 单独 = 外阴影。早先的导出链一律按 `shadow.on` 判外阴影，
+ *    于是"开了内阴影"会同时画出一道外阴影 —— 而且预览里看不出来
+ *    （预览的内阴影是另一个叠加层，外阴影的 filter 也在），只有成片才知道。
+ */
+const hasOuterShadow = (fx) => Boolean(fx) && Boolean(fx.shadow && fx.shadow.on) && !(fx.shadow && fx.shadow.inner)
+const hasInnerShadow = (fx) => Boolean(fx) && Boolean(fx.shadow && fx.shadow.on) && Boolean(fx.shadow && fx.shadow.inner)
+
 /* ------------------------------- 圆角 ------------------------------- */
 
-/** 圆角（预览）：`border-radius` 用 cqw，与导出按同一个比例 */
+/** 圆角（预览）：`border-radius` 用 cqw，与导出按同一个比例。
+ *  ⚠️ 四角独立时写四个值（顺序 = 左上 右上 右下 左下，与 CSS 一致）。 */
 function cssRadius(fx) {
-  if (!fx || fx.radius < 0.01) return ''
+  if (!fx) return ''
+  if (hasCorners(fx)) {
+    const c = fx.corners
+    const one = (v) => (num(v) > 0.01 ? `${(ratioOf(v) * 100).toFixed(4)}cqw` : '0')
+    return `${one(c.tl)} ${one(c.tr)} ${one(c.br)} ${one(c.bl)}`
+  }
+  if (fx.radius < 0.01) return ''
   return `${(ratioOf(fx.radius) * 100).toFixed(4)}cqw`
+}
+
+/* ------------------------------- 镜像 ------------------------------- */
+
+/**
+ * 镜像（预览）→ `scaleX(-1)` / `scaleY(-1)`。
+ * ⚠️ 导出侧是 `hflip` / `vflip`，两者都是"以元素中心为轴翻转"，
+ *    所以这里不需要额外的 transform-origin（默认 center 正好对应）。
+ */
+function cssMirror(fx) {
+  if (!fx || !fx.mirror) return ''
+  const parts = []
+  if (fx.mirror.h) parts.push('scaleX(-1)')
+  if (fx.mirror.v) parts.push('scaleY(-1)')
+  return parts.join(' ')
+}
+
+/** 镜像（导出）→ `hflip,vflip`（无镜像时返回 ''） */
+function mirrorFilters(fx) {
+  if (!fx || !fx.mirror) return ''
+  const parts = []
+  if (fx.mirror.h) parts.push('hflip')
+  if (fx.mirror.v) parts.push('vflip')
+  return parts.join(',')
 }
 
 /** 圆角（导出）：实际像素 */
@@ -315,6 +455,21 @@ function cssMaskFor(fx, ar = 16 / 9) {
   const rx = m.w / 2
   const ry = m.shape === 'circle' ? rx * ratio : m.h / 2
 
+  /* 条带（线性 / 镜面）：沿一个轴取带、另一轴铺满，与导出的布尔区间表达式同一几何 */
+  if (m.shape === 'linear' || m.shape === 'mirror') {
+    const axis = m.axis === 'y' ? 'y' : 'x'
+    const center = m.shape === 'mirror' ? 50 : axis === 'x' ? m.x : m.y
+    const span = axis === 'x' ? m.w : m.h
+    const lo = center - span / 2
+    const hi = center + span / 2
+    const f = m.feather < 0.01 ? 0 : Math.min(45, (m.feather / Math.max(1, span)) * 100)
+    const dir = axis === 'x' ? 'to right' : 'to bottom'
+    return {
+      maskImage: `linear-gradient(${dir}, transparent ${pct(lo)}, #000 ${pct(lo + f)}, #000 ${pct(hi - f)}, transparent ${pct(hi)})`,
+      maskComposite: ''
+    }
+  }
+
   if (m.shape !== 'rect') {
     if (m.feather < 0.01) {
       return { maskImage: `radial-gradient(${pct(rx)} ${pct(ry)} at ${pct(m.x)} ${pct(m.y)}, #000 99.5%, transparent 100%)`, maskComposite: '' }
@@ -368,8 +523,21 @@ function maskExprFor(fx) {
   const wx = (frac) => `W*(${round4(frac)})`
   const hy = (frac) => `H*(${round4(frac)})`
 
-  if (shape === 'rect' || shape === 'circle' || shape === 'ellipse') {
-    if (shape === 'rect') {
+  if (shape === 'rect' || shape === 'circle' || shape === 'ellipse' || shape === 'linear' || shape === 'mirror') {
+    if (shape === 'linear' || shape === 'mirror') {
+      /* 条带：中心沿 `axis` 取带，另一轴铺满。
+         mirror 强制居中（对称），linear 用 x / y 自己定位置。 */
+      const axis = m.axis === 'y' ? 'y' : 'x'
+      const center = shape === 'mirror' ? 50 : axis === 'x' ? m.x : m.y
+      const half = (axis === 'x' ? m.w : m.h) / 2
+      const lo = center - half
+      const hi = center + half
+      terms.push(
+        axis === 'x'
+          ? `gte(X,${wx(lo / 100)})*lte(X,${wx(hi / 100)})`
+          : `gte(Y,${hy(lo / 100)})*lte(Y,${hy(hi / 100)})`
+      )
+    } else if (shape === 'rect') {
       terms.push(
         `gte(X,${wx((m.x - m.w / 2) / 100)})*lte(X,${wx((m.x + m.w / 2) / 100)})*` +
           `gte(Y,${hy((m.y - m.h / 2) / 100)})*lte(Y,${hy((m.y + m.h / 2) / 100)})`
@@ -388,7 +556,28 @@ function maskExprFor(fx) {
     }
   }
 
-  if (rFrac > 0) {
+  /**
+   * 圆角。四角独立时**每个角用自己的半径**，合成方式是四个角的条件相乘：
+   * 每个角都满足「不在这个角的方块里，或者离角心不超过半径」。
+   *
+   * ⚠️ geq 没有 `and/or`，比较结果就是 0/1，所以 OR 写成"相加再 >=1"。
+   *    写成 `max()` 也能表达 OR（max 是"至少一个为真"），但 max 里再套 hypot 会让
+   *    表达式长到难以核对；这里用加法，语义一眼可见。
+   */
+  if (hasCorners(fx)) {
+    const c = fx.corners
+    const cornerTerm = (rPx, dxExpr, dyExpr) => {
+      if (rPx <= 0.01) return ''
+      const r = `W*(${round4(rPx / REF_WIDTH)})`
+      return `gte(gte(${dxExpr},${r})+gte(${dyExpr},${r})+lte(hypot(max(0,${r}-${dxExpr}),max(0,${r}-${dyExpr})),${r}),1)`
+    }
+    const tl = cornerTerm(c.tl, 'X', 'Y')
+    const tr = cornerTerm(c.tr, '(W-1-X)', 'Y')
+    const br = cornerTerm(c.br, '(W-1-X)', '(H-1-Y)')
+    const bl = cornerTerm(c.bl, 'X', '(H-1-Y)')
+    const all = [tl, tr, br, bl].filter(Boolean)
+    if (all.length) terms.push(all.join('*'))
+  } else if (rFrac > 0) {
     const r = wx(rFrac)
     terms.push(
       `lte(max(max(hypot(max(0,${r}-X),max(0,${r}-Y)),hypot(max(0,X-(W-1-${r})),max(0,${r}-Y))),` +
@@ -417,6 +606,12 @@ function blendFfmpeg(fx) {
 
 /* ------------------------------- 描边 ------------------------------- */
 
+/** 当前描边样式（缺省 solid —— 老草稿不带这个字段） */
+const strokeStyleOf = (fx) => (fx && fx.stroke && fx.stroke.style ? fx.stroke.style : 'solid')
+
+/** 是不是"画框虚线框"（它不走轮廓那一套，预览与导出各自走另一条路） */
+const strokeIsDashed = (fx) => Boolean(fx && fx.stroke.on) && strokeStyleOf(fx) === 'dashed'
+
 /** 描边宽度（基准 px → 实际像素） */
 const strokePx = (fx, width) =>
   fx && fx.stroke.on ? Math.round(ratioOf(fx.stroke.width) * (Number(width) > 0 ? Number(width) : REF_WIDTH)) : 0
@@ -433,25 +628,143 @@ function strokeDilations(fx, width) {
 }
 
 /** 描边（导出）→ `lutrgb` 的上色串（把白色环染成描边色） */
-function strokeLut(fx, round = round4) {
+function strokeLut(fx, round = round4, which = 'color') {
   if (!fx || !fx.stroke.on) return ''
-  const c = readHexColor(fx.stroke.color, '#ffffff')
+  const c = readHexColor(which === 'color2' ? fx.stroke.color2 : fx.stroke.color, '#ffffff')
   return `r=${round(c.r, 4)}:g=${round(c.g, 4)}:b=${round(c.b, 4)}`
 }
 
 /**
- * 描边（预览）→ 8 向 `drop-shadow`。
+ * 描边（导出）→ **一层层的环**，底 → 顶。
+ *
+ * 每种样式都由"膨胀几像素 + 什么颜色 + 要不要模糊"这三件事拼出来：
+ *   · solid  —— 一圈；
+ *   · double —— 两圈：宽的在外（color）、窄的在内（color2）；
+ *   · glow   —— 一圈 + 大 sigma 模糊（光晕）；
+ *   · dashed —— 空数组，走 `dashedBoxExpr` 那条独立的路（画框虚线框）。
+ *
+ * ⚠️ 顺序是有意义的：宽环必须先 overlay（垫在底下），窄环后 overlay（盖在上面）。
+ *    反过来的话窄环会被宽环整个吃掉 —— 屏幕上只剩一圈，而且颜色是宽环那个。
+ */
+function strokeLayers(fx, width) {
+  if (!fx || !fx.stroke.on) return []
+  if (strokeIsDashed(fx)) return []
+  const style = strokeStyleOf(fx)
+  const wide = strokeDilations(fx, width)
+  if (wide <= 0) return []
+  if (style === 'double') {
+    /* 内圈至少留 1 级，否则"双线"会退化成一根粗线（用户看不出选了 double） */
+    const narrow = Math.max(1, Math.round(wide * 0.45))
+    return [
+      { dilations: wide, color: 'color', blur: 0 },
+      { dilations: narrow, color: 'color2', blur: 0 }
+    ]
+  }
+  if (style === 'glow') {
+    const sigma = Math.max(0.6, round4(wide / 2))
+    return [{ dilations: wide, color: 'color', blur: sigma }]
+  }
+  return [{ dilations: wide, color: 'color', blur: 0 }]
+}
+
+/**
+ * 虚线框（预览）→ 叠加层的四条边（`repeating-linear-gradient`）。
+ *
+ * 只在**画框四边**画，不沿 alpha 轮廓（理由见 STROKE_STYLES 的说明）。
+ * 用 `cqw` 让线宽随画框缩放，与导出按同一个比例。
+ *
+ * ⚠️ 为什么不用 `border: … dashed`：CSS 虚线的段长/间隔由**浏览器**决定
+ *    （Chrome 是"3 倍线宽实、3 倍线宽虚"，Chrome 之外又不一样），
+ *    而导出是按用户设的 dash / gap 精确取模画出来的 —— 两者必然对不上，
+ *    表现为"预览里是密密的短划线，成片里是长划线"。这里用四条
+ *    `repeating-linear-gradient` 把段长与间隔**显式写成 cqw**，
+ *    与导出同一个几何，用户设多少就是多少。
+ *
+ * 单位说明：两个方向都用 `cqw`（画框宽度的 1%），与导出的像素算法同源
+ * （导出那边也是 `ratio × 画框宽`）。
+ */
+function dashedBoxCss(fx) {
+  if (!strokeIsDashed(fx) || fx.stroke.width < 0.01) return null
+  const w = Math.max(0.05, ratioOf(fx.stroke.width) * 100)
+  const dash = Math.max(0.05, ratioOf(fx.stroke.dash) * 100)
+  const gap = Math.max(0.05, ratioOf(fx.stroke.gap) * 100)
+  const period = dash + gap
+  const color = isHexColor(fx.stroke.color) ? fx.stroke.color : '#ffffff'
+  const fix = (v) => v.toFixed(4)
+  /** 一段"实 + 虚"的色标序列，横向/纵向由渐变方向决定 */
+  const stops = `${color} 0 ${fix(dash)}cqw, rgba(0, 0, 0, 0) ${fix(dash)}cqw ${fix(period)}cqw`
+  const style = {
+    backgroundImage: [
+      `repeating-linear-gradient(90deg, ${stops})`,
+      `repeating-linear-gradient(90deg, ${stops})`,
+      `repeating-linear-gradient(180deg, ${stops})`,
+      `repeating-linear-gradient(180deg, ${stops})`
+    ].join(', '),
+    /* 上、下边：整宽 × 线宽；左、右边：线宽 × 整高 */
+    backgroundSize: [`100% ${fix(w)}cqw`, `100% ${fix(w)}cqw`, `${fix(w)}cqw 100%`, `${fix(w)}cqw 100%`].join(', '),
+    backgroundPosition: 'left top, left bottom, left top, right top',
+    backgroundRepeat: 'no-repeat'
+  }
+  return { style, width: w, dash, gap }
+}
+
+/**
+ * 虚线框（导出）→ geq 的亮度表达式（生成一张遮罩 PNG，缓存复用）。
+ *
+ * 四条边各自判断：落在边带内 + 沿边方向的取模落在段内。
+ * geq 里 `W`/`H` 是这一帧的宽高，`X`/`Y` 是当前像素坐标，全部是大写常量。
+ *
+ * @param {object} fx
+ * @param {number} width 像素宽
+ * @param {number} height 像素高
+ * @param {(v:number,d?:number)=>number} round
+ */
+function dashedBoxExpr(fx, width, height, round = round4) {
+  if (!strokeIsDashed(fx)) return ''
+  const W = Math.max(2, Math.round(Number(width) || 0))
+  const H = Math.max(2, Math.round(Number(height) || 0))
+  const lw = Math.max(1, Math.min(Math.floor(Math.min(W, H) / 2), strokePx(fx, width)))
+  /* 段长与间隔按**实际像素**取整：表达式里全是整数取模，避免浮点误差累积成"半段" */
+  const dash = Math.max(2, Math.round((ratioOf(fx.stroke.dash) * W)))
+  const gap = Math.max(1, Math.round((ratioOf(fx.stroke.gap) * W)))
+  const period = dash + gap
+  const inDashX = `lt(mod(X,${period}),${dash})`
+  const inDashY = `lt(mod(Y,${period}),${dash})`
+  /**
+   * ⚠️ 这里的括号不能省：`onH` 是"两条边求和"，本身带 `+`。
+   *    写成 `lt(Y,lw)+gte(Y,H-lw)*inDashX` 时，`*` 只绑定后一项 ——
+   *    上边（`lt(Y,lw)`）就变成一个**永远成立**的条件，整条边恒亮，
+   *    虚线框退化成实线框（还带一圈断续的右边）。表达式不报错、图也生成了，
+   *    只有把生成的 PNG 逐像素取出来才看得见。
+   */
+  const onH = `(lt(Y,${lw})+gte(Y,${H - lw}))`
+  const onV = `(lt(X,${lw})+gte(X,${W - lw}))`
+  /* 上/下边按 X 取模，左/右边按 Y 取模 */
+  const edge = `gt(${onH}*${inDashX}+${onV}*${inDashY},0)`
+  return `if(${edge},255,0)`
+}
+
+/**
+ * 描边（预览）→ 8 向 `drop-shadow`（按样式变形）。
  *
  * 为什么不用 SVG `feMorphology`：HTML 元素上的 SVG filter 用的是**元素自身的 CSS px**，
  * 而预览元素的尺寸随窗口变 —— 在参数层算不出该写多少 px 的膨胀半径，写死就会
  * "窗口一大描边就细得看不见"。`drop-shadow` 的长度可以写 `cqw`（画框宽度的 1%），
  * 与导出按同一个比例，窗口缩放自动等比。
  * 8 个方向叠加出来的外轮廓在圆角处比真正的形态学膨胀稍钝，属于可接受的手感差异。
+ *
+ * 各样式：
+ *   · solid  —— 一圈 8 向，无模糊；
+ *   · double —— **两圈**：先窄（color2）后宽（color）。
+ *               ⚠️ 顺序必须是"窄的先写"：CSS 的 filter 是**串联**的，
+ *               后一个 drop-shadow 作用在前一个的输出上 —— 宽的那个写在后面才会在外层。
+ *               反过来的话宽圈把窄圈整个盖住，屏幕上只剩一圈。
+ *   · glow   —— 一圈 8 向 + 模糊（模糊半径 = 线宽，视觉上就是"向外散开的光"）；
+ *   · dashed —— 空串：虚线框不是轮廓，走 `dashedBoxCss` 那条叠加层的路。
  */
 function strokeShadows(fx) {
   if (!fx || !fx.stroke.on || fx.stroke.width < 0.01) return ''
-  const r = (ratioOf(fx.stroke.width) * 100).toFixed(4)
-  const c = fx.stroke.color
+  if (strokeIsDashed(fx)) return ''
   const dirs = [
     [1, 0],
     [-1, 0],
@@ -462,9 +775,21 @@ function strokeShadows(fx) {
     [0.7071, -0.7071],
     [-0.7071, -0.7071]
   ]
-  return dirs
-    .map(([dx, dy]) => `drop-shadow(${(dx * Number(r)).toFixed(4)}cqw ${(dy * Number(r)).toFixed(4)}cqw 0 ${c})`)
-    .join(' ')
+  const ring = (rPct, color, blurPct = 0) =>
+    dirs
+      .map(
+        ([dx, dy]) =>
+          `drop-shadow(${(dx * rPct).toFixed(4)}cqw ${(dy * rPct).toFixed(4)}cqw ${blurPct.toFixed(4)}cqw ${color})`
+      )
+      .join(' ')
+  const style = strokeStyleOf(fx)
+  const wide = ratioOf(fx.stroke.width) * 100
+  if (style === 'double') {
+    const narrow = Math.max(0.01, wide * 0.45)
+    return `${ring(narrow, fx.stroke.color2)} ${ring(wide, fx.stroke.color)}`
+  }
+  if (style === 'glow') return ring(wide, fx.stroke.color, wide)
+  return ring(wide, fx.stroke.color)
 }
 
 /* ------------------------------- 阴影 ------------------------------- */
@@ -475,7 +800,7 @@ function strokeShadows(fx) {
  * 所以导出侧用 `sigma = blur / 2` —— 同一个观感、不同的换算，见 shadowSigma。
  */
 function shadowFilter(fx) {
-  if (!fx || !fx.shadow.on) return ''
+  if (!hasOuterShadow(fx)) return ''
   const s = fx.shadow
   const c = readHexColor(s.color, '#000000')
   const dx = (ratioOf(s.x) * 100).toFixed(4)
@@ -486,7 +811,7 @@ function shadowFilter(fx) {
 
 /** 阴影（导出）→ gblur 的 sigma（= 预览 blur 半径的一半，见上） */
 const shadowSigma = (fx, width) => {
-  if (!fx || !fx.shadow.on) return 0
+  if (!hasOuterShadow(fx)) return 0
   const px = ratioOf(fx.shadow.blur) * (Number(width) > 0 ? Number(width) : REF_WIDTH)
   return Math.max(0, Math.min(200, round4(px / 2)))
 }
@@ -494,8 +819,78 @@ const shadowSigma = (fx, width) => {
 /** 阴影（导出）→ 偏移像素 */
 const shadowOffset = (fx, width) => {
   const w = Number(width) > 0 ? Number(width) : REF_WIDTH
-  if (!fx || !fx.shadow.on) return { x: 0, y: 0 }
+  if (!hasOuterShadow(fx)) return { x: 0, y: 0 }
   return { x: Math.round(ratioOf(fx.shadow.x) * w), y: Math.round(ratioOf(fx.shadow.y) * w) }
+}
+
+/* ------------------------------ 内阴影 ------------------------------ */
+
+/**
+ * 内阴影（预览）→ `box-shadow: inset ...`。
+ *
+ * 为什么不挂在媒体元素上：`inset` 阴影画在**背景之上、内容之下**，
+ * 而媒体元素的内容就是那一帧画面 —— 阴影会被画面整个盖住，一像素都看不见。
+ * 所以它是**叠在画面上方的一个透明层**（见 Stage.jsx 的 `.canvas-inset`），
+ * 这一层只负责阴影本身，不参与任何其它效果。
+ *
+ * 单位与其它效果一致：`cqw`（画框宽度的 1%），窗口缩放自动等比。
+ * 圆角会跟着 `border-radius` 走；**蒙版形状（椭圆等）跟不了** ——
+ * 这是 CSS box-shadow 的固有边界，界面上如实写在提示里。
+ */
+function innerShadowStyle(fx) {
+  if (!hasInnerShadow(fx)) return ''
+  const s = fx.shadow
+  const c = readHexColor(s.color, '#000000')
+  const unit = (v) => `${(ratioOf(v) * 100).toFixed(4)}cqw`
+  return `inset ${unit(s.x)} ${unit(s.y)} ${unit(s.blur)} ${unit(s.spread)} rgba(${c.r}, ${c.g}, ${c.b}, ${round4(s.opacity / 100)})`
+}
+
+/**
+ * 内阴影 → 生成"距离场 PNG"所需的全部参数（像素口径）。
+ *
+ * 这张图是**纯距离场 + 已算好的落差曲线**：沿画框四边的一条带子，越靠边越浓。
+ * 它是常量（与素材内容无关），所以按尺寸+参数缓存一次就够。
+ *
+ * @returns {null|{width:number,height:number,spreadPx:number,blurPx:number,dx:number,dy:number,opacity:number}}
+ */
+function innerShadowSpec(fx, width, height) {
+  if (!hasInnerShadow(fx)) return null
+  const w = Math.max(4, Math.round(Number(width) > 0 ? Number(width) : REF_WIDTH))
+  const h = Math.max(4, Math.round(Number(height) > 0 ? Number(height) : (w * 9) / 16))
+  return {
+    width: w,
+    height: h,
+    /* 带子厚度：至少要 1px，否则 geq 里会出现除零 */
+    spreadPx: Math.max(1, Math.round(ratioOf(fx.shadow.spread) * w)),
+    /* 落差带宽度：CSS 的 blur 半径 ≈ 可见过渡带的宽度（不折成 sigma，
+       因为这里不再走 gblur，直接在表达式里把落差算准） */
+    blurPx: Math.min(200, Math.round(ratioOf(fx.shadow.blur) * w)),
+    dx: Math.round(ratioOf(fx.shadow.x) * w),
+    dy: Math.round(ratioOf(fx.shadow.y) * w),
+    opacity: round4(clamp(num(fx.shadow.opacity, 60), 0, 100) / 100)
+  }
+}
+
+/** 内阴影距离场的 geq 亮度表达式（render.js 用它落 PNG） */
+function innerShadowExpr(spec) {
+  if (!spec) return ''
+  const { width: W, height: H, spreadPx: S, blurPx: B, dx: DX, dy: DY, opacity: OP } = spec
+  /* 到"偏移后的四条边"的距离，四个方向各自夹到非负 —— 夹这一步是为了让
+     "偏移量大于半幅"这种极端值退化成"整条边都厚"，而不是算出负距离后全图变黑。 */
+  const d = `min(min(max(0,X+${DX}),max(0,${W - 1}-X-${DX})),min(max(0,Y+${DY}),max(0,${H - 1}-Y-${DY})))`
+  /**
+   * 落差曲线：`spread` 以内全浓，`spread` 之后再用 `blur` 宽的平滑带降到 0。
+   * 这就是 CSS `box-shadow: inset` 的语义（实心 spread + 高斯模糊边缘），
+   * 只是把模糊直接算进距离场，链上不再做 `gblur`。
+   *
+   * ⚠️ 为什么不用"线性渐变 + gblur"：实测 20px 的带子配 sigma=12.8 的模糊，
+   *    角上最浓处只剩 3/255 —— 平均把强度整个冲没了，看起来像"内阴影没生效"。
+   *    落差曲线直接烘在 PNG 里，强度与厚度都可预期，也不会因为改了画布尺寸而变淡。
+   */
+  const A = round4(Math.max(0, S - B / 2))
+  const span = round4(Math.max(1, B))
+  const t = `min(1,max(0,(${d}-${A})/${span}))`
+  return `${OP}*255*(1-${t}*${t}*(3-2*${t}))`
 }
 
 /* ------------------------------ 关键帧 ------------------------------ */
@@ -558,21 +953,34 @@ module.exports = {
   KEY_PRESETS,
   DEFAULT_KEY_COLOR,
   MASK_SHAPES,
+  MASK_AXES,
+  MIRROR_AXES,
   MASK_FEATHER_MAX,
   STROKE_MAX,
+  STROKE_STYLES,
+  DASH_MAX,
   SHADOW_MAX_OFFSET,
   SHADOW_MAX_BLUR,
+  SHADOW_MAX_SPREAD,
   BLEND_MODES,
   KEYFRAME_PROPS,
   readEffects,
   isNeutralEffects,
   hasClip,
+  hasCorners,
+  hasMirror,
   hasFilterFx,
+  hasWarp,
+  hasOuterShadow,
+  hasInnerShadow,
+  warpTable,
   ratioOf,
   readHexColor,
   hexOf,
   isHexColor,
   cssRadius,
+  cssMirror,
+  mirrorFilters,
   radiusPx,
   cssSkew,
   shearFor,
@@ -587,12 +995,20 @@ module.exports = {
   blendCss,
   blendFfmpeg,
   strokePx,
+  strokeStyleOf,
+  strokeIsDashed,
   strokeDilations,
   strokeLut,
+  strokeLayers,
   strokeShadows,
+  dashedBoxCss,
+  dashedBoxExpr,
   shadowFilter,
   shadowSigma,
   shadowOffset,
+  innerShadowStyle,
+  innerShadowSpec,
+  innerShadowExpr,
   readKeyframes,
   hasKeyframes,
   keyframeValue

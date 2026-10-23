@@ -124,7 +124,7 @@ const ASSETS = [
  *  + 真机 22 条（原 11 中「四页签」已改成"整排页签 = 信息 + 画面/音频/变速/调整" 1
  *    + 效果面板 8
  *    + 右栏排版 3：「信息」横排且与「画面」同行 / 字幕片段[信息][字幕] / 点「字幕」真的换屏） */
-const TOTAL_ASSERTIONS = 40
+const TOTAL_ASSERTIONS = 44
 
 /* --------------------------------------------------------- 输出与收尾 */
 
@@ -732,14 +732,18 @@ async function main() {
       `片段头 ${beforeSwitch.head}→${afterSwitch.head}；样式控件 ${beforeSwitch.style}→${afterSwitch.style}`
     )
 
+    /* ⚠️ 选择器必须是 `[data-overlay-text]`，不能是 `.canvas-overlay span`：
+       为了把「入场 / 出场 / 循环」三条动画分开挂，文字外面套了两层 `.ta-move`，
+       第一个 span 是**动画层**而不是文字层，读它的 font-size 恒为继承值 16px ——
+       判据会变成"字号怎么调都不变"。 */
     const fontBefore = await page.evaluate(() => {
-      const el = document.querySelector('.canvas-overlay span')
+      const el = document.querySelector('.canvas-overlay [data-overlay-text]')
       return el ? Number.parseFloat(getComputedStyle(el).fontSize) : 0
     })
     await setRange(page, '字号', 2)
     await sleep(450)
     const fontAfter = await page.evaluate(() => {
-      const el = document.querySelector('.canvas-overlay span')
+      const el = document.querySelector('.canvas-overlay [data-overlay-text]')
       return el ? Number.parseFloat(getComputedStyle(el).fontSize) : 0
     })
     check(
@@ -747,6 +751,30 @@ async function main() {
       fontBefore > 0 && fontAfter > fontBefore * 1.5,
       `${fontBefore.toFixed(2)}px → ${fontAfter.toFixed(2)}px`
     )
+
+    /* 文字动画：点「上浮」后，预览里必须真的挂上 @keyframes。
+       判据读 computed `animation-name`（消费端），不读 data 属性 ——
+       只断言 data-text-in="up" 的话，CSS 类名写错、@keyframes 没定义都测不出来。 */
+    await page.locator('[data-text-in="up"]').click()
+    await sleep(400)
+    const animName = await page.evaluate(() => {
+      const el = document.querySelector('.canvas-overlay .ta-move')
+      return el ? getComputedStyle(el).animationName : ''
+    })
+    check(
+      '点「入场·上浮」· 预览里字幕真的挂上 ta-up-in 动画（不是只亮了按钮）',
+      /ta-up-in/.test(animName),
+      animName || '(没有动画)'
+    )
+
+    /* 排版：左对齐必须真的把文字块推到左边（读 justifyContent，消费端） */
+    await page.locator('[data-text-align="left"]').click()
+    await sleep(400)
+    const alignStyle = await page.evaluate(() => {
+      const el = document.querySelector('.canvas-overlay')
+      return el ? getComputedStyle(el).justifyContent : ''
+    })
+    check('点「左对齐」· 预览里文字块真的靠左（justify-content: flex-start）', alignStyle === 'flex-start', alignStyle)
 
     console.log('\n-- 七、效果面板（圆角 / 斜切 / 抠像 / 蒙版 / 描边 / 阴影）真的改预览 --\n')
 
@@ -761,8 +789,8 @@ async function main() {
       list.map((el) => el.getAttribute('data-insp-subpill'))
     )
     check(
-      '画面页四个子页签（基础 / 抠像 / 蒙版 / 美颜美体）',
-      subs.join(',') === 'base,key,mask,beauty',
+      '画面页六个子页签（基础 / 裁剪 / 抠像 / 蒙版 / 修复 / 美颜）',
+      subs.join(',') === 'base,crop,key,mask,heal,beauty',
       subs.join(',') || '(一个都没有)'
     )
 
@@ -887,7 +915,46 @@ async function main() {
       `${blendBefore} → ${blendAfter}`
     )
 
-    /* 8) 面板改的东西必须**写回片段**（导出载荷就是从片段来的） */
+    /* 8) 裁剪与镜像：两者都作用于**媒体元素自己的 transform**。
+          判据读 getComputedStyle 的 matrix —— 不是读 data 属性、也不是读 state，
+          所以"面板点了、状态写了、画面没变"那种假绿在这里过不去。 */
+    await page.locator('.clip[data-clip="ifx_v"]').click()
+    await sleep(500)
+    await page.locator('[data-insp-tab="visual"]').click()
+    await sleep(300)
+    await page.locator('[data-insp-subpill="crop"]').click()
+    await sleep(280)
+    const readMatrixA = () =>
+      page.evaluate(() => {
+        const layer = document.querySelector('.canvas-layer[data-layer="ifx_v"]')
+        const media = layer ? layer.querySelector('img, video, .canvas-placeholder') : null
+        if (!media) return null
+        const m = /^matrix\(([-\d.]+),/.exec(getComputedStyle(media).transform || '')
+        return m ? Number(m[1]) : null
+      })
+    const beforeCrop = await readMatrixA()
+    await page.locator('[data-crop-ratio="1:1"]').click()
+    await sleep(420)
+    const afterCrop = await readMatrixA()
+    /* 16:9 画布里取 1:1 的框（宽 56.25%），铺满需要放大 1/0.5625 ≈ 1.778 */
+    check(
+      '点「裁剪 1:1」· 画面真的放大到 1.78 倍（cover 铺满）',
+      beforeCrop !== null && afterCrop !== null && Math.abs(afterCrop - 1.778) < 0.05,
+      `${beforeCrop} → ${afterCrop}`
+    )
+
+    await page.locator('[data-insp-subpill="base"]').click()
+    await sleep(280)
+    await page.locator('[data-fx-mirror-axis="h"]').click()
+    await sleep(420)
+    const afterMirror = await readMatrixA()
+    check(
+      '点「左右镜像」· transform 的 x 缩放变成负数（画面真的翻了）',
+      afterMirror !== null && afterMirror < 0 && Math.abs(Math.abs(afterMirror) - Math.abs(afterCrop || 0)) < 0.05,
+      `${afterCrop} → ${afterMirror}`
+    )
+
+    /* 9) 面板改的东西必须**写回片段**（导出载荷就是从片段来的） */
     await sleep(2200)
     const savedFx = await page.evaluate(
       (id) =>

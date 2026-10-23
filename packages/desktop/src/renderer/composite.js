@@ -25,12 +25,16 @@
  *    否则播放头压在接缝上、画面却已经是后一段的中间，那才叫"对不上"。
  */
 
-import { EPSILON, clipSpeed, sourceTimeAt } from './trim.js'
+import { EPSILON, clipRateAt, isReversed, sourceTimeAt } from './trim.js'
 import { effectiveTransitions } from './looks.js'
 import { pipOf } from './pip.js'
 import { textStyleDef } from './textStyles.js'
 /* 关键帧插值（预览与导出共用的唯一口径，见 shared/effects.js） */
 import { readKeyframes, hasKeyframes, keyframeValue } from '../shared/effects.js'
+/* 音量包络：预览每帧把插值结果乘进 <video>.volume，导出写成 ffmpeg 的 volume 表达式 */
+import { hasVolumeKf, readVolumeKf, volumeAt } from '../shared/audio.js'
+/* 画面层级（自由层级）：层叠比较器与导出侧**同一份**（主进程require的是它） */
+import { compareLayers, readZ } from '../shared/layers.js'
 
 /**
  * 能出声的轨道（静音 / 独奏只影响这几条）。
@@ -161,15 +165,16 @@ export function hotWindowAt(t) {
 /**
  * 层叠顺序：底 → 顶。
  *
- * 同轨重叠时**起点靠后的在上**（后摆上去的压住先摆的，与"后加的盖住先加的"直觉一致）；
- * 起点相同则后创建的在上。返回新数组，不改入参。
+ * 规则的真源搬到了 `shared/layers.js`（导出侧的主进程 require 同一份）：
+ * 先比 `clip.z`（画面层级/自由层级），再比起点（后摆上去的压住先摆的），
+ * 最后比创建序号。**缺省 z 时与改动前逐帧一致** —— 老草稿不写这个字段也照样对。
+ *
+ * ⚠️ 以前这里的实现是"起点靠后在上"，在两段画中画完全重叠时等于没得选：
+ *    用户唯一能让 A 压住 B 的办法是改时间。画面层级与时间先后是两件事，
+ *    这也是"自由层级"存在的理由。
  */
 export function layerOrder(list) {
-  return [...(list || [])].sort((a, b) => {
-    const delta = num(a.start) - num(b.start)
-    if (Math.abs(delta) > EPSILON) return delta
-    return cmpId(a.id, b.id)
-  })
+  return [...(list || [])].sort(compareLayers)
 }
 
 /**
@@ -249,7 +254,13 @@ function urlOf(clip, assets) {
 }
 
 /** 片段 → 一层画面。纯描述，不带任何 DOM 语义 */
-export function describeLayer(clip, assets, t, options = {}) {
+export /* 倒放片段在**预览**里只能静音：浏览器没有负速播放（`playbackRate = -1` 会被规范
+   静默忽略成 1），也就不可能把声音反着放。导出侧的 `areverse` 是完整的 ——
+   这是一个**写在面板上、说得出来**的取舍，不是静默失效。
+   ⚠️ 别改成"正着放"，那是错的；也别改成"整条音轨静音"，只该压这一段。 */
+const audible = (clip, gain) => (isReversed(clip) ? 0 : gain)
+
+function describeLayer(clip, assets, t, options = {}) {
   const asset = assetOf(clip, assets)
   const sourceTime = Number.isFinite(Number(options.sourceTime))
     ? Number(options.sourceTime)
@@ -260,9 +271,29 @@ export function describeLayer(clip, assets, t, options = {}) {
   const kf = readKeyframes(clip.keyframes)
   const local = Math.max(0, Number(t) - Number(clip.start || 0))
   const kv = (prop, fallback) => (hasKeyframes(kf) ? keyframeValue(kf, prop, local, fallback) : Number(fallback))
+  /**
+   * 音量：包络优先。插值与导出侧的 `volumeExpr` 是同一份线性口径，
+   * 所以"面板上画的那条渐弱曲线"在预览里听得到、在成片里也一样。
+   * ⚠️ 包络的采样点是**片段内秒数**（与关键帧同一时间轴），不是时间线秒数。
+   */
+  const baseGain = Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100
+  const volumeKf = readVolumeKf(clip.volumeKf)
+  const gain = hasVolumeKf(volumeKf) ? volumeAt(volumeKf, local, baseGain) : baseGain
   return {
     id: clip.id,
     clipId: clip.id,
+    /**
+     * 归属的**外层**复合片段（普通片段为空）。
+     *
+     * 复合片段展开之后，这一层是内部的某个子片段 —— 它的 id 在 clips 里查不到。
+     * 预览里的点选、选框、右栏、角标全都要落到"用户真正选中的那个片段"上，
+     * 所以必须把归属一起带出去，否则"点一下画面里复合片段的内部"会选中一个不存在的 id，
+     * 表现是右栏空白、选框不出现、拖动毫无反应。
+     */
+    ownerId: clip.ownerId || '',
+    /* 画面层级（自由层级）：只决定"谁压住谁"，与时间无关。
+       预览按它排序、导出按**同一份**比较函数排 overlay 链。 */
+    z: readZ(clip),
     assetId: clip.assetId || '',
     kind: clip.kind || asset?.kind || 'video',
     url: urlOf(clip, assets),
@@ -273,9 +304,14 @@ export function describeLayer(clip, assets, t, options = {}) {
     filterIntensity: Number.isFinite(Number(clip.filterIntensity)) ? Number(clip.filterIntensity) : 1,
     scale: kv('scale', Number.isFinite(Number(clip.scale)) ? Number(clip.scale) : 100),
     opacity: kv('opacity', Number.isFinite(Number(clip.opacity)) ? Number(clip.opacity) : 100),
-    /* 片段音量（属性面板的音量滑杆）。⚠️ 以前它只进导出、不进预览：
-       滑杆改了 clips 里的 gain，成片真的变小声，预览一点没变。 */
-    gain: Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100,
+    /* 片段音量（属性面板的音量滑杆 + 音量包络）。⚠️ 以前它只进导出、不进预览：
+       滑杆改了 clips 里的 gain，成片真的变小声，预览一点没变。
+       ⚠️ 倒放片段在预览里被压到 0（浏览器不能反放声音，见上面 audible 的说明）。 */
+    gain: audible(clip, gain),
+    /* 倒放（预览靠 sourceTimeAt 反向取帧；这里把标记带给组件，用来提示"预览静音"） */
+    reverse: isReversed(clip),
+    /* 自由裁剪框（裁剪 + 铺满）。真源换算在 shared/crop.js，导出读的是同一个字段 */
+    crop: clip.crop || null,
     /* 「画面 · 位置/旋转」（属性面板）—— 预览靠它拼 transform，
        导出侧 render.js 用同一组字段拼 pad/crop 偏移与 rotate，两边同一口径。 */
     posX: kv('posX', Number.isFinite(Number(clip.posX)) ? Number(clip.posX) : 0),
@@ -290,7 +326,11 @@ export function describeLayer(clip, assets, t, options = {}) {
     /* 倍速。预览靠它设 playbackRate；**源时间的换算不在这里** ——
        那件事由 sourceTimeAt 负责（它内部乘了倍速），两者必须同时成立：
        只设 playbackRate 会让"画面起始点"错，只乘 sourceTime 会让"推进速度"错。 */
-    speed: clipSpeed(clip),
+    speed: clipRateAt(clip, t),
+    /* 「变速保留音高」：预览侧靠 `HTMLMediaElement.preservesPitch` 实现，
+       关掉就是"快放会变尖"；导出侧对应 atempo（保音高）与 asetrate（不保）。
+       两边读同一个布尔，缺省视为开。 */
+    keepPitch: clip.keepPitch !== false,
     visible: Boolean(options.visible),
     role: options.role || 'hidden',
     xfade: options.xfade || null
@@ -389,13 +429,19 @@ export function compositeAt(clips, assets, playhead, options = {}) {
   /* 音频轨：这一刻**所有**在播的片段（以前只取 id 最大的一条，重叠的配乐凭空少一条） */
   const audio = layerOrder(list.filter((item) => item.track === 'audio' && spansAt(item, t))).map((clip) => {
     const asset = assetOf(clip, pool)
+    const localAudio = Math.max(0, t - num(clip.start))
+    const vkf = readVolumeKf(clip.volumeKf)
+    const base = Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100
     return {
       id: clip.id,
       clipId: clip.id,
+      ownerId: clip.ownerId || '',
       url: asset?.url || clip.url || '',
       sourceTime: sourceTimeAt(clip, t),
-      gain: Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100,
-      speed: clipSpeed(clip)
+      gain: audible(clip, hasVolumeKf(vkf) ? volumeAt(vkf, localAudio, base) : base),
+      speed: clipRateAt(clip, t),
+      keepPitch: clip.keepPitch !== false,
+      reverse: isReversed(clip)
     }
   })
 
@@ -405,16 +451,26 @@ export function compositeAt(clips, assets, playhead, options = {}) {
       const asset = assetOf(clip, pool)
       const url = asset?.url || clip.url || ''
       if (!url) return null
+      const localPip = Math.max(0, t - num(clip.start))
+      const pipVkf = readVolumeKf(clip.volumeKf)
+      const pipBase = Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100
       return {
         id: clip.id,
         clipId: clip.id,
+        ownerId: clip.ownerId || '',
+        /* 素材 id：预览画质要按它决定"这一层用不用代理文件"（代理只换 url，不换素材） */
+        assetId: clip.assetId || '',
         url,
         kind: clip.kind || asset?.kind || 'video',
         sourceTime: sourceTimeAt(clip, t),
+        /* 画中画的层级：两段画中画完全重叠时，唯一能决定谁压住谁的就是它 */
+        z: readZ(clip),
         ...pipOf(clip),
         opacity: Number.isFinite(Number(clip.opacity)) ? Number(clip.opacity) : 100,
-        gain: Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100,
-        speed: clipSpeed(clip),
+        gain: audible(clip, hasVolumeKf(pipVkf) ? volumeAt(pipVkf, localPip, pipBase) : pipBase),
+        speed: clipRateAt(clip, t),
+        keepPitch: clip.keepPitch !== false,
+        reverse: isReversed(clip),
         /* 画中画也吃「效果」（圆角/蒙版/抠像/描边/阴影/斜切/混合）——
            真源同一份，导出侧 render.js 的 pip 链用的是同一组换算。 */
         effects: clip.effects || null
@@ -435,7 +491,27 @@ export function compositeAt(clips, assets, playhead, options = {}) {
     textScale: clip.textScale,
     textColor: clip.textColor,
     textAnchor: clip.textAnchor,
-    textOffset: clip.textOffset
+    textOffset: clip.textOffset,
+    /* 排版三项：行距 / 对齐 / 背景框。原样带给 Stage，与导出侧共用同一套字段 */
+    textLineHeight: clip.textLineHeight,
+    textAlign: clip.textAlign,
+    textBgOn: clip.textBgOn,
+    textBgColor: clip.textBgColor,
+    textBgOpacity: clip.textBgOpacity,
+    textBgPad: clip.textBgPad,
+    /* 文字动画：入场 / 出场 / 循环 + 两个时长。时间轴需要 start/duration
+       才能算出"出场何时开始"，而 overlay 这一层**必须**带上它们 ——
+       少了就只剩入场，出场永远不触发（元素不会自己知道自己是几秒的片段）。 */
+    start: clip.start,
+    duration: clip.duration,
+    textIn: clip.textIn,
+    textOut: clip.textOut,
+    textLoop: clip.textLoop,
+    textInDur: clip.textInDur,
+    textOutDur: clip.textOutDur,
+    /* 自定义字体：family 给预览（CSS），path 给导出（drawtext 的 fontfile） */
+    textFont: clip.textFont,
+    textFontPath: clip.textFontPath
   }))
 
   return { layers, main, audio, pip, text, transition: tr, window: [from, to] }

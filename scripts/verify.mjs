@@ -299,6 +299,58 @@ const GATES = [
     count: /KEYMAP_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'text-system',
+    name: '自检·文字系统（动画 CSS↔ffmpeg 逐帧一致 / 排版三件 / 字体链路）',
+    argv: [NODE, 'tools/check-text-system.mjs'],
+    // 稳定数字 50 = 动画参数 6 + 表达式语义 9 + 排版覆写 8 + 导出 drawtext 9 + 静态链路 9
+    //   + 其余为各段内的细分判据。
+    // 钉的是「同一个设置，预览和成片表现不一样」：
+    //   · 入场位移的方向与幅度（±6% 画幅）、出场符号不能与入场共用；
+    //   · 呼吸循环的幅度按**全幅**给，写成 0.82+0.18*sin 会掉到 0.64；
+    //   · 行距 / 对齐 / 背景框在两边落成不同参数（line_spacing / text_align / box）；
+    //   · 字体：预览要 FontFace + 家族名，导出要磁盘路径，路径失效要退回系统字体。
+    // 表达式用 JS 复算（同一串字符），所以"能被 ffmpeg 接受"与"数值对"是分开验的。
+    // 50 → 52：新增「转义只有一层」两条（只在真机导出时才炸，静态看不出）。
+    expected: 52,
+    marker: /TEXT_SYSTEM_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'text-system-selftest',
+    name: '自证·文字系统（7 个错误状态必须被判为假）',
+    argv: [NODE, 'tools/check-text-system.mjs', '--selftest'],
+    // 50 → 52：新增「转义只有一层」两条（只在真机导出时才炸，静态看不出）。
+    expected: 52,
+    marker: /TEXT_SYSTEM_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'import-mode',
+    name: '静态·素材导入方式（保留原位 / 复制进草稿：设置 → 主进程整条链都真的接线）',
+    argv: [NODE, 'tools/check-import-mode.mjs'],
+    // 稳定数字 12 = 链路 11 + 自证 3（自证不计入 pass，只计 caught，故为 12）。
+    // 挡的是"设置项是根装饰开关"：按钮画出来了、点了也变蓝，主进程根本没读它。
+    // 最容易错的一环是**复制与 describeMedia 的先后**：先描述再复制，白名单里登记的
+    // 还是原路径，复制出的那份素材播不了（表现为"导入成功了，画面是黑的"）。
+    expected: 12,
+    marker: /IMPORT_MODE_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'markers',
+    name: '自检·时间线标记（排序 / 合并 / 命中 / 跳转不原地打转）',
+    argv: [NODE, 'tools/check-markers.mjs'],
+    // 稳定数字 19 = 规范化 7 + 命中 5 + 跳转 7。
+    // 标记的四种坏法都不报错、界面也照样画得出来：
+    //   不排序 → 上一个/下一个跳反；不去重 → 同一处叠两个点，按两次才动；
+    //   阈值各写一份 → 在标记上再点一次删不掉；跳转取"最近的一个" → 压在上面时原地不动。
+    // 尤其 `normalizeMarkers` 里 `Number(null) === 0`：一个 null 会静默变成
+    // "打在 0 秒的标记"，看着就像播放头那根线，永远删不掉 —— 已由断言钉住。
+    expected: 19,
+    marker: /MARKERS_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
     id: 'trim-selftest',
     name: '自证·片段修剪算术本身正确（源入点同步 / 不变量夹具）',
     argv: [NODE, '--no-warnings', 'tools/trim-selftest.mjs'],
@@ -328,7 +380,11 @@ const GATES = [
     //   修剪上限 / speedPatch）。倍速是「时间线秒 ↔ 源素材秒」的换算因子，
     //   漏掉它的症状是"预览一个速度、成片另一个速度" —— 两边单独看都没错，
     //   只有算术层这里能钉住。
-    expected: 69,
+    // 69 → 75（2026-10-19）：新增 6 条「剪辑联动」判据（trim.js 的 linkMovePatches）——
+    //   同源片段一起平移 / 无 assetId 的不参与 / 关掉只动自己 / 往左拖过头整组夹到 0 /
+    //   间距守恒 / 目标不存在返回空。前三条挡的是"开关是装饰"，后三条挡的是
+    //   "整组夹取只夹了被拖那一条"（画面到 0、声音还留在原地 ⇒ 音画错位，播放才发现）。
+    expected: 75,
     marker: /TRIM_SELFTEST_PASSED/,
     count: /TRIM_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -489,6 +545,61 @@ const GATES = [
     count: /EXPORT_CONTRACT_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'edit-geometry',
+    name: '自检·几何换算同源（裁剪 / 镜像 / 四角圆角 / 蒙版朝向 / 音量包络 / 导出滤镜）',
+    argv: [NODE, 'tools/check-edit-geometry.mjs'],
+    // 稳定数字 59 = 裁剪 9 + 镜像 7 + 四角 7 + 蒙版 5 + 音量包络 4 + 导出滤镜 8 + 斜切 3
+    //   + 倒放 10 + 立体声平衡 7（后两组是 2026-10-19 新加的两项能力）。
+    // 这道闸钉的是「同一个参数在预览与导出里被算成两个值」那一族：
+    // 裁剪把导出串反解回百分比与预览 transform 反解出的中心比、镜像逐轴对名字、
+    // 四角数 hypot 段数、包络用 JS 复算 ffmpeg 表达式。纯函数、不开 Electron，秒级。
+    //
+    // ⚠️ 倒放那组是**跨实现**的一致性判据：导出侧 ffmpeg 直接反吐帧序，
+    //   预览侧 `<video>` 不能负速播放、只能把局部秒翻过来 —— 两侧实现完全不同，
+    //   所以断言写成"用预览的换算复算出源时间，首帧必须落在出点、末帧必须回到入点"。
+    expected: 59,
+    marker: /EDIT_GEOMETRY_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'edit-geometry-selftest',
+    name: '自证·几何换算判据可分辨（错误状态必须被判为假）',
+    argv: [NODE, 'tools/check-edit-geometry.mjs', '--selftest'],
+    // 8 个"错误状态"谓词（裁剪中心偏 / 只接一根镜像轴 / 四角只算两角 /
+    // 条带朝向串 / 包络表达式不一致 / 降噪关掉仍留参数 / 倒放预览没翻转 / 全左时右声道没归零）。
+    // 它们全部为假才算通过。
+    expected: 59,
+    marker: /EDIT_GEOMETRY_SELFTEST_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'speed-curve',
+    name: '自检·曲线变速 / 卡点 / 音高（面积=平均速率、分段三不变式、变调时长守恒）',
+    argv: [NODE, 'tools/check-speed-curve.mjs'],
+    // 稳定数字 84 = 规范化 10 + 面积与映射 15 + 片段换算 13 + 分段不变式 9
+    //   + 应用补丁 5 + 卡点 10 + 音高 12 + 节拍检测 10。
+    // 这道闸钉的是「变速这件事在预览与导出里被算成两个东西」那一族：
+    // 曲线下的面积是平均速率（决定片段占多长）、p 时刻的累计面积决定取源的哪一秒
+    // （决定画面内容）、导出分段的三条不变式决定成片长度对不对。
+    // 三者任意一个算错，成片都不会报错 —— 只是"短了一截 / 画面提前跑掉 / 每段跳一下"。
+    //
+    // ⚠️ 另外两条是**反向**判据：分段速率必须等于该段自己的 srcLen/dur（不是平均值），
+    //   变调必须同时有 asetrate 与抵消用的 atempo（少了 atempo 片段会变短，
+    //   于是音画从这一秒开始整体错位）。
+    expected: 84,
+    marker: /SPEED_CURVE_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'speed-curve-selftest',
+    name: '自证·曲线变速判据可分辨（面积近似 / 线性累计 / 漏段 / 平均速率 / 变调不抵消 / 慢窗叠平）',
+    argv: [NODE, 'tools/check-speed-curve.mjs', '--selftest'],
+    // 8 个"错误状态"谓词，全部为假才算通过（见脚本里的 mustFail 列表）。
+    expected: 84,
+    marker: /SPEED_CURVE_SELFTEST_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
     id: 'ui-accent',
     name: '静态·界面强调色只许一套（青色 UI 强调不许回来 · 裸色必须走令牌 · 令牌同源）',
     argv: [NODE, 'tools/check-ui-accent.mjs', '.'],
@@ -647,6 +758,370 @@ const GATES = [
     expected: 12,
     marker: /SPEED_UI_OK/,
     count: /SPEED_UI_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'curve-export',
+    name: '真导出·曲线变速（分段拼接真的跑得过 ffmpeg：四种音高组合 · 时长 · 音轨 · 切点一致）',
+    argv: [NODE, 'tools/check-curve-export.mjs'],
+    // 稳定数字 19 = 夹具 2 + 滤镜图与分段 5 + 三种音高组合各 3（共 9）+ 曲线音频轨 3。
+    // 这道是**唯一**能证明"曲线变速真的能导出"的证据：分段拼接是一串拼出来的滤镜图，
+    // 拼错的样子不是"算错一个数"，而是 ffmpeg 直接报 `No such filter: ''` 或者
+    // concat 因采样格式不一致失败（首跑就踩到过一次：尾段整段为空时链里零个滤镜）。
+    // 判据全取成片本身：时长 = 时间线占位、音轨还在、视频与音频的切点逐个相等。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 19,
+    marker: /CURVE_EXPORT_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'compound',
+    name: '自检 + 真导出·复合片段（新建 / 展开 / 裁剪 / 倍速 / 倒放 / 嵌套 / 解除 / 成片像素）',
+    argv: [NODE, 'tools/check-compound.mjs'],
+    // 稳定数字 70 = 新建 11 + 展开 10 + 裁剪 6 + 倍速 7 + 倒放 4 + 空隙 2 + 嵌套 4
+    //   + 解除 7 + 轨道开关穿透 5 + 不改入参 2 + 音量穿透 2 + 真导出 10。
+    //
+    // 这块的错法全是"不报错"的：展开时坐标算错半秒（画面照播、只是内容错位）、
+    // 裁剪时漏乘倍速（右半段从头再播一遍）、导出侧忘了展开（成片只剩第一段、后面全黑）。
+    // 所以判据两头钉：纯算术取展开后的片段表，成片侧**真跑 ffmpeg 读中心像素** ——
+    // 0.6 秒必须是第一段的红、3.0 秒必须是第二段的蓝（"只有第一段被渲染"时这一条必红）。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 70,
+    marker: /COMPOUND_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'compound-e2e',
+    name: '客户端 E2E（复合片段：Ctrl 多选 / 右键合成 / 预览展开 / 预览点选落外层 / 解除还原）',
+    argv: [NODE, 'tools/compound-e2e.mjs'],
+    // 稳定数字 15。这一族全是"界面到算术之间那三根线"：
+    //   ① Ctrl 多选没进集合（菜单只合成一段）② 合成后预览没展开（时间线变成一个片段、画面黑掉）
+    //   ③ 预览里选中内部子 id（模型里没有这个 id ⇒ 右栏空、选框不出现）。
+    // 判据取消费端：时间线片段数与角标、预览主画面层的 data-layer 是否 `父id~子id`、谁带 .selected。
+    expected: 15,
+    marker: /COMPOUND_E2E_OK/,
+    count: /COMPOUND_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'multicam',
+    name: '自检 + 真导出·多机位（新建 / 同步 / 切换点 / 展开 / 裁剪 / 倍速 / 倒放 / 轨道开关 / 解除 / 成片像素）',
+    argv: [NODE, 'tools/check-multicam.mjs'],
+    // 稳定数字 69 = 新建 10 + 切换点 11 + 展开 21 + 裁剪倍速倒放 9 + 轨道开关 4
+    //   + 解除 4 + 与复合互操作 2 + 真导出 8。
+    //
+    // 这块的错法全是"不报错"的：同步 offset 少算半秒（切角瞬间画面里的人跳一下）、
+    // 切换点按时间线秒存（2 倍速下每个点都偏一半）、末段没延伸到节目末尾（结尾黑掉）、
+    // 取声音轨与画面层都没静音（两路声音叠在一起，听着只是"更响"）、
+    // 导出侧忘了展开（成片里那段是黑的，时间线上却好好摆着）。
+    // 所以判据两头钉：展开后的片段表逐项对源入点/音量，成片侧**真跑 ffmpeg 读中心像素**
+    // —— 0.8 秒必须是第 1 路的红、3.0 秒必须是第 2 路的蓝，并且把切换点挪到 3 秒后
+    // 2.0 秒处必须仍然是红（证明颜色由切换点决定，不是素材碰巧那样）。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 69,
+    marker: /MULTICAM_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'region',
+    name: '自检 + 真导出·时间区域（规范化 / 裁剪入点 / 曲线子区间 / ripple 删除 / 复制粘贴 / 只导出区间）',
+    argv: [NODE, 'tools/check-region.mjs'],
+    // 稳定数字 75 = 规格 10 + 切一刀 13 + 曲线 6 + 删除 18 + 复制粘贴 10 + 只导出 9 + 真导出 9。
+    //
+    // 这块的错法全是"不报错"的：右残段忘了按 ripple 前移（留一个空洞）、
+    // 切曲线片段时把整条曲线原样搬给残段（速度分布整个变形）、
+    // 倒放片段的残段入点取错端点（从另一个位置开始播，甚至越界变黑）、
+    // 导出侧「只导出区域」没接上（面板上选了、成片还是整条）。
+    // 判据两头钉：片段表逐项对 start / duration / offset / 子曲线，
+    // 成片侧**真跑 ffmpeg 读中心像素** —— 区间 [1,3) 的成片必须 2 秒，
+    // 0.4 秒红、1.6 秒蓝，并与"手工把这段拖到 0"的对照组同色。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 75,
+    marker: /REGION_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'region-e2e',
+    name: '客户端 E2E（时间区域：Shift 拖动框选 / 复制粘贴 / 只导出面板 / 删除前移 / I O 键 / Shift+Delete）',
+    argv: [NODE, 'tools/region-e2e.mjs'],
+    // 稳定数字 25。这一族测的是"界面到算术之间"那几根线：
+    //   ① Shift+拖动没接上（拖完没反应）② 区域画出来了但工具栏没出现
+    //   ③ 复制了不让粘贴 ④ 导出面板不知道有区间 ⑤ 删除只删内容不前移。
+    // 判据取消费端：.wb-region 上真实写出的秒数、片段卡片的 DOM 数与几何（px/46=秒）、
+    // 导出面板的 aria-pressed 与成片时长。
+    expected: 25,
+    marker: /REGION_E2E_OK/,
+    count: /REGION_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'recorder-e2e',
+    name: '客户端 E2E（录音配音：假麦克风 / 电平条 / 计时器 / 真落盘 / 落点在播放头）',
+    argv: [NODE, 'tools/recorder-e2e.mjs'],
+    // 稳定数字 16。这一族测的是「点下去到底发生了什么」：
+    //   ① 权限闸没放开 ⇒ getUserMedia 抛错，界面只是弹一句（或什么都不弹）
+    //   ② 录到了但没落盘 ⇒ 时间线上多一根看不见的细线，重开草稿就没了
+    //   ③ 落了盘但没进 yjai-media:// 白名单 ⇒ 卡片画得好好的，播放无声
+    //   ④ 落点写在轨道末尾而不是播放头 ⇒ "对着画面说"根本不成立
+    // 判据取消费端且**跨进程**：DOM 读 data-rec-phase / 计时器 / 电平格 / 音频轨片段几何
+    // （px/46=秒），磁盘读 `<userData>/recordings` 下真有 >5KB 的文件。
+    // ⚠️ 假麦克风只开 use-fake-device 时轨道是**纯静音**，电平条恒 0 格；
+    //    必须配 `--use-file-for-fake-audio-capture=<wav>`（脚本每次现造 440Hz 正弦波），
+    //    否则"电平条没接"和"环境本来没声音"分不开 —— 这种假红/漏检都极难查。
+    expected: 16,
+    marker: /RECORDER_E2E_OK/,
+    count: /RECORDER_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'layer-order',
+    name: '自检 + 真导出·画面层级（自由层级：层号规格 / 比较器 / 上移下移重编号 / 成片谁压住谁）',
+    argv: [NODE, 'tools/check-layer-order.mjs'],
+    // 稳定数字 37 = 层号规格 8 + 比较器 7 + 上移下移 9 + 预览排序 3 + 真导出 10。
+    //
+    // 这一块的错全都不报错，而且两头都可能错：层号只落在数据里、预览不按它排
+    // （点了没反应）；预览排了、导出不排（预览里 A 压住 B，成片里 B 压住 A）；
+    // 「上移一层」写成 `z += 1`（两段同 z 时点了毫无反应）；老草稿缺 z 处理错
+    // （所有历史项目的层叠顺序整体变掉）。
+    // 判据三层：纯算术 + composite.layerOrder 排序 + **真跑 ffmpeg 读中心像素**
+    // （红/蓝两层画中画铺满中央，谁在上由中心像素的 RGB 直接回答）。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 37,
+    marker: /LAYER_ORDER_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'layer-e2e',
+    name: '客户端 E2E（画面层级：右键上移/下移 / 置灰跟着真实层号 / 主轨不许调 / 落草稿）',
+    argv: [NODE, 'tools/layer-e2e.mjs'],
+    // 稳定数字 12。只测「界面到算术之间」的几根线：菜单点了有没有写回 clips、
+    // 该置灰的有没有置灰、主轨（顺序链）上那两个项是不是也被误开、层号有没有落进草稿。
+    // 判据取消费端：时间线片段上的 data-clip-z 真实数值、菜单项的 disabled、磁盘草稿 JSON 的 z。
+    expected: 12,
+    marker: /LAYER_E2E_OK/,
+    count: /LAYER_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'scenes',
+    name: '自检 + 真检测·场景切换（解析 pts/scene_score / 入点与倍速换算 / 去噪 / 切片守恒 / 真跑 ffmpeg）',
+    argv: [NODE, 'tools/check-scenes.mjs'],
+    // 稳定数字 40 = 解析 6 + 支持范围 4 + 换算 10 + 切片 7 + 真检测 8 + 夹具 1 + 阈值/空片 4。
+    //
+    // 这一块的错都表现为"切得出来、看着差不多"：pts_time 是源文件绝对秒（漏减入点就整体偏移）、
+    // 漏除倍速（2 倍速下每个切点偏一半）、不做过近过滤（切出一串 0.0x 秒的碎段）、
+    // 切片不复用 region 的算术（曲线片段残段速度分布整个变掉）。
+    // 判据：解析真 ffmpeg 输出格式 + 换算逐项对数字 + **真跑 ffmpeg** 检测红/蓝/绿三段的切点
+    // 落在 1s / 2s 附近，并用阈值 0.9 反向验证"阈值真的喂进去了"。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 40,
+    marker: /SCENES_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'proxy',
+    name: '自检 + 真转码·预览画质（档位表 / 规范化 / 代理命名 / 缩放滤镜 / 真生成 540p 且不放大）',
+    argv: [NODE, 'tools/check-proxy.mjs'],
+    // 稳定数字 28 = 档位表 6 + 规范化 5 + 命名 6 + 缩放滤镜 4 + 真生成 7。
+    //
+    // 这一块的错全都是"点了什么都没发生"或"看着像成了、其实方向错了"：
+    //   · 档位名与界面文案对不上 ⇒ 设置里写着 540p，heightFor 却给 0（预览根本没换文件）；
+    //   · 不认识的档位回落成 `undefined` 而不是 `full` ⇒ 神秘地变糊，用户以为素材坏了；
+    //   · 代理文件名不带高度 ⇒ 切档位时复用上一档的旧代理（画面糊着，档位显示完整）；
+    //   · 缩放写成 `scale=-2:H` ⇒ 480p 源被插值**放大**到 540p，更糊更慢，
+    //     而用户以为自己开了"画质增强"；
+    //   · 无音轨源转代理失败 ⇒ 静默回落原片（成片没问题，只是预览一直卡）。
+    // 判据：纯算术逐项对数字 + **真跑 ffmpeg** 生成代理，用 ffprobe 读高度与像素数，
+    // 并反验"源比目标矮时不放大"。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 28,
+    marker: /PROXY_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'proxy-e2e',
+    name: '客户端 E2E（预览画质：设置三档 → 真生成代理 → 预览换文件 / 导出仍用原片 / 切回即复原）',
+    argv: [NODE, 'tools/proxy-e2e.mjs'],
+    // 稳定数字 13。验的是"设置 → ffmpeg → 预览取哪个文件"这条链，外加一条**反向不变式**：
+    //   · 代理目录一开始是空的（不做"打开草稿就整库转一遍"，20 段素材要等 10 分钟）；
+    //   · 切到 540p 后 `<video>` 的 src 真的指向 proxies 目录（不是"设置里写着 540p"）；
+    //   · 草稿 JSON 里的 path 从头到尾仍是原片 —— 导出读它，结构上就碰不到代理；
+    //   · 切回「完整」预览立刻回原片（不是"要重启才生效"）。
+    // ⚠️ 判据必须解码 src 反推路径再比，字符串里出现 "proxies" 也可能是巧合。
+    expected: 13,
+    marker: /PROXY_E2E_OK/,
+    count: /PROXY_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'pack',
+    name: '契约 + 真 ZIP·素材包（收集三种藏法 / 双向改写 / CRC 标准 / 外部解压器核对 / zip-slip）',
+    argv: [NODE, 'tools/check-pack.mjs'],
+    // 稳定数字 54 = 文件名与路径 5 + 收集引用 6 + 双向改写 9 + 清单 7 + 真 ZIP 6
+    //   + 外部解压器 3 + zip-slip 1 + export/import 全链路 17。
+    //
+    // 这一族错全是"包打出来了、也解开了，但里面是错的"：
+    //   · 漏收复合片段的孩子 / 多机位的机位文件 ⇒ 对面那几段黑屏；
+    //   · 只改 path 不清 url ⇒ 对面读**我这台机器**的绝对路径（白名单恰好登记过，时好时坏）；
+    //   · CRC32 或中央目录偏移写错 ⇒ 我们自己读没问题，7-Zip 报「CRC 校验失败」；
+    //   · 解包不挡 `../` ⇒ 恶意包能往包外写文件（zip-slip）。
+    // 判据三层：纯算术 → 自己写读往返 → **Windows Expand-Archive 独立解一遍**
+    // （换一套完全不同的实现，才真正证明"这是标准 ZIP"）。
+    expected: 54,
+    marker: /PACK_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'pack-e2e',
+    name: '客户端 E2E（素材包：菜单 → 真打包 → 真解包 → 打开新草稿 → 预览指向解出来的文件）',
+    argv: [NODE, 'tools/pack-e2e.mjs'],
+    // 稳定数字 15。纯逻辑那道证明"算术对"，这一道证明「界面上点得到、点下去真发生」——
+    // `onExportPack` 忘了接到 TopBar 上，纯逻辑照样全绿。
+    // 关键判据：包内 draft.json 的 path 是 `media/...` 且 url 为空；
+    //           导入后**预览 `<video>` 的 src 解码后落在 `<userData>/packs/`**；
+    //           反向：本机原草稿的 path 全程没被改动。
+    // ⚠️ 原生对话框必须打桩（真弹框 = 用例永久卡住），打桩要等页面起来之后再打。
+    expected: 15,
+    marker: /PACK_E2E_OK/,
+    count: /PACK_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'hdr',
+    name: '契约 + 真转码·HDR（只认 color_transfer / 滤镜串成分 / 计划里只有 HDR 才有 tonemap / 真像素变化）',
+    argv: [NODE, 'tools/check-hdr.mjs'],
+    // 稳定数字 33 = 判据 9 + 滤镜串 9 + 计划 6 + 真渲染 9。
+    //
+    // 这一族的错全都"尺寸/时长/帧率正确，只有颜色错"：
+    //   · 不转 ⇒ 超白被裁成死白；转了但排在调色之后 ⇒ 调色按 HDR 亮度算，整体偏色；
+    //   · 转了不改输出标签 ⇒ 像素是 SDR、文件还标 HDR，**别人那儿发灰**（本机复现不出来）；
+    //   · 给 SDR 也转 ⇒ 老工程成片颜色整体变掉，且没有任何迹象指向这一步。
+    // 判据三层：纯规则 → buildPlan 的滤镜图（HDR 才有 / SDR 一个字都不多）→
+    // **真渲染两份同像素不同标签的片子，用信号统计证明画面真的变了**。
+    // ⚠️ 判据不带方向：实测 PQ 映射后**变亮**（134 vs 124），HLG 几乎不动（0.2）——
+    //    早先按"一定变暗"写，红的是尺子。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 33,
+    marker: /HDR_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'warp',
+    name: '契约 + 真渲染·自由变形（单应矩阵 / 角顺序TL-TR-BL-BR / 框外透明 / transform 顺序）',
+    argv: [NODE, 'tools/check-warp.mjs'],
+    // 稳定数字 37 = 参数 3 + 中性 3 + 四角 2 + 单应 2 + 退化 3 + CSS 4 + perspective 4
+    //               + 计划 2 + 真渲染 5 + 静态 9（含预览四角手柄的 4 条）。
+    //
+    // 这一族的错全都"看起来像生效了"，错在几何本身：
+    //   · 角顺序按顺时针传 ⇒ 左右镜像；四角对称的夹具**完全看不出来**，所以夹具是四象限彩图；
+    //   · 只变形不补 alpha ⇒ 框外是 perspective 的边缘 clamp（一圈被拉长的像素）；
+    //   · `anyTransparent` 漏掉 warp ⇒ 链落回 yuv420p，补好的 alpha 被整体丢弃；
+    //   · CSS matrix3d 没拿到元素像素尺寸 ⇒ 窗口一缩放透视就歪；
+    //   · 预览拖角点反解了含 warp 的整串矩阵 ⇒ 换算到"变形之前"的坐标，越拖越偏。
+    // 本机没有 ffmpeg 时退出码 2（verify 记为 SKIP，不假装通过）。
+    expected: 37,
+    marker: /WARP_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'fx-styles',
+    name: '契约 + 真渲染·描边四样式与内阴影（层次表 / 虚线断口 / 内阴影落差 / 防回退接线）',
+    argv: [NODE, 'tools/check-fx-styles.mjs'],
+    // 稳定数字 33 = 描边规则 8 + 阴影互斥 2 + 预览导出同源 7 + 真渲染 12 + 静态 7（含 3 条对照/多段）。
+    //
+    // 这一族的错是"代码接上了、成片一个像素没变、ffmpeg 不报错"。本轮真踩到四种：
+    //   ① 内阴影把阴影图当 overlay 的**底图** ⇒ 被不透明画面整层盖掉；
+    //   ② 内阴影用"线性场 + σ13 模糊" ⇒ 20px 带子平均成 3/255，看着像没开；
+    //   ③ 双线第二圈接着第一圈的**结果**算 alpha ⇒ 环往外长，双线变粗边；
+    //   ④ 虚线 `onH*inDashX` 少括号 ⇒ 上边恒亮，虚线退化成实线。
+    // 每条都有对应的像素判据，不是靠"代码看着对"。
+    expected: 33,
+    marker: /FXSTYLE_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'ui-spec',
+    name: '静态·界面规格（设计令牌被真的消费 / 状态三态 / 主按钮唯一 / 图标尺寸显式）',
+    argv: [NODE, 'tools/check-ui-spec.mjs'],
+    // 稳定数字 14 = 令牌定义 1 + 消费 4 + 状态层 4 + 主按钮 3 + 图标 2。
+    //
+    // 这一族全是"构建通过、静态扫描也过、只有盯着看才发现"的错：
+    //   · 令牌定义了没人用 ⇒ 字号仍在 9/10/11/12/13/15 六个值上散着；
+    //   · 选中态只改字色 ⇒ 深底上整排标签看着一样平；
+    //   · 选中亮条写成真 border ⇒ 选中那枚比旁边高二像素，整排不齐；
+    //   · 主按钮与次级按钮都带底板 ⇒ 一屏里三个"最重要"；
+    //   · 禁用态用 opacity ⇒ 底板与字形一起偏色（实测把峰值从 123 抬到 141）。
+    // 判据取**级联后最终生效值**，不取"某个块里有没有 var()"。
+    expected: 14,
+    marker: /UISPEC_OK/,
+    count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
+  },
+  {
+    id: 'hdr-e2e',
+    name: '客户端 E2E（HDR 标注：真 HLG 文件 → IPC 结论 → 右栏那一行 / SDR 不许假标注）',
+    argv: [NODE, 'tools/hdr-e2e.mjs'],
+    // 稳定数字 12。check-hdr 证明"导出真的转了"，这一道证明「界面真的说出来了」：
+    // 主进程探到 HLG、IPC 通了、右栏渲染出那一行 —— 三处缺一处，
+    // 用户还是"看着发灰不知道为啥"（第③类"接对了看不见"）。
+    // 反向判据同样重要：SDR 素材必须**没有**这一行，否则等于给所有素材贴假标签。
+    expected: 12,
+    marker: /HDR_E2E_OK/,
+    count: /HDR_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'scenes-e2e',
+    name: '客户端 E2E（按场景分割：右键 → 真 ffmpeg 检测 → 时间线切成三段且首尾相接 → 落盘）',
+    argv: [NODE, 'tools/scenes-e2e.mjs'],
+    // 稳定数字 11。验的是「界面到 ffmpeg 之间」那条链：菜单项点了有没有接上、
+    // 切点有没有换算（切歪了不报错）、切完总时长有没有变、有没有落草稿。
+    // 判据取消费端：片段卡片的 DOM 数与几何（px ÷ 46 = 秒）、草稿 JSON 的片段数。
+    expected: 11,
+    marker: /SCENES_E2E_OK/,
+    count: /SCENES_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'multicam-e2e',
+    name: '客户端 E2E（多机位：Ctrl 多选 / 右键建多机位 / 检查器切角 / 数字键切角 / 预览换画面 / 取声 / 解除）',
+    argv: [NODE, 'tools/multicam-e2e.mjs'],
+    // 稳定数字 23。这一族测的是"界面到算术之间的那几根线"：
+    //   ① Ctrl 多选没进集合 ⇒ 菜单项一直禁用 ② 建好后预览没展开 ⇒ 画面黑掉
+    //   ③ 点机位按钮只改面板、没写回片段 ⇒ 高亮变了画面没变 ④ 数字键没接
+    //   ⑤ 解除后片段数不对。
+    // 判据取消费端：时间线片段数与角标、预览主层的 data-layer（`父id~m<机位>_<起点>`）、
+    // 检查器按钮的 aria-pressed。
+    expected: 23,
+    marker: /MULTICAM_E2E_OK/,
+    count: /MULTICAM_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'preview-select',
+    name: '客户端 E2E（预览直接操作：点选 / 拖移 / 四角缩放 / 双击复位 / 吸附辅助线 / 特效只动内容）',
+    argv: [NODE, 'tools/preview-select-e2e.mjs'],
+    // 稳定数字 19。这一族全是"看着有、其实没接"的高危区：
+    //   ① 选框画出来但拖动不写数据 ② 写了但没写进导出用的字段
+    //   ③ 吸附算错方向（只吸前缘） ④ 画面特效挂在画框上（圆角/阴影跟着抖，成片里却没有画框）
+    // 判据取消费端：右栏数值、画布的内联 transform 矩阵、animation-name 挂在哪一层、
+    //   片段左边界与播放头的**像素**差。
+    expected: 19,
+    marker: /PREVIEW_SELECT_OK/,
+    count: /PREVIEW_SELECT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'curve-speed',
+    name: '客户端 E2E（曲线变速：预设 / 拖点 / 时间线占位 / preview playbackRate / 按标记卡点）',
+    argv: [NODE, 'tools/curve-speed-e2e.mjs'],
+    // 稳定数字 24。这道是曲线变速唯一的**行为级**证据 —— 三件事任意一件没接上都
+    // 不报错、不黑屏：① 编辑器只是装饰（拖了没写数据）② 时间线占位没跟着面积走
+    // ③ 预览只换源时间不换 playbackRate（起点对、越播越歪）。
+    // 判据全部取消费端：clip-dur 文本、SVG path 的 d 串、面板上的「平均倍速」
+    // 与真源算出的面积是否相等、`<video>.playbackRate` 是否等于 curveAt(p)。
+    expected: 24,
+    marker: /CURVE_SPEED_OK/,
+    count: /CURVE_SPEED_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 6 * 60 * 1000
   },
   {
     id: 'home',
@@ -870,7 +1345,7 @@ const GATES = [
     //     · 配图族只认「被左栏节点点名」这一条挂载路径 —— 能力卡片区已经不存在，
     //       再要求它有样本只会假红；
     //     · 标签下界 8 → 7。
-    expected: 70,
+    expected: 75,
     marker: /WORKBENCH_TREE_CHECK_OK/,
     count: /WORKBENCH_TREE_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+problems=(?<f>\d+)/
   },
@@ -1105,7 +1580,7 @@ const GATES = [
     //     写死了 `'stock-local'`，而这个 key 在本次对齐后已不存在 ⇒
     //     `nodeOf` 返回 null ⇒ 左栏没有高亮、中栏退回"显示全部素材"（点了没反应）。
     //     现在一律走 `defaultNodeOf(tab)`。
-    expected: 180,
+    expected: 195,
     marker: /TABS_E2E_OK/,
     count: /TABS_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -1167,9 +1642,10 @@ const GATES = [
     id: 'preview-effects',
     name: '客户端 E2E（预览区真的画出「字幕叠加 / 转场 / 滤镜 / 画面特效」）',
     argv: [NODE, 'tools/check-preview-effects.mjs'],
-    // 稳定数字 33 = 静态契约 1（不许有动画给 .canvas-frame 动 filter）
+    // 稳定数字 34 = 静态契约 1（不许有动画给画布/内容层动 filter，且**不许挂在画框上**）
     //   + 夹具 2（draft 真的写进去了 / 片段数对得上）
-    //   + 2.0s 段 9 + 4.5s 段 5 + 7.0s 段 5 + 面板端到端 8 + 空时间线 2 + 全程页面错误 1。
+    //   + 2.0s 段 10（含"画框自身无动画"那条）+ 4.5s 段 5 + 7.0s 段 5 + 面板端到端 8
+    //   + 空时间线 2 + 全程页面错误 1。
     //
     // 为什么必须存在：这是本仓最贵的一类缺陷 —— **「加上了，但画面里一个像素都没变」**。
     //   在它之前，字幕 / 转场 / 滤镜 / 特效这四件事能通过所有既有闸门：
@@ -1196,7 +1672,7 @@ const GATES = [
     //     叠加层判据挂在"播放头下有没有视频"上 ⇒ 字幕一条都画不出来（层数 0）。
     //   · 收尾不许在裸 `app.close()` 之后再读 `app.process()`：实测 tear-down 后读会抛，
     //     断言全绿而退出码变 1（看着像闸门坏了）—— 已 try/catch。
-    expected: 33,
+    expected: 34,
     marker: /PREVIEW_FX_OK/,
     count: /PREVIEW_FX_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -1204,7 +1680,7 @@ const GATES = [
     id: 'preview-effects-selftest',
     name: '自证·画面特效禁令判据可分辨（正控制组全绿 · 危险动画红在对的断言上）',
     argv: [NODE, 'tools/check-preview-effects.mjs', '--selftest'],
-    // 稳定数字 6 = 1 条正控制组 + 5 条反控制组 / 判据自身（纯逻辑，不起 Electron）。
+    // 稳定数字 7 = 1 条正控制组 + 6 条反控制组 / 判据自身（纯逻辑，不起 Electron）。
     //
     // 为什么必须单独自证：上面那条「动画不许给 .canvas-frame 动 filter」的禁令，
     //   唯一的坏法是**恒绿** —— 判据永远返回 ok。那样的话，哪天有人给画面加一个动
@@ -1215,7 +1691,7 @@ const GATES = [
     //     · 挂在 .canvas-frame 上的必须**红**，且**只点出危险的那个**（混写不许误伤）；
     //     · 一个动画都不挂也必须红（特效整个丢了）；
     //     · 逗号多选择器、嵌套花括号的块边界都要切得准 —— 切错就是漏报。
-    expected: 6,
+    expected: 7,
     marker: /PREVIEW_FX_SELFTEST_OK/,
     count: /PREVIEW_FX_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -1310,7 +1786,8 @@ const GATES = [
     // 稳定数字 11 = 正控制组 1 + 扰动 10（toggleHooks / lockHooks / trackStateProp /
     //   lockedGuard / effectiveClips / renderClipsToExport / disableAction /
     //   trackStatePersisted / soloHooks / replaceWired）。
-    expected: 11,
+    // 11 → 12（2026-10-19）：新增「剪辑联动」一条扰动（按钮→App→拖动→落盘四段）。
+    expected: 12,
     marker: /TRACK_CONTROLS_SELFTEST_OK/,
     count: /TRACK_CONTROLS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -1342,16 +1819,17 @@ const GATES = [
     id: 'inspector-fx',
     name: '客户端 E2E（检查器效果：调节/美颜/位置真的改预览，且与导出同一组换算）',
     argv: [NODE, 'tools/check-inspector-effects.mjs'],
-    // 稳定数字 40 = 换算同源 8（中性 1 + 亮度 1 + 色温 1 + 饱和度 1 + 磨皮 1
+    // 稳定数字 44 = 换算同源 8（中性 1 + 亮度 1 + 色温 1 + 饱和度 1 + 磨皮 1
     //   + 位置旋转 1 + 越界夹取 1 + 字幕覆写 1）
     //   + 效果换算同源 10（中性 1 + 圆角 1 + 斜切 1 + 抠像 1 + 蒙版矩形 1 + 圆角进遮罩表达式 1
     //     + 混合映射 1 + 描边 1 + 阴影 1 + 关键帧 1）
-    //   + 真机 22（原 11：夹具 1 + 整排页签 1（信息 + 画面/音频/变速/调整）+ 亮度挂矩阵 1
+    //   + 真机 24（原 22：夹具 1 + 整排页签 1（信息 + 画面/音频/变速/调整）+ 亮度挂矩阵 1
     //     + 矩阵红增益>1 1 + 色温红变大 1
     //     + 色温蓝<红 1 + 磨皮有 blur 1 + 磨皮半径比例 1 + 淡入写回片段 1 + 字幕字号变大 1
     //     + 无页面错误 1；
-    //     效果面板 8：四子页签 1 + 圆角剪裁盒与比例 1 + 斜切 transform 1 + 抠像矩阵 1
+    //     效果面板 8：六子页签 1 + 圆角剪裁盒与比例 1 + 斜切 transform 1 + 抠像矩阵 1
     //     + 蒙版 mask-image 1 + 描边 8 向 drop-shadow 1 + 阴影叠第 9 条 1 + 效果写回草稿 1；
+    //     裁剪与镜像 2：点「裁剪 1:1」画面真的放大到 1.78 倍 1 + 点「左右镜像」x 缩放变负数 1；
     //     右栏排版 3：「信息」横排且与「画面」同一行 1 + 字幕片段[信息][字幕] 1
     //     + 点「字幕」真的换屏 1）。
     //
@@ -1365,10 +1843,17 @@ const GATES = [
     //   描边（基准宽度折算）、阴影（blur 与 sigma 的 2:1）、关键帧（线性 + 两端夹取）。
     //   每一条的坏法都是"两侧各写一份、有一边漏掉"，构建与静态扫描全都看不见。
     //
+    // ⚠️ 新增的 2 条「裁剪与镜像」治的是**面板长出来了但没接线**：
+    //   自由裁剪与镜像都是这一个版本新加的真源（crop.js / effects.js 的 mirrorFilters），
+    //   面板画得出来、数据也写回片段，但只要 Stage.jsx 的 transform 列表漏一项，
+    //   预览就一个像素不动（导出反而是对的 —— 只查草稿值发现不了）。所以读 computed matrix()。
+    //
     // ⚠️ 新增的 3 条「右栏排版」治的是**外形与去向脱节**：页签画出来了但点了不换屏、
     //   「字幕」页签在画面片段上也冒出来（点下去没东西可看）、以及「信息」被别的
     //   选择器压成竖排/被挤到另一行（看着不像页签）。前者读 DOM、后者量矩形，都是消费端。
-    expected: 40,
+    // +2（2026-10-19 文字系统）：点「入场·上浮」预览真的挂上 ta-up-in 动画；
+    //   点「左对齐」外框的 justify-content 真的变 flex-start。
+    expected: 44,
     marker: /INSPECTOR_FX_OK/,
     count: /INSPECTOR_FX_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },

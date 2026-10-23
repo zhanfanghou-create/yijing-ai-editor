@@ -95,24 +95,33 @@ function anchorToPosition(anchor, offset, base) {
  */
 export function textStyleCss(key, base = STYLE_BASE_WIDTH, clip = null) {
   const def = applyTextOverrides(textStyleDef(key), clip)
-  const title = def.usage === 'title'
 
+  /* 水平方向：对齐方式决定整块文字靠哪边。导出侧的 x 用同一个 6% 边距
+     （subtitles.js 的 ALIGN_MARGIN），所以"预览靠左、成片也靠左"。
+     ⚠️ 原来这里写死 center（title 与 subtitle 都 center）—— 那是 `justifyContent: title ? 'center' : 'center'`
+        这种"两个分支写成一样"的残留，等于根本没有对齐能力。 */
+  const sidePad = `6%`
+  const justify = def.align === 'left' ? 'flex-start' : def.align === 'right' ? 'flex-end' : 'center'
   const box = {
     position: 'absolute',
     display: 'flex',
-    justifyContent: title ? 'center' : 'center',
+    justifyContent: justify,
     alignItems: def.anchor === 'top' ? 'flex-start' : def.anchor === 'center' ? 'center' : 'flex-end',
     ...anchorToPosition(def.anchor, def.offset, base),
+    paddingLeft: sidePad,
+    paddingRight: sidePad,
     pointerEvents: 'none'
   }
 
   const inner = {
     display: 'inline-block',
-    maxWidth: '92%',
-    fontFamily: 'inherit',
+    /* 左右对齐时收窄到 84%：导出侧左右对齐用的是 6% 的边距（见 subtitles.js 的 x），
+       这里留一样的余量，否则"预览顶到画布边、成片里离边 6%" */
+    maxWidth: def.align && def.align !== 'center' ? '88%' : '92%',
+    fontFamily: def.fontFamily || 'inherit',
     fontSize: q(def.size, base),
     fontWeight: String(def.weight || 600),
-    lineHeight: 1.22,
+    lineHeight: def.lineHeight || 1.22,
     textAlign: def.align || 'center',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word'
@@ -126,6 +135,10 @@ export function textStyleCss(key, base = STYLE_BASE_WIDTH, clip = null) {
   }
 
   if (def.tracking) inner.letterSpacing = q(def.tracking, base)
+
+  /* 文字动画交给 CSS 类（.ta-in-* / .ta-out-* / .ta-loop-*），这里只负责把
+     「用哪一个 + 多长」变成类名与 CSS 变量 —— 具体的位移幅度写在 workbench.css/styles.css 里，
+     与 shared/textAnim.js 的 shift 系数逐字对应（6% 对 6%）。 */
 
   /* 渐变填充：必须三件套一起给，少一件就退化成"看不见的字"（fill-color 透明 + 没背景裁切） */
   if (def.gradient && def.gradient.length >= 2) {

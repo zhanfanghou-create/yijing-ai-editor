@@ -26,13 +26,34 @@ contextBridge.exposeInMainWorld('yjai', {
     remove: (id) => ipcRenderer.invoke('draft:remove', id)
   },
 
+  /**
+   * 素材包：把草稿与它引用的全部素材打成一个 `.yjpack`（标准 zip），
+   * 或者把别人给的包解出来、存成一份新草稿。
+   *
+   * ⚠️ 渲染层只交"草稿数据"和"名字"，**路径与解包目录全在主进程决定** ——
+   *    否则等于把"往任意位置写文件"的能力交给页面。
+   */
+  pack: {
+    inspect: (data) => ipcRenderer.invoke('pack:inspect', data),
+    export: (payload) => ipcRenderer.invoke('pack:export', payload),
+    import: () => ipcRenderer.invoke('pack:import')
+  },
+
   media: {
-    pick: () => ipcRenderer.invoke('media:pick'),
+    /* options.mode = 'link'（留在原处）| 'copy'（复制进草稿目录）。
+       以前这里不接受参数，界面上那个"导入方式"开关就只能是个装饰。 */
+    pick: (options) => ipcRenderer.invoke('media:pick', options || {}),
     stat: (paths) => ipcRenderer.invoke('media:stat', paths),
     url: (filePath) => ipcRenderer.invoke('media:url', filePath),
     extractAudio: (payload) => ipcRenderer.invoke('media:extractAudio', payload),
     /** 波形峰值：主进程用 ffmpeg 抽 PCM 算好再给回渲染层（视频容器也稳） */
     peaks: (payload) => ipcRenderer.invoke('media:peaks', payload),
+    /** 场景切换检测：ffmpeg 的画面差异检测（返回源文件里的绝对秒数，换算在渲染层） */
+    scenes: (payload) => ipcRenderer.invoke('media:scenes', payload),
+    /** 预览代理：按画质档位生成（或复用）一份低分辨率文件，**只给预览用** */
+    proxy: (payload) => ipcRenderer.invoke('media:proxy', payload),
+    /** HDR 体检：返回 [{ path, hdr, label, hint }]（导出会自动做 SDR 色调映射） */
+    hdr: (paths) => ipcRenderer.invoke('media:hdr', paths),
     /**
      * Electron 32 起 File.path 被移除，取拖拽文件的真实路径官方只给 webUtils.getPathForFile。
      * 这个方法必须在 preload 里包一层再交出去 —— File 对象过不了 contextBridge 的序列化。
@@ -44,6 +65,27 @@ contextBridge.exposeInMainWorld('yjai', {
         return ''
       }
     }
+  },
+
+  /**
+   * 自定义字体：pick 打开字体对话框（复制进 userData/fonts 并登记白名单），
+   * allow 在恢复草稿时把已导入字体的路径重新登记（进程重启后白名单是空的）。
+   *
+   * ⚠️ 只暴露这两个方法，不暴露"任意路径进白名单"——那等于把访问控制交给渲染层。
+   *    allow 只接受**已经导入过**的路径（主进程仍会校验它是不是一个存在的文件）。
+   */
+  font: {
+    pick: () => ipcRenderer.invoke('font:pick'),
+    allow: (paths) => ipcRenderer.invoke('font:allow', paths)
+  },
+
+  /**
+   * 录音配音（麦克风在**渲染层**采，落盘在主进程）。
+   * 只暴露"把字节交给主进程保存"这一个动作，不暴露任何路径参数 ——
+   * 与 extractAudio 同一道防线：渲染层拿不到"往任意位置写文件"的能力。
+   */
+  recorder: {
+    save: (payload) => ipcRenderer.invoke('recording:save', payload)
   },
 
   shell: {

@@ -9,7 +9,8 @@ import {
 import { FRAME_RATE } from '../keymap.js'
 import { frameEffectClass, frameEffectDuration, overlayEffectClass } from '../frameEffects.js'
 import { cssFilterFor, filterDef, isNoopFilter } from '../looks.js'
-import { animClassOf, textStyleCss } from '../textStyles.js'
+import { textStyleCss } from '../textStyles.js'
+import { readTextAnim } from '../../shared/textAnim.js'
 import { pipBoxCss } from '../pip.js'
 import { timecodeFrames } from '../ui.jsx'
 /* 调节 / 美颜 / 位置旋转（真源在 shared/adjust.js，导出侧 render.js 用的是同一份换算） */
@@ -18,15 +19,23 @@ import { cssFilterOps, gradeMatrix, poseStyle } from '../../shared/adjust.js'
    导出侧 render.js 用的是同一份换算（见那份文件的说明：两侧不许各写一遍）。 */
 import {
   cssMaskFor,
+  cssMirror,
   cssRadius,
   cssSkew,
   blendCss,
+  dashedBoxCss,
   hasClip,
+  hasInnerShadow,
+  hasWarp,
+  innerShadowStyle,
   keyAlphaRow,
   readEffects,
   shadowFilter,
-  strokeShadows
+  strokeShadows,
+  warpTable
 } from '../../shared/effects.js'
+/* 自由裁剪框（裁剪 + 铺满）—— 与导出侧 shared/crop.js 的 ffmpegCropFor 同一套换算 */
+import { cssCropTransform } from '../../shared/crop.js'
 /**
  * 画面比例的真源（与导出共用同一份表，见 shared/aspect.js 的说明）。
  *
@@ -35,6 +44,8 @@ import {
  *    都是不报错、只有盯着看才发现的缺陷。
  */
 import { ASPECTS, aspectRatioOf, normalizeAspect } from '../../shared/aspect.js'
+/* 预览框里的直接操作：选中谁、选框画在哪、拖动改哪个字段 */
+import SelectionBox, { layerOwnerId, selectionBoxOf, selectionTargetOf } from './PreviewSelect.jsx'
 
 /** 预览画布：图片/视频直接播，音频给波形占位，文本直接显示正文 */
 function Previews({ asset, videoRef, onReady, style }) {
@@ -136,10 +147,13 @@ function AudioTrackLayer({ track, playing, volume }) {
     /* 倍速与画面同一口径：只对齐源时间不设 playbackRate，声音就会"越播越落后" */
     const rate = Math.min(16, Math.max(0.0625, Number(track?.speed) || 1))
     if (typeof el.playbackRate === 'number') el.playbackRate = rate
+    const keepPitch = track?.keepPitch !== false
+    if ('preservesPitch' in el) el.preservesPitch = keepPitch
+    else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keepPitch
     apply()
     if (playing) el.play().catch(() => {})
     else el.pause()
-  }, [apply, playing, url, volume, track?.gain, track?.speed])
+  }, [apply, playing, url, volume, track?.gain, track?.keepPitch, track?.speed])
 
   if (!url) return null
   return <audio ref={ref} src={url} preload="auto" onLoadedMetadata={apply} data-audio-track={track?.id || ''} />
@@ -172,17 +186,65 @@ function AudioLayers({ tracks, playing, volume }) {
  * ⚠️ 只写 transform / opacity，**不写 filter** —— 调色住在这一层自己的内联 filter 上
  *    （见 MediaLayer），这里再写会把它顶掉；而 CSS 动画的优先级又高于内联样式，
  *    所以两类效果必须各占一个属性，谁也不能挤谁。
+ *
+ * @param {{w:number,h:number}} box 画框的**布局**像素尺寸（matrix3d 要它，见下）
  */
-function mediaStyleOf(layer, fx) {
+function mediaStyleOf(layer, fx, box) {
   const pose = poseStyle(layer) || {}
   const skew = fx ? cssSkew(fx) : ''
-  /* 斜切要**先于**位置/缩放作用在内容上（导出侧 render.js 里 shear 也排在 pose 之前）。
-     CSS 的 transform 列表是从右往左作用，所以 skew 写在最后 = 最先作用。 */
-  const transform = [pose.transform, skew].filter(Boolean).join(' ')
+  /* 镜像（左右/上下）：导出是 hflip/vflip，同样是"以元素中心为轴翻转"。
+     自由裁剪框排在最右 = **最先作用**（CSS transform 从右往左执行），
+     与导出链的顺序逐字对应：裁剪 → 镜像 → 斜切 → 缩放/位置/旋转。 */
+  const mirror = fx ? cssMirror(fx) : ''
+  const cropT = cssCropTransform(layer.crop)
+  /**
+   * 自由变形（四角透视）排**最右**，也就是最先作用。
+   *
+   * 为什么不能排最左（最后作用）：`matrix3d` 的系数是按"元素四角的原始位置"
+   * 算出来的（0,0 → W,H）。如果它最后作用，前面 `scale(150%)` 已经把四角推到了
+   * 元素盒之外，而矩阵仍然假设它们在盒内 —— 于是四角手柄在 A 处、实际被拉的是 B 处。
+   * 排在最先作用，则"透视 → 再缩放/旋转/位移"与用户看到的画面逐字一致，
+   * 也和导出链里 `perspective` 排在 `scale/crop` 之前的顺序对得上。
+   *
+   * ⚠️ 这里必须拿到**像素**尺寸：CSS 的 `matrix3d` 没有百分比写法，
+   *    矩阵系数里带着 1/W、W/H 这类量。尺寸一变就得重算（由 ResizeObserver 驱动）。
+   */
+  const warpT = fx && hasWarp(fx) ? warpTable.cssWarpTransform(fx.warp, box && box.w, box && box.h) : ''
+  const transform = [pose.transform, skew, mirror, cropT, warpT].filter(Boolean).join(' ')
   const out = {}
   if (transform) out.transform = transform
   if (pose.opacity) out.opacity = pose.opacity
   return Object.keys(out).length ? out : undefined
+}
+
+/**
+ * 画框的布局像素尺寸（`clientWidth × clientHeight`）。
+ *
+ * 只有自由变形的 `matrix3d` 需要它（见 mediaStyleOf 的说明）。
+ * `active` 是"画框现在到底渲没渲"—— 为假时直接回 0，不去读一个不存在的元素。
+ * 比例 / 全屏变化会让画框尺寸跳变，所以一并放进依赖里重新观察；
+ * 平时的拖动改尺寸由 ResizeObserver 自己捕获。
+ */
+function useFrameSize(ref, active, aspectValue, fullscreen) {
+  const [size, setSize] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    if (!active) {
+      setSize((prev) => (prev.w === 0 && prev.h === 0 ? prev : { w: 0, h: 0 }))
+      return undefined
+    }
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const read = () => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      setSize((prev) => (Math.abs(prev.w - w) < 0.5 && Math.abs(prev.h - h) < 0.5 ? prev : { w, h }))
+    }
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref, active, aspectValue, fullscreen])
+  return size
 }
 
 /**
@@ -308,7 +370,7 @@ function clipStyleFor(fx, aspectRatio) {
  * 时间对齐与主层同源：**对齐源文件时间**（不是播放头秒数）、阈值 0.25s。
  * 层的可见性、层叠顺序、谁是主层，全部由 composite.js 算好，这里只负责画。
  */
-function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
+function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
   const ref = useRef(null)
   const sourceTime = Number(layer.sourceTime) || 0
   const url = layer.url || ''
@@ -343,6 +405,15 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
     const rate = Math.min(16, Math.max(0.0625, Number(layer.speed) || 1))
     if (typeof el.playbackRate === 'number') el.playbackRate = rate
     /**
+     * 变速要不要保音高（面板上的开关）。
+     * `preservesPitch` 是浏览器**原生**能力，所以这一项预览与成片能完全一致 ——
+     * 与"变调"不同（那个只能导出时算）。关掉之后快放的片段在预览里就是尖的，
+     * 用户不用导出就能听出来对不对。
+     */
+    const keepPitch = layer.keepPitch !== false
+    if ('preservesPitch' in el) el.preservesPitch = keepPitch
+    else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keepPitch
+    /**
      * ⚠️ **不可见的层也要对齐**：它们就是"提前挂载"的那一批，
      *   对齐到自己的入点（未来片段）或末帧（已播完的片段），
      *   等到轮到它出场时 currentTime 已经在正确的位置 ——
@@ -351,7 +422,7 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
     align()
     if (layer.visible && playing) el.play().catch(() => {})
     else el.pause()
-  }, [align, audible, layer.gain, layer.speed, layer.visible, playing, url, volume])
+  }, [align, audible, layer.gain, layer.keepPitch, layer.speed, layer.visible, playing, url, volume])
 
   /**
    * 调色（CSS filter）、调节/美颜、缩放/位置/旋转分开挂：
@@ -379,7 +450,7 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
   if (mix) boxStyle.mixBlendMode = mix
 
   const clipBox = clipStyleFor(fx, aspectRatio)
-  const mediaStyle = mediaStyleOf(layer, fx)
+  const mediaStyle = mediaStyleOf(layer, fx, box)
 
   const inner = (
     <Previews
@@ -395,11 +466,27 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
     />
   )
 
-  /* 圆角 / 蒙版挂在里层的剪裁盒上（外层 span 的 filter 里有描边/阴影，见 clipStyleFor 的说明）。
-     没有剪裁类效果时**不插盒子**，DOM 与改动前逐字相同（零回归）。 */
-  const media = clipBox ? (
-    <span className="canvas-clipbox" style={clipBox}>
+  /**
+   * 剪裁盒（圆角 / 蒙版）+ 两个**叠在画面之上**的效果层：
+   *   · 内阴影 `.canvas-inset` —— `box-shadow: inset` 会被不透明的视频帧整个盖住，
+   *     所以它必须是一层透明覆盖层，而不是媒体元素自己的阴影；
+   *   · 虚线框 `.canvas-dashbox` —— 沿画框四边的虚线（不沿 alpha 轮廓，
+   *     理由见 shared/effects.js 的 STROKE_STYLES 说明）。
+   *
+   * ⚠️ 三个都没有时**不插盒子**：DOM 与改动前逐字相同（零回归）。
+   *    这条约定是几道 E2E 的判据之一，别为了"结构统一"就无条件包一层。
+   */
+  const insetCss = innerShadowStyle(fx)
+  const dashCss = dashedBoxCss(fx)
+  const media = clipBox || insetCss || dashCss ? (
+    <span className="canvas-clipbox" style={clipBox || undefined}>
       {inner}
+      {insetCss ? (
+        <span className="canvas-inset" data-fx-inset="1" style={{ boxShadow: insetCss }} />
+      ) : null}
+      {dashCss ? (
+        <span className="canvas-dashbox" data-fx-dashed="1" style={dashCss.style} />
+      ) : null}
     </span>
   ) : (
     inner
@@ -419,7 +506,10 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
         data-fx-key={fx.key.on ? '1' : ''}
         data-fx-key-map={fx.key.on ? 'approx' : ''}
         data-fx-stroke={fx.stroke.on ? String(fx.stroke.width) : ''}
-        data-fx-shadow={fx.shadow.on ? '1' : ''}
+        data-fx-stroke-style={fx.stroke.on ? fx.stroke.style : ''}
+        data-fx-shadow={fx.shadow.on && !fx.shadow.inner ? '1' : ''}
+        data-fx-shadow-inner={fx.shadow.on && fx.shadow.inner ? '1' : ''}
+        data-fx-warp={hasWarp(fx) ? '1' : ''}
         data-fx-skew={Math.abs(fx.skewX) > 0.01 || Math.abs(fx.skewY) > 0.01 ? '1' : ''}
         data-xfade={layer.xfade.key}
         /* exact / approx：CSS 能一比一表达哪些、近似表达哪些，如实标出来，
@@ -438,12 +528,19 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio }) {
       className="canvas-layer"
       data-layer={layer.id}
       data-layer-role={layer.role}
+      /* 只有主画面可点选：转场层是"正在盖过来的后一段"，它没有独立的操作意义
+         （用户在时间线上选的是片段，不是这一帧的叠影）。 */
+      /* 复合片段的内部层：把**外层**片段 id 挂出去（见 PreviewSelect.layerOwnerId） */
+      data-selectable={layer.role === 'main' ? layerOwnerId(layer) : undefined}
       data-fx-radius={fx.radius > 0.01 ? String(fx.radius) : ''}
       data-fx-mask={fx.mask.shape}
       data-fx-key={fx.key.on ? '1' : ''}
       data-fx-key-map={fx.key.on ? 'approx' : ''}
       data-fx-stroke={fx.stroke.on ? String(fx.stroke.width) : ''}
-      data-fx-shadow={fx.shadow.on ? '1' : ''}
+      data-fx-stroke-style={fx.stroke.on ? fx.stroke.style : ''}
+      data-fx-shadow={fx.shadow.on && !fx.shadow.inner ? '1' : ''}
+      data-fx-shadow-inner={fx.shadow.on && fx.shadow.inner ? '1' : ''}
+      data-fx-warp={hasWarp(fx) ? '1' : ''}
       data-fx-skew={Math.abs(fx.skewX) > 0.01 || Math.abs(fx.skewY) > 0.01 ? '1' : ''}
       style={Object.keys(boxStyle).length ? boxStyle : undefined}
     >
@@ -506,7 +603,7 @@ const EXACT_XFADE = ['fade', 'wipeleft', 'slideleft', 'slideup', 'circleopen']
  * 时间对齐与主层同源：对齐**源文件时间**（不是播放头秒数）、阈值 0.25s，
  * 所以片段被拖到别处或被剪过左端之后，取到的仍是该取的那一帧。
  */
-function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1 }) {
+function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1, keepPitch = true }) {
   const ref = useRef(null)
   const align = useCallback(() => {
     const el = ref.current
@@ -527,9 +624,11 @@ function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1 }) {
     el.volume = Math.max(0, Math.min(1, ((volume ?? 100) / 100) * (Number(gain) / 100)))
     const rate = Math.min(16, Math.max(0.0625, Number(speed) || 1))
     if (typeof el.playbackRate === 'number') el.playbackRate = rate
+    if ('preservesPitch' in el) el.preservesPitch = keepPitch !== false
+    else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keepPitch !== false
     if (playing) el.play().catch(() => {})
     else el.pause()
-  }, [gain, playing, speed, url, volume])
+  }, [gain, keepPitch, playing, speed, url, volume])
 
   return (
     <video
@@ -583,9 +682,18 @@ export default function Stage({
      ⚠️ 它与导出共用同一份表与同一个"裁切"口径：预览这里切到 1:1，
         成片也必须是 1:1 —— 否则"预览与成片对不上"，两边单独看都没错。 */
   aspect,
-  onAspect
+  onAspect,
+  /* ---- 预览内的直接操作（点选 / 拖移 / 缩放 / 旋转）----
+     选中状态在 App 里（与时间线、右栏共用同一个 selection），
+     这里只负责"点画面选中谁"与"拖手改写哪个字段"。 */
+  selectedClipId = null,
+  onSelectClip,
+  onPatchClip,
+  onSnapshot
 }) {
   const rafRef = useRef(0)
+  /* 画布本体（不是播放器面板）：选框的几何基准，拖动换算全按它算 */
+  const frameRef = useRef(null)
   /** 比例 chip 的展开态。点外面或 Esc 收起 —— 展开着不关会盖住画布下沿 */
   const [aspectOpen, setAspectOpen] = useState(false)
   const aspectWrapRef = useRef(null)
@@ -652,8 +760,21 @@ export default function Stage({
     layers.some((item) => item.visible) || backdrop || overlays.length || pip.length
   )
 
-  const frameRoles = [frameEffectClass(frameFx)].filter(Boolean)
-  const frameClass = ['canvas-frame', ...frameRoles].join(' ')
+  /**
+   * 画面特效（transform 类：抖动 / 脉冲）**挂在内容层**，不挂在画框上。
+   *
+   * ⚠️ 这是「看着差不多、其实差很多」的一条：挂在 `.canvas-frame` 上时，
+   *    圆角、描边、外阴影、画框边界会跟着一起抖 —— 用户看到的是"整个播放器在动"，
+   *    而**成片里根本没有画框**（导出只有画面本身在抖）。所以成片与预览对不上，
+   *    且两边单独看都合理。现在特效作用在 `.canvas-content`（只装画面/字幕/画中画），
+   *    画框与播放器外壳稳如泰山，与成片是同一件事。
+   *
+   * 覆盖层类特效（闪光/故障/扫描线…）本来就挂在独立的 `.canvas-fx` 上，
+   * 两者互不干扰（见 frameEffects.js 的说明）。
+   */
+  const contentRoles = [frameEffectClass(frameFx)].filter(Boolean)
+  const frameClass = 'canvas-frame'
+  const contentClass = ['canvas-content', ...contentRoles].join(' ')
 
   /**
    * 画布宽高比。
@@ -668,6 +789,40 @@ export default function Stage({
    */
   const aspectKey = normalizeAspect(aspect)
   const aspectValue = aspectRatioOf(aspectKey)
+
+  /**
+   * 画框的**布局**像素尺寸 —— 只有"自由变形"真的需要它。
+   *
+   * 为什么非测不可：CSS 的 `matrix3d` 没有百分比写法，单应矩阵的系数里带着
+   * `1/W`、`W/H` 这类量。不测就只能写死像素，窗口一动透视就歪。
+   *
+   * 为什么用 `clientWidth/clientHeight` 而不是 `getBoundingClientRect()`：
+   * 后者会被祖先元素上的 `transform` 缩放影响（全屏、预览缩放都会），
+   * 而 `matrix3d` 作用的是**布局盒**坐标，用缩放后的尺寸会系统性偏小。
+   *
+   * 为什么允许 0：`showFrame` 为假时画框根本没渲染，此时任何 transform 都无意义 ——
+   * `cssWarpTransform` 对 0 尺寸返回空串，绝不会写出一串 NaN。
+   */
+  const frameSize = useFrameSize(frameRef, showFrame, aspectValue, fullscreen)
+
+  /* 预览里的选中目标：这一帧画面上被选中、且真的能直接拖的那个元素。
+     选中字幕/文字时这里为 null —— 字幕的位置来自样式表，拖它等于改样式，
+     那是另一个动作（"拖了一下字幕，样式被改掉"这种不可撤销的事不做）。 */
+  const selTarget = selectionTargetOf({ selectedClipId, main, pip })
+  const selectBox = selectionBoxOf(selTarget, aspectValue, frameSize)
+
+  /**
+   * 点画面选中元素。
+   *
+   * 命中靠 DOM 栈（`.canvas-layer` / `.canvas-pip-layer` 显式开了 pointer-events），
+   * 不自己算几何：几何命中在"画中画压在字幕上""转场时两层同时在场"这些情况下
+   * 要重新排一遍优先级，而浏览器本来就把这件事做对了。
+   */
+  const pickAt = (event) => {
+    if (!onSelectClip) return
+    const node = event.target && event.target.closest ? event.target.closest('[data-selectable]') : null
+    onSelectClip(node ? node.getAttribute('data-selectable') : null)
+  }
 
   return (
     <section
@@ -688,6 +843,7 @@ export default function Stage({
         {showFrame ? (
           <div
             className={frameClass}
+            ref={frameRef}
             /* 主层的调色 key（真正的 filter 挂在主层那一层上，见 MediaLayer） */
             data-filter={main?.filter || 'none'}
             /* 底图状态挂成属性：E2E/闸门断言"选了背景之后画面上真的有底图"时，
@@ -696,6 +852,7 @@ export default function Stage({
             data-backdrop={backdrop ? '1' : '0'}
             data-frame-fx={frameFx}
             data-aspect={aspectKey}
+            onPointerDown={pickAt}
             style={{ ...(previewStyle || null), '--canvas-ar': String(aspectValue) }}
           >
             {/* 逐通道增益的 SVG 定义（色温/色调/亮度/美白）。必须与引用了它的层
@@ -703,6 +860,11 @@ export default function Stage({
             <GradeDefs layers={layers} />
             {/* 抠像的 SVG 定义（同一棵树、同一个道理） */}
             <KeyDefs layers={layers} />
+
+            {/* 内容层：画面 / 转场 / 画中画 / 字幕 / 特效叠层全部装在这里。
+                transform 类画面特效挂这一层（见 contentClass 的说明），
+                画框本身不动 —— 与成片一致（成片里没有画框）。 */}
+            <div className={contentClass} data-fx-layer="content">
 
             {/* 画面层：底 → 顶（顺序由 composite.js 排好）。
                 ⚠️ key 必须是**片段 id** —— 同一个元素跟着同一个片段走，
@@ -716,6 +878,8 @@ export default function Stage({
                 audible={layer.role === 'main'}
                 /* 正圆蒙版要按画框宽高比换算 y 半径（见 shared/effects.js 的 cssMaskFor） */
                 aspectRatio={aspectValue}
+                /* 自由变形的 matrix3d 要画框的布局像素尺寸（见 useFrameSize） */
+                box={frameSize}
               />
             ))}
 
@@ -744,6 +908,11 @@ export default function Stage({
                   className="canvas-pip-layer"
                   data-pip="1"
                   data-pip-id={item.id}
+                  /* 画面层级：DOM 顺序已经按 z 排好（composite.layerOrder），
+                     但把数字也挂出来，闸门才能断言"顺序真的按层号来"、
+                     而不是碰巧因为插入顺序看起来对。 */
+                  data-layer-z={String(item.z == null ? 0 : item.z)}
+                  data-selectable={layerOwnerId(item)}
                   data-pip-anchor={item.anchor}
                   data-pip-size={item.size}
                   data-fx-radius={pfx.radius > 0.01 ? String(pfx.radius) : ''}
@@ -777,6 +946,7 @@ export default function Stage({
                           volume={volume}
                           gain={item.gain}
                           speed={item.speed}
+                          keepPitch={item.keepPitch}
                         />
                       )}
                     </span>
@@ -794,20 +964,60 @@ export default function Stage({
                      与导出侧 main/subtitles.js 走同一个 applyTextOverrides，
                      所以"右侧调过的字幕"在预览与成片里长得一样。 */
                   const { def, box, inner } = textStyleCss(item.style, undefined, item)
+                  /* 入场 / 出场 / 循环：三个槽位分别挂在**三层元素**上。
+                     必须分层，不能挤在一个元素上 —— 同一个元素挂两条动画时，
+                     后一条的 `fill: both` 会把前一条的终态一直盖住，
+                     症状是"选了呼吸，完全没有反应"或"出场永远不出现"。
+                     进度与幅度由 shared/textAnim.js 给出，导出侧用它的时间表达式。 */
+                  const ta = readTextAnim(item, def.anim)
+                  const inDur = `${ta.inDur}s`
+                  const outDur = `${ta.outDur}s`
+                  const outDelay = `${Math.max(0, (Number(item.duration) || 0) - ta.outDur)}s`
                   return (
                     <div
                       key={item.id}
-                      className={`canvas-overlay ${animClassOf(def)}`}
+                      className="canvas-overlay"
                       data-overlay={def.key}
+                      data-ta-in={ta.in}
+                      data-ta-out={ta.out}
+                      data-ta-loop={ta.loop}
                       style={box}
                     >
-                      <span data-overlay-text={def.key} style={inner}>
-                        {item.text}
+                      <span
+                        className={`ta-move${ta.in === 'none' ? '' : ` ta-in-${ta.in}`}`}
+                        style={{ '--ta-in-dur': inDur }}
+                      >
+                        <span
+                          className={`ta-move${ta.out === 'none' ? '' : ` ta-out-${ta.out}`}`}
+                          style={{ '--ta-out-dur': outDur, '--ta-out-delay': outDelay }}
+                        >
+                          <span
+                            data-overlay-text={def.key}
+                            className={ta.loop === 'none' ? '' : `ta-loop-${ta.loop}`}
+                            style={{ ...inner, '--ta-loop-dur': '2.6s' }}
+                          >
+                            {item.text}
+                          </span>
+                        </span>
                       </span>
                     </div>
                   )
                 })}
               </div>
+            ) : null}
+
+            </div>
+            {/* 预览内的直接操作层（点选 / 拖移 / 缩放 / 旋转）。
+                它住在内容层**外面**：选框是界面的一部分，不该跟着画面特效一起抖，
+                也不该被画面的 transform 带着跑。 */}
+            {selectBox ? (
+              <SelectionBox
+                box={selectBox}
+                target={selTarget}
+                frameRef={frameRef}
+                onPatch={onPatchClip}
+                onSnapshot={onSnapshot}
+              />
             ) : null}
 
             {main && !isNoopFilter(main.filter) ? (
@@ -842,7 +1052,7 @@ export default function Stage({
 
         <div className="wb-transport-btns">
           <button className="play" type="button" onClick={onTogglePlay} title={playing ? '暂停（空格）' : '播放（空格）'}>
-            {playing ? <IconPause size={17} /> : <IconPlay size={17} />}
+            {playing ? <IconPause size={16} /> : <IconPlay size={16} />}
           </button>
         </div>
 
@@ -903,7 +1113,7 @@ export default function Stage({
             title={fullscreen ? '退出全屏（F11 / Esc）' : '全屏预览（F11）'}
             onClick={onToggleFullscreen}
           >
-            <IconFullscreen size={15} />
+            <IconFullscreen size={14} />
           </button>
         </div>
       </div>

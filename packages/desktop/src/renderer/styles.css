@@ -186,7 +186,7 @@ button:disabled {
 
 .brand-text strong {
   display: block;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -277,7 +277,7 @@ button:disabled {
 .pane-head span.kicker {
   display: block;
   color: var(--faint);
-  font-size: 9.5px;
+  font-size: 10px;
   letter-spacing: 0.12em;
 }
 
@@ -323,7 +323,7 @@ button:disabled {
   border-radius: 8px;
   background: var(--panel-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   white-space: nowrap;
   transition: border-color 0.14s ease, background 0.14s ease;
 }
@@ -365,7 +365,7 @@ button:disabled {
 .btn.small {
   height: 27px;
   padding: 0 9px;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .btn.block {
@@ -384,13 +384,21 @@ button:disabled {
   gap: 8px;
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .field > span em {
   color: var(--faint);
   font-style: normal;
-  font-size: 10.5px;
+  font-size: 11px;
+}
+
+/* 字段下方的一句说明（导出面板的"只影响导出"这类提示） */
+.hint {
+  margin: 0 0 10px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .input,
@@ -456,7 +464,7 @@ button:disabled {
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .seg button:hover {
@@ -546,8 +554,114 @@ button:disabled {
 }
 
 /**
- * 素材按**裁切**填满画布（`cover` 而不是 `contain`）。
+ * 画布内容层：画面 / 转场 / 画中画 / 字幕 / 特效叠层全部装在这里。
  *
+ * 为什么要有这一层（而不是直接挂在画布上）：**画面特效只能动内容，不能动画框**。
+ * 挂在画布上时，圆角、描边、外阴影会跟着一起抖，看起来像整个播放器在动；
+ * 而导出成片里没有画框，只有画面本身在动 —— 预览与成片因此不一致。
+ *
+ * z-index 从 0 起：选框（界面的一部分）压在它上面，画面内部的分层（1..5）不受影响。
+ */
+.canvas-content {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  transform-origin: center center;
+}
+
+/**
+ * 预览里的选框（点选 / 拖移 / 四角缩放 / 旋转）。
+ *
+ * 配色沿用全应用唯一的强调色（--violet），与时间线上"选中的片段"同色 ——
+ * 在预览里选中什么、在时间线上就选中什么，两处的视觉反馈必须一致。
+ *
+ * ⚠️ `transform-origin` 必须是 50% 50%（与画面元素相同），否则旋转/缩放时
+ *    选框会绕着别处转，看着像"选框和画面脱开了"。
+ */
+.canvas-sel {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 1.5px solid var(--violet);
+  transform-origin: center center;
+  cursor: move;
+  /* 触屏/触控板：拖动选框时不许滚动页面 */
+  touch-action: none;
+}
+
+/* 只有主画面能点到整块画布：转场叠影、覆盖层特效都不接指针 */
+.canvas-layer[data-selectable],
+.canvas-pip-layer {
+  pointer-events: auto;
+}
+
+.canvas-sel-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid var(--violet);
+  border-radius: 2px;
+  touch-action: none;
+}
+
+/* ⚠️ 手柄必须**完全落在选框内**（left/top:0，不往外挑 5px）。
+   画布是 `overflow: hidden`，跨在边界上的手柄有一半被裁掉 ——
+   浏览器不会给被裁掉的像素派发事件，于是"拖右下角"实际点中的是选框主体，
+   走成"移动"分支：拖了、画面也动了，但**缩放永远不生效**，而且不报错。
+   （本轮真机上就是这样：面板缩放一直是 100%。） */
+.canvas-sel-nw { left: 0; top: 0; cursor: nwse-resize; }
+.canvas-sel-ne { right: 0; top: 0; cursor: nesw-resize; }
+.canvas-sel-sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.canvas-sel-se { right: 0; bottom: 0; cursor: nwse-resize; }
+
+/**
+ * 开了「自由变形」时的四角手柄：实心圆点 + 十字光标。
+ * 与缩放手柄必须**一眼能分开** —— 两种模式拖的是完全不同的东西，
+ * 长得一样的话用户会以为"缩放坏了"（实际是在改透视）。
+ * ⚠️ 仍然完全落在选框内（left/top:0 起），理由见上面那段。
+ */
+.canvas-sel-corner-warp {
+  background: var(--violet);
+  border-color: #fff;
+  border-radius: 50%;
+  cursor: crosshair;
+}
+
+.canvas-sel-corner-warp:hover {
+  background: #fff;
+  border-color: var(--violet);
+}
+
+/* 旋转手柄：顶边中点**内侧**（同样因为画布会裁掉框外的像素）。
+   放内侧会占住画面顶部中间一小块，所以做成半透明、hover 才实心。 */
+.canvas-sel-rot {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  opacity: 0.75;
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid var(--violet);
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-sel-rot:hover {
+  opacity: 1;
+}
+
+.canvas-sel-rot:active {
+  cursor: grabbing;
+}
+
+/**
+ * 素材按**裁切**填满画布（`cover` 而不是 `contain`）。
  * 为什么是裁：比例是"画布形状"，切到 1:1 时 16:9 的素材应当被裁掉左右、
  * 铺满方框，而不是缩成中间一条、上下留两条黑边 —— 后者看着像"比例没生效"。
  * 成片那侧同一口径：ffmpeg 用 `force_original_aspect_ratio=increase` + `crop`
@@ -572,12 +686,12 @@ button:disabled {
 .canvas-placeholder strong {
   display: block;
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 13px;
   margin-bottom: 6px;
 }
 
 .canvas-placeholder small {
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.7;
 }
 
@@ -592,13 +706,13 @@ button:disabled {
   border-radius: 6px;
   background: rgba(8, 10, 24, 0.78);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   backdrop-filter: blur(6px);
 }
 
 .transport .timecode {
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   letter-spacing: 0.02em;
 }
@@ -674,7 +788,7 @@ button:disabled {
   display: grid;
   place-items: center;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .media-thumb img {
@@ -704,7 +818,7 @@ button:disabled {
 
 .media-meta strong {
   display: block;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 550;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -750,6 +864,25 @@ button:disabled {
   background: var(--violet);
 }
 
+/*
+ * 已收藏的星标必须是**常显**的。
+ *
+ * `.media-actions` 默认整条 `display:none`、悬停才出现 —— 收藏是"状态"，
+ * 状态藏在悬停里等于没有：用户看不出哪些素材收藏过，只能一张张悬停去试。
+ * `:has()` 让"这一格里有没有点亮的星"直接决定整条动作栏显不显示。
+ */
+.media-card:has(.media-actions button.is-on) .media-actions {
+  display: flex;
+}
+
+.media-card .media-actions button.is-on {
+  color: #f5b544;
+}
+
+.media-card .media-actions button.is-on svg {
+  fill: currentColor;
+}
+
 /* ============================== 属性栏 ============================== */
 
 .inspector .pane-body {
@@ -769,7 +902,7 @@ button:disabled {
   justify-content: space-between;
   gap: 8px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   grid-column: 1 / -1;
 }
 
@@ -808,7 +941,7 @@ input[type='range']::-webkit-slider-thumb {
   gap: 10px;
   padding: 7px 0;
   border-bottom: 1px dashed var(--line);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .kv-list > div:last-child {
@@ -844,7 +977,7 @@ input[type='range']::-webkit-slider-thumb {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .timeline-head input[type='range'] {
@@ -890,7 +1023,7 @@ input[type='range']::-webkit-slider-thumb {
   border-left: 1px solid var(--line-soft);
   padding-left: 5px;
   color: var(--faint);
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 24px;
   white-space: nowrap;
 }
@@ -978,6 +1111,78 @@ input[type='range']::-webkit-slider-thumb {
 
 .clip.selected {
   box-shadow: inset 0 0 0 2px #ffffff;
+}
+
+/**
+ * 多选集合里的**其余**几段（Ctrl + 点选）。
+ *
+ * 比主选中弱一档：主选中是 2px 实心白框，多选的同伴是 1px 半透明框。
+ * 两个必须能一眼分开 —— 右栏、检查器、快捷键作用的对象是**主选中**，
+ * 画成一样的话用户分不清"我现在改的是哪一段"。
+ */
+.clip.multi {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+/**
+ * 复合片段（容器型片段）。
+ *
+ * 它没有单一 src 可以抽帧，所以外观必须靠"容器感"来表达：内描边 + 渐变底。
+ * ⚠️ 用 `box-shadow: inset` 而不是 `border`：`.clip` 是绝对定位 + `overflow:hidden`，
+ *    加 border 会把内部绝对定位的头栏/角标整体挤偏 1px。
+ */
+.clip.is-compound {
+  background: linear-gradient(180deg, #414759, #2c3040);
+}
+
+/* ⚠️ 这一条必须带 `:not(.selected):not(.multi)`：
+   选中态、多选态用的都是 `box-shadow: inset`，而它们的特异性与这里相同 ——
+   不加 :not 就会把选中框**整个盖掉**（选中了却看不出来，是那种"点了没反应"的假象）。 */
+.clip.is-compound:not(.selected):not(.multi) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.clip.is-compound::before {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.clip-compound {
+  position: absolute;
+  left: 7px;
+  bottom: 3px;
+  font-size: 9px;
+  letter-spacing: 0.2px;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+}
+
+/**
+ * 多机位片段：与复合片段同一套"容器"外观，但用**青灰**区分 ——
+ * 两者在轨道上都是"一个方块里头有内容"，光看形状分不出来时，
+ * 用户会右键点错菜单项（新建复合 / 新建多机位是两个完全不同的动作）。
+ */
+.clip.is-multicam {
+  background: linear-gradient(180deg, #35485a, #26323f);
+}
+
+/* 同上面 is-compound 的理由：不带 :not 会把选中框盖掉 */
+.clip.is-multicam:not(.selected):not(.multi) {
+  box-shadow: inset 0 0 0 1px rgba(140, 214, 255, 0.42);
+}
+
+.clip.is-multicam::before {
+  background: rgba(140, 214, 255, 0.14);
+}
+
+/* 多机位本体：写"几路 · 几段"。位置与 clip-compound 对齐，字号同一档（9px） */
+.clip-chain {
+  position: absolute;
+  left: 7px;
+  bottom: 3px;
+  font-size: 9px;
+  letter-spacing: 0.2px;
+  color: rgba(200, 232, 255, 0.62);
+  white-space: nowrap;
 }
 
 /**
@@ -1096,6 +1301,10 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   inset: 0;
   display: flex;
+  /* 帧与帧之间留 1px 暗缝：参考里胶片是一条条分开的独立小格，
+     连成一片时看不出"这是若干帧"，会像一张被拉伸的长图。 */
+  gap: 1px;
+  background: rgba(0, 0, 0, 0.45);
   pointer-events: none;
 }
 
@@ -1166,7 +1375,7 @@ input[type='range']::-webkit-slider-thumb {
   padding: 3px 7px;
   overflow: hidden;
   color: #fff;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.3;
   opacity: 0.95;
   pointer-events: none;
@@ -1203,6 +1412,23 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 3px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* 吸附辅助线：吸住某个时间点时竖一条虚线。
+   用强调紫而不是白色 —— 白色是播放头，两者同时出现时必须一眼分得开
+   （把播放头当成吸附线，就会以为"播放头自己跑了"）。 */
+.wb-snapline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--violet) 0 5px,
+    transparent 5px 9px
+  );
+  pointer-events: none;
+  z-index: 2;
 }
 
 /* ============================== 弹窗 ============================== */
@@ -1326,7 +1552,7 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 9px;
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -1359,14 +1585,25 @@ input[type='range']::-webkit-slider-thumb {
   font-size: 12px;
 }
 
+/**
+ * 小标签 / 预设 chip。
+ *
+ * ⚠️ 高度固定 22px 且用 inline-flex 居中：
+ *   以前是 `display: inline-block; padding: 2px 7px`，高度由字号撑出来（约 20px），
+ *   而同一排里常常还摆着 `.btn.small`（27px）—— 一排里三种高度，看着就是"没对齐"。
+ *   固定高度之后，chip 与按钮在同一行里基线一致（父行用 align-items: center）。
+ */
 .chip {
-  display: inline-block;
-  padding: 2px 7px;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -1421,7 +1658,7 @@ input[type='range']::-webkit-slider-thumb {
   display: block;
   margin-top: 3px;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .spin {
@@ -1458,7 +1695,7 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 10px;
   background: var(--panel-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   box-shadow: var(--shadow);
   animation: rise 0.18s ease;
 }
@@ -1742,6 +1979,20 @@ input[type='range']::-webkit-slider-thumb {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/**
+ * 「调节」预设的预览层：不是一个 <img>，而是一块用参数**算出来**的渐变。
+ * 铺在 `.look-preview.is-photo` 里（那一层已经是 position:relative + 100×100），
+ * 用 inset:0 撑满、圆角跟随卡片 —— 6px 与 .look-preview 一致，否则卡片会露出直角。
+ */
+.look-adjust-art {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
 }
 
 .mat-search {
@@ -2072,6 +2323,36 @@ input[type='range']::-webkit-slider-thumb {
   place-items: center;
 }
 
+/*
+ * 内阴影 —— **必须**是叠在画面上方的一层透明覆盖，不能挂在媒体元素自己身上。
+ * `box-shadow: inset` 按规范画在"背景之上、内容之下"，而媒体元素的内容就是那一帧画面，
+ * 于是阴影会被画面整整齐齐地盖住：面板上拖了、预览里一点变化都没有，成片里也没有。
+ * `border-radius: inherit` 让圆角跟随剪裁盒；蒙版形状（椭圆等）跟不了 ——
+ * 这是 box-shadow 的固有边界，界面上如实写在提示里。
+ */
+.canvas-inset {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* ⚠️ 刻意**不继承**圆角：导出的内阴影是沿画框矩形的距离场（见 shared/effects.js
+     的 innerShadowExpr）。这里继承圆角的话，圆角一开，预览沿圆角、成片沿直角，
+     两边都"看着合理"却对不上。宁可两头都是直角矩形。 */
+  z-index: 3;
+}
+
+/*
+ * 虚线框 —— 沿**画框四边**（内侧）的虚线，不参与布局（绝对定位 + border-box）。
+ * 用 border 而不是 box-shadow：只有 border 支持 dashed。
+ */
+.canvas-dashbox {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 4;
+}
+
 /* ------------------- 字幕/文字的入场动画 ------------------- */
 
 /*
@@ -2107,6 +2388,60 @@ input[type='range']::-webkit-slider-thumb {
   to { filter: brightness(1.4); }
 }
 
+/* ===================== 文字 / 字幕动画（入场 · 出场 · 循环） =====================
+ *
+ * 幅度与 shared/textAnim.js 的 shift 系数**逐字对应**：那边 0.06 就是这边 6%。
+ * 对不上的话，预览与成片会出现"同样的设置、快慢差不多、但幅度差一截"——
+ * 幅度差很难被当成缺陷报出来，只会觉得"导出之后感觉不太一样"。
+ *
+ * 三层元素各挂一个槽位（Stage.jsx）：外层入场、中层出场、内层循环。
+ * ⚠️ 不能把两条动画挂同一个元素：后一条的 `fill: both` 会一直盖住前一条的终态，
+ *    表现是"循环动画完全不生效"或"出场永远不出现"。
+ */
+.ta-move {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.ta-in-fade { animation: ta-fade-in var(--ta-in-dur, 0.4s) ease-out both; }
+.ta-in-up { animation: ta-up-in var(--ta-in-dur, 0.4s) cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.ta-in-down { animation: ta-down-in var(--ta-in-dur, 0.4s) cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.ta-in-left { animation: ta-left-in var(--ta-in-dur, 0.4s) cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.ta-in-right { animation: ta-right-in var(--ta-in-dur, 0.4s) cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.ta-in-zoom { animation: ta-zoom-in var(--ta-in-dur, 0.4s) cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+
+/* 出场用 `forwards`（不是 `both`）：延迟期间元素保持原样（`both` 会在等待期
+   就取第一帧的值，等于提前跳变），结束后停在终止帧 —— 和导出的 alpha 表达式一致。 */
+.ta-out-fade { animation: ta-fade-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+.ta-out-up { animation: ta-up-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+.ta-out-down { animation: ta-down-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+.ta-out-left { animation: ta-left-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+.ta-out-right { animation: ta-right-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+.ta-out-zoom { animation: ta-zoom-out var(--ta-out-dur, 0.4s) ease-in var(--ta-out-delay, 0s) forwards; }
+
+.ta-loop-breathe { animation: ta-breathe var(--ta-loop-dur, 2.6s) ease-in-out infinite; }
+.ta-loop-float { animation: ta-float calc(var(--ta-loop-dur, 2.6s) * 1.23) ease-in-out infinite; }
+.ta-loop-sway { animation: ta-sway calc(var(--ta-loop-dur, 2.6s) * 1.38) ease-in-out infinite; }
+
+@keyframes ta-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ta-up-in { from { opacity: 0; transform: translateY(6%); } to { opacity: 1; transform: none; } }
+@keyframes ta-down-in { from { opacity: 0; transform: translateY(-6%); } to { opacity: 1; transform: none; } }
+@keyframes ta-left-in { from { opacity: 0; transform: translateX(6%); } to { opacity: 1; transform: none; } }
+@keyframes ta-right-in { from { opacity: 0; transform: translateX(-6%); } to { opacity: 1; transform: none; } }
+@keyframes ta-zoom-in { from { opacity: 0; transform: scale(0.86); } to { opacity: 1; transform: none; } }
+
+@keyframes ta-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes ta-up-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-6%); } }
+@keyframes ta-down-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(6%); } }
+@keyframes ta-left-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-6%); } }
+@keyframes ta-right-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(6%); } }
+@keyframes ta-zoom-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(1.14); } }
+
+/* 循环的幅度：呼吸 0.82↔1（与 textAnim.js 的 amp 0.18 对应）、浮动 ±1.5%、摇摆 ±1% */
+@keyframes ta-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.82; } }
+@keyframes ta-float { 0%, 100% { transform: translateY(-1.5%); } 50% { transform: translateY(1.5%); } }
+@keyframes ta-sway { 0%, 100% { transform: translateX(-1%); } 50% { transform: translateX(1%); } }
+
 .style-anim-fade { animation: style-fade 280ms ease-out both; }
 .style-anim-slideup { animation: style-slideup 400ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
 .style-anim-pop { animation: style-pop 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
@@ -2116,12 +2451,17 @@ input[type='range']::-webkit-slider-thumb {
 /* --------------------------- 画面特效 --------------------------- */
 
 /*
- * ⚠️ 这里**不允许**出现动 `.canvas-frame` 的 filter 的 @keyframes。
- *    预览的调色写在 .canvas-frame 的内联 style 上，而 CSS 动画的优先级**高于内联样式**：
- *    一旦有 @keyframes 去动它的 filter，调色会被整个顶掉，而且不报任何错 ——
+ * ⚠️ 这里**不允许**出现动 `.canvas-content` 的 filter 的 @keyframes。
+ *    预览的调色写在各个画面层自己的内联 style 上，而 CSS 动画的优先级**高于内联样式**：
+ *    一旦有 @keyframes 去动 content 的 filter，调色会被整个顶掉，而且不报任何错 ——
  *    用户看到的是"加了滤镜又加了特效，结果滤镜没了"。
- *    所以"改像素"类效果一律做在 .canvas-fx 覆盖层上（半透明色 + 混合模式）。
- *    这条约束由 tools/check-frame-effects.mjs 用静态契约钉住。
+ *    所以"改像素"类效果一律做在 `.canvas-fx` 覆盖层上（半透明色 + 混合模式）。
+ *
+ * ⚠️ transform 类特效（抖动 / 脉冲）挂在 **`.canvas-content`**（内容层），
+ *    **不是** `.canvas-frame`（画框）。挂画框时会连圆角、描边、外阴影、画框边界
+ *    一起抖 —— 用户看到"整个播放器在动"，而**成片里根本没有画框**（导出只有画面在动）。
+ *    于是预览与成片对不上，且两边单独看都合理。这条由 tools/check-preview-effects.mjs
+ *    双向钉住：必须有动画挂在内容层、且不许有动画挂在画框上。
  */
 @keyframes fx-shake {
   0%, 100% { transform: translate3d(0, 0, 0); }
@@ -2167,8 +2507,8 @@ input[type='range']::-webkit-slider-thumb {
   to { opacity: 0.9; }
 }
 
-.canvas-frame.fx-shake { animation: fx-shake 420ms linear infinite; }
-.canvas-frame.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
+.canvas-content.fx-shake { animation: fx-shake 420ms linear infinite; }
+.canvas-content.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
 
 .canvas-fx.fx-flash {
   background: #ffffff;
@@ -2283,7 +2623,7 @@ input[type='range']::-webkit-slider-thumb {
   background: var(--panel-2);
   color: var(--muted);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -2369,14 +2709,14 @@ input[type='range']::-webkit-slider-thumb {
 
 .guide-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: #e8e8ea;
 }
 
 .guide-text {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.7;
   color: var(--muted);
 }
@@ -2413,7 +2753,7 @@ input[type='range']::-webkit-slider-thumb {
 }
 
 .guide-count {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 

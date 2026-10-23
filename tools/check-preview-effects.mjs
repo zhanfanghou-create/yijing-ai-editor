@@ -82,9 +82,13 @@ const STYLE_BASE_WIDTH = 1280
  * 这里只抄"要用它断言的那几个数"，不是把整张表搬过来。
  */
 const STYLE_TRUTH = {
-  'sub-bar': { size: 36, bg: 'rgba(0, 0, 0, 0.55)', anim: 'style-slideup' },
-  'sub-accent': { size: 34, bg: 'rgb(131, 114, 254)', anim: 'style-pop' },
-  'sub-neon': { size: 38, bg: 'rgba(0, 0, 0, 0)', anim: 'style-glow' }
+  /* anim 是**样式表的 anim 名 → 统一入场类名**的映射结果（shared/textAnim.js 的 STYLE_ANIM_MAP）：
+     slideup → ta-in-up、pop → ta-in-zoom、glow → ta-in-fade。
+     以前样式动画是单独一套 `.style-anim-*`，会把循环动画整个盖住（fill: both 停在终态），
+     所以并进了统一的入场动画。 */
+  'sub-bar': { size: 36, bg: 'rgba(0, 0, 0, 0.55)', anim: 'ta-up-in' },
+  'sub-accent': { size: 34, bg: 'rgb(131, 114, 254)', anim: 'ta-in-zoom' },
+  'sub-neon': { size: 38, bg: 'rgba(0, 0, 0, 0)', anim: 'ta-in-fade' }
 }
 
 /** vivid 的 CSS filter（looks.json 的 brightness 1.02 / contrast 1.16 / saturate 1.34） */
@@ -215,9 +219,10 @@ function animationNamesIn(body) {
  *   第 1 步只筛"危险集"，第 2 步才判归属 —— 否则 `.style-anim-glow`
  *   （真的在动 filter）会被误判成违规，而它挂在文字上、与调色无关。
  *
- *   另外要求 `.canvas-frame` 上**必须有**动画：一个都没有说明画面特效（fx-shake /
- *   fx-pulse）整族丢了 —— 卡片点得开、状态也存了，就是画面不动。
- *   （`.canvas-layer` 上不要求非空：它是纯内容层，特效挂在画布上。）
+ *   3. **反向判据**（2026-10-20 起）：动画**不许**挂在 `.canvas-frame` 上 ——
+ *      挂画框时圆角/描边/外阴影会一起抖，而**成片里没有画框**，预览与成片对不上。
+ *      同时要求 `.canvas-content` 上**必须有**动画：一个都没有说明画面特效
+ *      （fx-shake / fx-pulse）整族丢了 —— 卡片点得开、状态也存了，就是画面不动。
  *
  * @returns {{ok: boolean, detail: string, dangerous: string[], onFrame: string[], onLayer: string[]}}
  */
@@ -232,38 +237,58 @@ export function frameFilterContract(cssText) {
 
   const onFrame = []
   const onLayer = []
+  const onContent = []
   for (const block of blocks) {
     if (block.head.startsWith('@')) continue
     const names = animationNamesIn(block.body)
+    if (!names.length) continue
     if (/\.canvas-frame(\b|[\s.:,[>+~])/.test(block.head)) onFrame.push(...names)
     if (/\.canvas-layer(\b|[\s.:,[>+~])/.test(block.head)) onLayer.push(...names)
+    if (/\.canvas-content(\b|[\s.:,[>+~])/.test(block.head)) onContent.push(...names)
   }
 
-  const clash = [...onFrame, ...onLayer].filter((name) => dangerous.includes(name))
+  const clash = [...onFrame, ...onLayer, ...onContent].filter((name) => dangerous.includes(name))
   if (clash.length) {
     return {
       ok: false,
-      detail: `动画 ${clash.join('、')} 同时"动了 filter"且"挂在 .canvas-frame / .canvas-layer"上 —— 它会把预览调色整个顶掉（CSS 动画优先级高于内联样式），且不报错`,
+      detail: `动画 ${clash.join('、')} 同时"动了 filter"且"挂在画布/内容层"上 —— 它会把预览调色整个顶掉（CSS 动画优先级高于内联样式），且不报错`,
       dangerous,
       onFrame,
-      onLayer
+      onLayer,
+      onContent
     }
   }
-  if (!onFrame.length) {
+  /* ⚠️ 反向判据（2026-10-20 起）：动画**不许**挂在 `.canvas-frame` 上。
+     挂画框时会连圆角、描边、外阴影、画框边界一起抖 —— 用户看到"整个播放器在动"，
+     而**成片里根本没有画框**（导出只有画面本身在抖）。于是预览与成片对不上，
+     且两边单独看都合理。这一条是最容易在"改着改着就挂回去"的地方。 */
+  if (onFrame.length) {
     return {
       ok: false,
-      detail: `没有任何动画挂在 .canvas-frame 上 —— 画面特效（fx-shake / fx-pulse）丢了：卡片能点、状态也存了，但画面不动`,
+      detail: `有动画挂在 .canvas-frame 上（${onFrame.join('、')}）—— 画框会跟着一起动：圆角/描边/外阴影在抖，而成片里没有画框，预览与成片对不上。应改挂 .canvas-content（只动画面内容）`,
       dangerous,
       onFrame,
-      onLayer
+      onLayer,
+      onContent
+    }
+  }
+  if (!onContent.length) {
+    return {
+      ok: false,
+      detail: `没有任何动画挂在 .canvas-content 上 —— 画面特效（fx-shake / fx-pulse）丢了：卡片能点、状态也存了，但画面不动`,
+      dangerous,
+      onFrame,
+      onLayer,
+      onContent
     }
   }
   return {
     ok: true,
-    detail: `共 ${onFrame.length} 个动画挂在 .canvas-frame 上（${onFrame.join('、')}）、${onLayer.length} 个挂在 .canvas-layer 上，其中没有一个去动 filter；危险动画 ${dangerous.length} 个（挂在别处，与调色无冲突）`,
+    detail: `内容层上有 ${onContent.length} 个动画（${onContent.join('、')}）、画框上 0 个（框不跟着抖），${onLayer.length} 个挂在画面层上，其中没有一个去动 filter；危险动画 ${dangerous.length} 个（挂在别处，与调色无冲突）`,
     dangerous,
     onFrame,
-    onLayer
+    onLayer,
+    onContent
   }
 }
 
@@ -289,7 +314,7 @@ function selfTest() {
   const good = `
 @keyframes style-glow { from { filter: brightness(1); } to { filter: brightness(1.4); } }
 @keyframes fx-shake { 0%,100% { transform: translate3d(0,0,0); } 20% { transform: translate3d(-1%,0,0); } }
-.canvas-frame.fx-shake { animation: fx-shake 420ms linear infinite; }
+.canvas-content.fx-shake { animation: fx-shake 420ms linear infinite; }
 .style-anim-glow { animation: style-glow 1.6s ease-in-out infinite alternate; }
 `
   const g = frameFilterContract(good)
@@ -307,6 +332,18 @@ function selfTest() {
     b.ok ? '判成了通过 —— 调色被静默顶掉这类事故从此无人拦' : b.detail
   )
 
+  /* ---- 反控制组 1b：动画挂在 .canvas-frame 上但不碰 filter ⇒ 也必须红（画框跟着抖） ---- */
+  const onFrameOnly = `
+@keyframes fx-shake { 20% { transform: translate3d(-1%,0,0); } }
+.canvas-frame.fx-shake { animation: fx-shake 420ms linear infinite; }
+`
+  const fo = frameFilterContract(onFrameOnly)
+  rec(
+    '自检 · 反控制组 1b（transform 特效挂在画框上）判不通过',
+    !fo.ok && /canvas-frame/.test(fo.detail),
+    fo.ok ? '判成了通过 —— 整块画框跟着抖，成片里却没有画框' : fo.detail
+  )
+
   /* ---- 反控制组 2：一个动画都不挂 ⇒ 也必须红（画面特效整个丢了） ---- */
   const none = `@keyframes fx-shake { from { transform: none; } }\n.look-card { color: #fff; }`
   const n = frameFilterContract(none)
@@ -317,7 +354,7 @@ function selfTest() {
   )
 
   /* ---- 反控制组 3：混写（既有安全的、又有危险的）⇒ 必须红，且只点出危险的那个 ---- */
-  const mixed = `${good}\n@keyframes fx-pulse { 50% { filter: contrast(1.4); } }\n.canvas-frame.fx-pulse { animation: fx-pulse 1100ms infinite; }`
+  const mixed = `${good}\n@keyframes fx-pulse { 50% { filter: contrast(1.4); } }\n.canvas-content.fx-pulse { animation: fx-pulse 1100ms infinite; }`
   const m = frameFilterContract(mixed)
   rec(
     '自检 · 反控制组 3（安全与危险混写）判不通过且只点出危险的',
@@ -328,7 +365,7 @@ function selfTest() {
   /* ---- 判据自身的正/反：多选择器与多值写法不许漏 ---- */
   const multi = `
 @keyframes boom { 50% { filter: blur(3px); } }
-.canvas-frame.fx-a, .canvas-frame.fx-b { animation: boom 1s infinite; }
+.canvas-content.fx-a, .canvas-content.fx-b { animation: boom 1s infinite; }
 `
   const mm = frameFilterContract(multi)
   rec('自检 · 逗号多选择器写法也能命中', !mm.ok && /boom/.test(mm.detail), mm.ok ? '漏了：逗号分隔的选择器没被识别' : mm.detail)
@@ -336,11 +373,11 @@ function selfTest() {
   /* ---- 花括号配平：@keyframes 体内有嵌套块时不能把边界切错 ---- */
   const nested = `
 @keyframes nested { 0% { filter: none; } 100% { filter: blur(1px); } }
-.canvas-frame.fx-n { animation: nested 1s infinite; }
-.canvas-frame.fx-ok { animation: none; }
+.canvas-content.fx-n { animation: nested 1s infinite; }
+.canvas-content.fx-ok { animation: none; }
 `
   const nn = frameFilterContract(nested)
-  rec('自检 · 嵌套花括号的块边界切得准', !nn.ok && /nested/.test(nn.detail), nn.ok ? `切成 ${JSON.stringify(nn.onFrame)}` : nn.detail)
+  rec('自检 · 嵌套花括号的块边界切得准', !nn.ok && /nested/.test(nn.detail), nn.ok ? `切成 ${JSON.stringify(nn.onContent)}` : nn.detail)
 
   const total = pass + fail
   console.log(`\nPREVIEW_FX_SELFTEST_STATS total=${total} pass=${pass} fail=${fail}`)
@@ -363,9 +400,9 @@ const problems = []
 let aborted = null
 
 /** 合约：断言总数恒为这个数。中断时靠 backfillSkips 补齐，verify.mjs 里的 expected 才不会误报。
- *  数法：静态契约 1 + 夹具 2 + 2.0s 段 9 + 4.5s 段 5 + 7.0s 段 5 + 面板端到端 8
- *       + 空时间线 2 + 页面错误 1 = 33。 */
-const TOTAL_ASSERTIONS = 33
+ *  数法：静态契约 1 + 夹具 2 + 2.0s 段 10 + 4.5s 段 5 + 7.0s 段 5 + 面板端到端 8
+ *       + 空时间线 2 + 页面错误 1 = 34。 */
+const TOTAL_ASSERTIONS = 34
 let emitted = 0
 
 function check(name, ok, detail) {
@@ -434,6 +471,9 @@ function readPreview(page) {
     const xfade = document.querySelector('.canvas-xfade')
     const fx = document.querySelector('.canvas-fx')
     const fcs = frame ? getComputedStyle(frame) : null
+    /* 内容层：画面特效（transform 类）现在挂这里，不挂画框 —— 见 styles.css 的说明 */
+    const contentEl = document.querySelector('.canvas-content')
+    const ccs = contentEl ? getComputedStyle(contentEl) : null
     /**
      * 调色读**主层**的 computed filter，不读画布的。
      *
@@ -457,10 +497,15 @@ function readPreview(page) {
       overlayTexts: overlays.map((el) => (el.innerText || '').trim()),
       overlayFontSize: px(inner, 'font-size'),
       overlayBg: px(inner, 'background-color'),
-      overlayAnim: px(first, 'animation-name'),
+      /* ⚠️ 入场动画挂在文字的**外层包裹**（`.ta-move`）上，不在 `.canvas-overlay` 上：
+         同一个元素要同时承载入场/出场/循环三条动画时，后一条的 fill 会把前一条盖住，
+         所以 Stage 用三层元素各挂一条。读 overlay 自己只会拿到 none。 */
+      overlayAnim: px(first ? first.querySelector('.ta-move') : null, 'animation-name'),
       filter: mcs ? mcs.filter : null,
-      /* 画面特效（transform 类）仍挂在画布上，读画布的 animation-name */
+      /* 画面特效（transform 类）挂在**内容层**上，读内容层的 animation-name；
+         另外单独读画框的 —— 它必须是 none（画框不许跟着抖）。 */
       frameAnim: fcs ? fcs.animationName : null,
+      contentAnim: ccs ? ccs.animationName : null,
       frameFx: frame ? frame.dataset.frameFx : null,
       xfadeKey: xfade ? xfade.dataset.xfade : null,
       xfadeP: xfade ? xfade.dataset.xfadeP : null,
@@ -633,11 +678,18 @@ async function main() {
     `animation-name = ${s.overlayAnim}，期望含 ${STYLE_TRUTH['sub-bar'].anim}`
   )
 
-  /* transform 类画面特效：挂在画布本身上，所以连画面一起动 */
+  /* transform 类画面特效：挂在**内容层**上 —— 画面在动、画框不动。
+     为什么必须分开判：挂在画框上时圆角/描边/外阴影会一起抖，而**成片里没有画框**，
+     于是预览与成片对不上，且两边单独看都合理。 */
   check(
-    '2.0s · 画面特效（transform 类 fx-shake）挂在画布上并在播',
-    String(s.frameAnim).includes('fx-shake') && s.frameFx === 'fx-shake',
-    `animation-name = ${s.frameAnim}；data-frame-fx = ${s.frameFx}`
+    '2.0s · 画面特效（transform 类 fx-shake）挂在内容层上并在播',
+    String(s.contentAnim).includes('fx-shake') && s.frameFx === 'fx-shake',
+    `content animation-name = ${s.contentAnim}；data-frame-fx = ${s.frameFx}`
+  )
+  check(
+    '2.0s · 画框自身没有动画（圆角/描边/外阴影不跟着抖，与成片一致）',
+    s.frameAnim === 'none' || s.frameAnim === null || s.frameAnim === '',
+    `frame animation-name = ${s.frameAnim}`
   )
 
   /* ------------------------- 2) 播放头 4.5s：转场交叠窗口内 ------------------------- */

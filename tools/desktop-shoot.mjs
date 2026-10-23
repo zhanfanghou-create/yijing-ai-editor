@@ -212,44 +212,13 @@ if (heroBtn) {
     await shoot('04-editor-local')
   }
 
-  // 左栏「视频增强」：中栏应当是参考那套预设画廊（两列「图 + 名字」卡片），
-  // 并且左栏要从"根展开"换成"视频增强展开"（子项：场景增强/视频修复/视频超分/色彩优化/我的创作）
-  const enhNode = await page.$('[data-wb-node="video-enhance"]')
-  if (enhNode) {
-    await enhNode.click()
-    await page.waitForTimeout(800)
-    await shoot('06-editor-enhance')
-    const enh = await page.evaluate(() => {
-      const box = (sel) => {
-        const el = document.querySelector(sel)
-        if (!el) return null
-        const r = el.getBoundingClientRect()
-        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
-      }
-      const grid = document.querySelector('.enh-grid')
-      const name = document.querySelector('.enh-name')
-      const art = document.querySelector('.enh-art')
-      return {
-        sections: document.querySelectorAll('.enh-sec').length,
-        cards: document.querySelectorAll('.enh-card').length,
-        cols: grid ? getComputedStyle(grid).gridTemplateColumns : null,
-        colGap: grid ? getComputedStyle(grid).columnGap : null,
-        rowGap: grid ? getComputedStyle(grid).rowGap : null,
-        grid: box('.enh-grid'),
-        card: box('.enh-card'),
-        art: box('.enh-art'),
-        nameGap: name && art ? Math.round(name.getBoundingClientRect().y - art.getBoundingClientRect().bottom) : null,
-        rail: [...document.querySelectorAll('.wb-tree .wb-node')].map((n) => n.dataset.wbNode)
-      }
-    })
-    console.log('  --- 视频增强画廊 ---')
-    console.log(`    小标题=${enh.sections} 卡片=${enh.cards}`)
-    console.log(`    grid cols=${enh.cols} colGap=${enh.colGap} rowGap=${enh.rowGap}`)
-    console.log(`    grid盒子=${enh.grid} 卡片盒子=${enh.card} 预览图盒子=${enh.art} 名字上间距=${enh.nameGap}`)
-    console.log(`    左栏项 = ${enh.rail.join(' / ')}`)
-  } else {
-    console.log('  左栏没有 [data-wb-node="video-enhance"]')
-  }
+  /* 这里原本有一段「视频增强」取景（左栏 `data-wb-node="video-enhance"` → 中栏预设画廊
+     `.enh-grid.is-enhance`，产物 `06-editor-enhance`）。
+     开源版把「视频增强」这一支连同 `EnhancePanel` 一起移除了（该能力要外挂模型，
+     本机做不了），左栏已无该节点 —— 于是这段永远走 else 分支，只打出一句误导的
+     "左栏没有 video-enhance"，看着像功能坏了。整段删除，不留空壳分支。
+     ⚠️ 但 `.enh-card` / `.enh-grid` 这套卡片样式**仍在用**（RefArtCards：
+     背景 / 图片增强 / 数字人），所以下面的「背景」取景照常按 `.enh-*` 量盒子。 */
 
   // 滤镜 / 转场：这两个面板的卡片规格**直接取自参考 QML 源码**，不是目测值 ——
   //   Filter_Materials.qml      itemWidth: 100  itemHeight: 122
@@ -300,7 +269,9 @@ if (heroBtn) {
     if (subTab) {
       await subTab.click()
       await page.waitForTimeout(700)
-      const tplNode = await page.$('[data-wb-node="subtitle-tpl"]')
+      // ⚠️ 左栏节点 key 是 `subtitle-custom`（AssetTree.jsx 的 subtitle 树，panel 'text-style'），
+      //    没有 `subtitle-tpl` 这个节点 —— 以前写错，整段字幕样式取景静默跳过。
+      const tplNode = await page.$('[data-wb-node="subtitle-custom"]')
       if (tplNode) {
         await tplNode.click()
         await page.waitForTimeout(700)
@@ -366,26 +337,32 @@ if (heroBtn) {
           console.log('    没找到 .style-card —— 字幕样式页没渲染出卡片')
         }
       } else {
-        console.log('  左栏没有 [data-wb-node="subtitle-tpl"]')
+        console.log('  左栏没有 [data-wb-node="subtitle-custom"]')
       }
     }
   }
 
-  // 「特效」页：本机画面特效（frameEffects.json）要能看到卡片在动
+  // 「特效」页：本机画面特效（materials.js 的 EFFECT_GROUPS）要能看到卡片，且缩略图真解出图。
+  // ⚠️ 卡片由共用的 MaterialGrid 渲染：属性是 `data-material="effect:<名字>"`、类名 `.look-card`
+  //   （以前这里探的是 `data-fx-card` / `.fx-demo-art` —— 那是**检查器里单片段演示**的属性，
+  //    中栏素材网格根本没有，于是永远报 0，看着像特效页空了，其实是探针过时）。
   {
     const fxTab = await page.$('.wb-tab[data-wb-tab="effect"]')
     if (fxTab) {
       await fxTab.click()
       await page.waitForTimeout(800)
       await shoot('12-editor-effect')
-      const fx = await page.evaluate(() => ({
-        cards: document.querySelectorAll('[data-fx-card]').length,
-        keys: [...document.querySelectorAll('[data-fx-card]')].map((el) => el.dataset.fxCard),
-        demoAnim: [...document.querySelectorAll('.fx-demo-art')].map((el) => getComputedStyle(el).animationName)
-      }))
+      const fx = await page.evaluate(() => {
+        const cards = [...document.querySelectorAll('[data-material^="effect:"]')]
+        return {
+          cards: cards.length,
+          keys: cards.map((el) => el.dataset.material),
+          imgs: [...document.querySelectorAll('.look-card .look-preview img')].filter((im) => im.naturalWidth > 0).length
+        }
+      })
       console.log('  --- 画面特效页 ---')
-      console.log(`    卡片数=${fx.cards}  keys=${fx.keys.join(' / ')}`)
-      console.log(`    卡片上的演示动画 = ${fx.demoAnim.join(' / ')}`)
+      console.log(`    卡片数=${fx.cards}  keys=${fx.keys.slice(0, 8).join(' / ')}${fx.keys.length > 8 ? ' …' : ''}`)
+      console.log(`    真的解出图的张数=${fx.imgs}/${fx.cards}（0 张说明缩略图 404 或被 CSP 挡了）`)
     }
   }
 
@@ -395,7 +372,10 @@ if (heroBtn) {
   // ⚠️ 卡片在「素材」标签的根卡片展开后才出现，所以要先点顶部标签、再点左栏节点。
   //    （「背景」节点挂在素材标签的树里：AssetTree.jsx 的 stock-bg，data-wb-node="stock-bg"）
   {
-    const mediaTab = await page.$('.wb-tab[data-wb-tab="stock"]')
+    // ⚠️ 顶部标签的 key 是 `media`（EditorTabs.jsx 的 WB_TABS），不是 `stock` ——
+    //    `stock` 是左栏**节点**的 key（素材库分组）。这里以前写错成 `stock`，
+    //    于是 mediaTab 永远为 null，整段背景取景静默跳过（还打出一句误导的"没有该标签"）。
+    const mediaTab = await page.$('.wb-tab[data-wb-tab="media"]')
     if (mediaTab) {
       await mediaTab.click()
       await page.waitForTimeout(700)
@@ -438,7 +418,7 @@ if (heroBtn) {
         console.log(`    真的解出图的张数=${bg.imgs}/${bg.cards}（0 张说明 src 404 或被 CSP 挡了）`)
       }
     } else {
-      console.log('  --- 背景面板：顶部没有 data-wb-tab="media" 的标签 ---')
+      console.log('  --- 背景面板：顶部没找到 data-wb-tab="media" 标签，跳过 ---')
     }
   }
 

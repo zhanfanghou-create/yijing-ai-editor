@@ -19,6 +19,7 @@
  *
  * 输出：TRIM_SELFTEST_PASSED / TRIM_SELFTEST_FAILED + 「TRIM_SELFTEST_STATS total=N pass=P fail=F」
  */
+import * as trim from '../packages/desktop/src/renderer/trim.js'
 import {
   MIN_CLIP_SECONDS,
   clipSpeed,
@@ -322,6 +323,55 @@ check(
   JSON.stringify(speedPatch({ start: 0, duration: 10, offset: 0, sourceDuration: 20 }, 0.5))
 )
 check('时长为 0 的片段换速返回 null', speedPatch({ duration: 0 }, 2) === null)
+
+/* ---------------------------- 剪辑联动（linkMovePatches） ---------------------------- */
+
+const LINK_CLIPS = [
+  { id: 'v1', assetId: 'A', start: 4, duration: 6 },
+  { id: 'a1', assetId: 'A', start: 4, duration: 6 },
+  { id: 't1', assetId: '', start: 2, duration: 3 },
+  { id: 'v2', assetId: 'B', start: 20, duration: 5 }
+]
+
+const move = trim.linkMovePatches(LINK_CLIPS, 'v1', 10, true)
+check(
+  '联动：拖视频到 10 秒，同源的声音一起走到 10 秒',
+  move.length === 2 && move.find((x) => x.id === 'a1')?.start === 10,
+  JSON.stringify(move)
+)
+check(
+  '联动：字幕（无 assetId）与别的素材不跟着动',
+  move.every((x) => x.id === 'v1' || x.id === 'a1'),
+  JSON.stringify(move.map((x) => x.id))
+)
+check(
+  '联动关掉：只动被拖的那一条',
+  (() => {
+    const one = trim.linkMovePatches(LINK_CLIPS, 'v1', 10, false)
+    return one.length === 1 && one[0].id === 'v1' && one[0].start === 10
+  })(),
+  JSON.stringify(trim.linkMovePatches(LINK_CLIPS, 'v1', 10, false))
+)
+check(
+  '往左拖过头：整组被一起夹到 0（声音不会留在原地导致音画错位）',
+  (() => {
+    const left = trim.linkMovePatches(LINK_CLIPS, 'v1', -5, true)
+    const v = left.find((x) => x.id === 'v1')
+    const a = left.find((x) => x.id === 'a1')
+    return v && a && v.start === 0 && a.start === 0
+  })(),
+  JSON.stringify(trim.linkMovePatches(LINK_CLIPS, 'v1', -5, true))
+)
+check(
+  '平移到任意位置：整组内部间距守恒（不会一边动一边不动）',
+  (() => {
+    const shifted = trim.linkMovePatches(LINK_CLIPS, 'v1', 7.5, true)
+    const v = shifted.find((x) => x.id === 'v1').start
+    const a = shifted.find((x) => x.id === 'a1').start
+    return near(v - a, 0) && near(v, 7.5)
+  })()
+)
+check('目标片段不存在时返回空数组（不抛错）', trim.linkMovePatches(LINK_CLIPS, '不存在', 3, true).length === 0)
 
 /* ------------------------------------------------------------------ 汇总 */
 

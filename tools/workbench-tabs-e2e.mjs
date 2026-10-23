@@ -44,7 +44,7 @@ const HOME_NAV = [
 ]
 
 /**
- * 顶部七个功能标签 → 各自的左栏根标签 + 二级项 key。
+ * 顶部八个功能标签 → 各自的左栏根标签 + 二级项 key。
  *
  * ⚠️ 这张表是**独立写死**的（不从 AssetTree.jsx import）—— 从被测代码取期望
  * 等于让被测代码自己出考卷，删掉一个入口它也会跟着"通过"。
@@ -53,7 +53,7 @@ const HOME_NAV = [
 const TABS = [
   {
     key: 'media',
-    label: '媒体文件',
+    label: '素材',
     root: '素材',
     nodes: [
       'local', 'record', 'preset',
@@ -112,6 +112,13 @@ const TABS = [
       'ef-g0', 'ef-g1', 'ef-g2', 'ef-g3', 'ef-g4',
       'ef-g5', 'ef-g6', 'ef-g7', 'ef-g8', 'ef-g9'
     ]
+  },
+  {
+    key: 'adjust',
+    label: '调节',
+    root: '调节',
+    /* 左栏是调节分组树的 5 组（materials.js 的 ADJUST_GROUPS 顺序一一对应） */
+    nodes: ['ad-g0', 'ad-g1', 'ad-g2', 'ad-g3', 'ad-g4']
   }
 ]
 
@@ -383,7 +390,7 @@ async function main() {
     await page.waitForSelector('.wb-timeline', { timeout: 20000 })
     await resize(app, page, EDITOR_SIZE)
 
-    /* ------------------------ B. 七个功能标签 ------------------------ */
+    /* ------------------------ B. 八个功能标签 ------------------------ */
 
     const tabCount = await page.locator('.wb-tab').count()
     if (tabCount !== TABS.length) {
@@ -478,7 +485,7 @@ async function main() {
       }
     }
 
-    /* ------------------ C2. 七个标签的**根卡片**也点一遍 ------------------
+    /* ------------------ C2. 八个标签的**根卡片**也点一遍 ------------------
        根卡片（`wb-node.root`）不是装饰：点它会回落到 tree.root，中栏改成显示
        该标签下的全部素材。第一版漏了它 —— 只在 `:not(.root)` 里点叶子项。
        根卡片曾经**永远没有 active 类**（className 是写死的 `"wb-node root"`），
@@ -505,7 +512,7 @@ async function main() {
     /* ---------- D2. 面板**内部**的子标签也要点（素材库的四个筛选页签） ----------
        `.wb-subtabs` 全仓库只有「素材库」面板在用（全部 / 视频 / 音频 / 图片），
        而在此之前**没有任何 E2E 提过它**（全 tools 目录 grep 命中 0）。
-       面板内层是最容易漏的一层：外层七个标签点了，进去之后的页签没人点。 */
+       面板内层是最容易漏的一层：外层八个标签点了，进去之后的页签没人点。 */
     await page.locator('.wb-tab[data-wb-tab="media"]').click()
     await sleep(250)
     await page.locator('.wb-tree .wb-node[data-wb-node="stock"]').click()
@@ -577,8 +584,8 @@ async function main() {
     // 逐个验效果（顺序：先做会开弹层的，再关掉）
     await page.locator('[data-tl="stock"]').click()
     await sleep(300)
-    /* 断言只盯「切到了 媒体文件 标签、左栏选中的是 素材库」——
-       `stock` 是**节点**不是标签（素材库挂在「媒体文件」下），写成切标签会在
+    /* 断言只盯「切到了 素材 标签、左栏选中的是 素材库」——
+       `stock` 是**节点**不是标签（素材库挂在「素材」下），写成切标签会在
        左栏留下一个不存在的标签名，表现为"点了没反应"。
        真正要挡的是"它打开了一个导入框"（历史上这条就是这么来的）。 */
     const stockLanded = await page.evaluate(
@@ -586,7 +593,7 @@ async function main() {
         Boolean(document.querySelector('.wb-tab[data-wb-tab="media"]')?.classList.contains('active')) &&
         document.querySelector('.wb-tree .wb-node.active')?.getAttribute('data-wb-node') === 'stock'
     )
-    check('E. 「素材库」切到 媒体文件 标签并选中素材库节点（不是打开导入框）', Boolean(stockLanded))
+    check('E. 「素材库」切到 素材 标签并选中素材库节点（不是打开导入框）', Boolean(stockLanded))
 
     await page.locator('[data-tl="mute"]').click()
     await sleep(300)

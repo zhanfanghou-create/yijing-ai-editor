@@ -45,6 +45,16 @@ export const ACTIONS = [
   { id: 'toggleDisableClip', group: '编辑', label: '停用 / 启用选中的片段', keys: ['V'], scope: 'editor' },
   { id: 'clearTimeline', group: '编辑', label: '清空时间线', keys: ['Ctrl+Shift+Delete'], scope: 'editor' },
   { id: 'toggleSnap', group: '编辑', label: '吸附开关', keys: ['N'], scope: 'editor' },
+  /* 用户标记：M 打点/取消，Ctrl+← → 在标记之间跳。
+     跳转键用 Ctrl+方向 而不是 Shift+方向：后者已经是"后退/前进 1 秒"，
+     让"跳一秒"和"跳一个标记"共用同一组键只会让人分不清按了几次。 */
+  { id: 'toggleMarker', group: '编辑', label: '在播放头处打 / 取消标记', keys: ['M'], scope: 'editor' },
+  /* 时间区域：I / O 是剪辑台上的通用词汇（入点 / 出点），Shift+Delete 是"连时间一起删"。
+     这三条都只改选中的**区间**，不动片段选中 —— 与「删除选中片段」是两件事，
+     所以键位也必须分开（同一个 Delete 既要删片段又要删区间，按下就不知道要删哪个）。 */
+  { id: 'regionIn', group: '编辑', label: '标时间区域入点', keys: ['I'], scope: 'editor' },
+  { id: 'regionOut', group: '编辑', label: '标时间区域出点', keys: ['O'], scope: 'editor' },
+  { id: 'regionDelete', group: '编辑', label: '删除时间区域（后面内容前移）', keys: ['Shift+Delete'], scope: 'editor' },
 
   /* 播放 */
   { id: 'playPause', group: '播放', label: '播放 / 暂停', keys: ['Space'], scope: 'editor' },
@@ -56,6 +66,8 @@ export const ACTIONS = [
   { id: 'nextFrame', group: '跳转', label: '后一帧', keys: ['Right'], scope: 'editor' },
   { id: 'prevSecond', group: '跳转', label: '后退 1 秒', keys: ['Shift+Left'], scope: 'editor' },
   { id: 'nextSecond', group: '跳转', label: '前进 1 秒', keys: ['Shift+Right'], scope: 'editor' },
+  { id: 'prevMarker', group: '跳转', label: '跳到上一个标记', keys: ['Ctrl+Left'], scope: 'editor' },
+  { id: 'nextMarker', group: '跳转', label: '跳到下一个标记', keys: ['Ctrl+Right'], scope: 'editor' },
 
   /* 视图 */
   { id: 'zoomIn', group: '视图', label: '时间线放大', keys: ['Ctrl+='], scope: 'editor' },
@@ -72,7 +84,7 @@ export const ACTIONS = [
 
 /** 固定键位：不参与自定义，也不参与冲突检测（面板里会单独说明） */
 export const FIXED_KEYS = [
-  { label: '关闭弹窗 / 退出全屏', keys: ['Esc'], note: '固定键位，不可修改' }
+  { label: '关闭弹窗 / 退出全屏 / 取消选中', keys: ['Esc'], note: '固定键位，不可修改' }
 ]
 
 /** 时间线缩放范围，与 Timeline.jsx 的滑块保持一致 */

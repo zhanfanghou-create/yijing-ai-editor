@@ -83,7 +83,11 @@ function trackWiringContract({ timelineSrc, appSrc, sidePanelsSrc, keymapSrc }) 
       detail: 'Timeline 的锁定守卫不足 3 处调用（拖动 / 修剪 / 菜单至少各一处）'
     },
     effectiveClips: {
-      ok: app.includes('effectiveClips(') && app.includes('compositeAt(activeClips'),
+      /* ⚠️ 判据放宽成 `compositeAt(  [makePreviewClips(]  activeClips`：
+         预览画质上线后，合成器的第一个入参是 `makePreviewClips(activeClips)` ——
+         它只是把 url 换成代理，**轨道结算仍然在 activeClips 里**。
+         这里钉的实质性内容是"预览吃的是 effectiveClips 的产物"，不是那个变量的字面位置。 */
+      ok: app.includes('effectiveClips(') && /compositeAt\((?:makePreviewClips\()?activeClips/.test(app),
       detail: 'App 没有用 effectiveClips 结算并把 activeClips 喂给 compositeAt'
     },
     renderClipsToExport: {
@@ -105,6 +109,15 @@ function trackWiringContract({ timelineSrc, appSrc, sidePanelsSrc, keymapSrc }) 
     replaceWired: {
       ok: tl.includes('data-ctx="replace"') && tl.includes('onReplaceClip') && app.includes('onReplaceClip={replaceClipSource}'),
       detail: '「替换片段」要么菜单里没这一项，要么没接到 App 的 replaceClipSource'
+    },
+    /* 剪辑联动：按钮 → App 状态 → 拖动逻辑 → 落盘，四段缺一段就是假开关 */
+    linkWired: {
+      ok:
+        tl.includes('data-tl="link"') &&
+        tl.includes('onToggleLink') &&
+        app.includes('linkMovePatches(') &&
+        app.includes("setSetting('linkEnabled'"),
+      detail: '剪辑联动缺线：要么时间线没有 data-tl="link"，要么 App 拖动时没走 linkMovePatches / 没落盘'
     }
   }
   const failed = Object.entries(facts).filter(([, item]) => !item.ok)
@@ -216,6 +229,7 @@ function selftest() {
       '  const b = <button data-tracktoggle={`${track.key}:lock`} />',
       '  const c = AUDIO_CAPABLE.has(track.key) ? <button data-tracktoggle={`${track.key}:solo`} /> : null',
       '  const d = <button data-ctx="replace" onClick={() => onReplaceClip(menu.clip.id)} />',
+      '  const e = <button data-tl="link" onClick={() => onToggleLink(!linkEnabled)} />',
       '  if (trackLocked(clip)) return',
       '  if (trackLocked(clip)) return',
       '  if (trackLocked(clip)) return'
@@ -227,6 +241,8 @@ function selftest() {
       "renderClips={activeClips}",
       'toggleDisableClip: () => {}',
       'onReplaceClip={replaceClipSource}',
+      'linkMovePatches(list',
+      "setSetting('linkEnabled', value)", 
       "getSetting('trackState')",
       "setSetting('trackState', trackState)"
     ].join('\n'),
@@ -242,12 +258,13 @@ function selftest() {
     ['lockHooks', (g) => { g.timelineSrc = g.timelineSrc.replace(':lock', ':lockx') }],
     ['trackStateProp', (g) => { g.timelineSrc = g.timelineSrc.replace('onTrackState,', 'onTrackSt,') }],
     ['lockedGuard', (g) => { g.timelineSrc = g.timelineSrc.split('trackLocked(clip)').slice(0, 3).join('trackLocked(clip)') }],
-    ['effectiveClips', (g) => { g.appSrc = g.appSrc.replace('compositeAt(activeClips', 'compositeAt(clipsX') }],
+    ['effectiveClips', (g) => { g.appSrc = g.appSrc.replace(/compositeAt\((?:makePreviewClips\()?activeClips/, 'compositeAt(clipsX') }],
     ['renderClipsToExport', (g) => { g.appSrc = g.appSrc.replace('renderClips={activeClips}', 'renderClips={clips}') }],
     ['disableAction', (g) => { g.appSrc = g.appSrc.replace('toggleDisableClip:', 'disableClip:') }],
     ['trackStatePersisted', (g) => { g.appSrc = g.appSrc.replace("getSetting('trackState')", "getSetting('trackSt8')") }],
     ['soloHooks', (g) => { g.timelineSrc = g.timelineSrc.replace(':solo', ':soloX') }],
-    ['replaceWired', (g) => { g.appSrc = g.appSrc.replace('onReplaceClip={replaceClipSource}', 'onReplaceClip={undefined}') }]
+    ['replaceWired', (g) => { g.appSrc = g.appSrc.replace('onReplaceClip={replaceClipSource}', 'onReplaceClip={undefined}') }],
+    ['linkWired', (g) => { g.appSrc = g.appSrc.replace('linkMovePatches(', 'movePatches(') }]
   ]
 
   for (const [key, breakIt] of cases) {

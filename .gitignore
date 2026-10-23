@@ -55,6 +55,3 @@ Thumbs.db
 
 # vite 运行期临时文件
 vite.config.mjs.timestamp-*
-
-# 内部过程记录（工作日志 / 探针残留）不入库
-.workbuddy/

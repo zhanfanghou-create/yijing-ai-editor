@@ -1278,3 +1278,65 @@ export const EFFECT_GROUPS = [
     { zh: "爱心爆炸", thumb: "bfb719370f81.png", css: "fx-pulse" },
   ] },
 ]
+
+/**
+ * 「调节」页的预设（按 `shared/adjust.js` 的五个参数给值，不是另一套独立参数）。
+ *
+ * 为什么这页必须存在：调色（滤镜）与调节（亮度/对比/饱和/色温/色调）是两件不同的事 ——
+ * 滤镜是"套一层风格"，调节是"把这张画面修回来"。参考把两者分成两个一级页签，
+ * 我们此前只有滤镜，想提亮一点就只能拖右栏的滑杆，或者在滤镜里试一个差不多的风格。
+ *
+ * ⚠️ 每条的 `adjust` 直接就是 `clip.adjust` 的形状（键名与 shared/adjust.js 一致），
+ *    点击 = `patch({ adjust })`，预览与导出读的是同一份字段 —— 没有"预设只是外观"这回事。
+ * ⚠️ 值域 ±100 与滑杆一致（见 ADJUST_PARAMS），不要凭观感写出 ±200 的数：
+ *    超出部分会被 readAdjust 夹掉，卡片看着有区别、画面却顶到同一档。
+ */
+export const ADJUST_GROUPS = [
+  {
+    name: '热门',
+    items: [
+      { zh: '自然通透', adjust: { bright: 4, contrast: 6, saturate: 8, temp: 0, tint: 2 } },
+      { zh: '柔和', adjust: { bright: 7, contrast: -9, saturate: -6, temp: 4, tint: 0 } },
+      { zh: '硬朗', adjust: { bright: 0, contrast: 16, saturate: 5, temp: -4, tint: 0 } },
+      { zh: '胶片', adjust: { bright: 2, contrast: 9, saturate: -12, temp: 11, tint: 5 } },
+      { zh: '高级灰', adjust: { bright: 3, contrast: -6, saturate: -22, temp: -2, tint: 0 } },
+      { zh: '清透', adjust: { bright: 9, contrast: 4, saturate: 6, temp: -5, tint: -3 } }
+    ]
+  },
+  {
+    name: '人像',
+    items: [
+      { zh: '粉嫩', adjust: { bright: 8, contrast: -6, saturate: 6, temp: 6, tint: 9 } },
+      { zh: '冷白皮', adjust: { bright: 12, contrast: 4, saturate: -4, temp: -9, tint: -6 } },
+      { zh: '奶油肌', adjust: { bright: 10, contrast: -10, saturate: -2, temp: 5, tint: 3 } },
+      { zh: '复古港风', adjust: { bright: -2, contrast: 12, saturate: 10, temp: 14, tint: 6 } }
+    ]
+  },
+  {
+    name: '风景',
+    items: [
+      { zh: '通透风光', adjust: { bright: 4, contrast: 11, saturate: 14, temp: -4, tint: 0 } },
+      { zh: '浓郁', adjust: { bright: -2, contrast: 12, saturate: 20, temp: 2, tint: 0 } },
+      { zh: '山川', adjust: { bright: 0, contrast: 8, saturate: 10, temp: -7, tint: -2 } },
+      { zh: '日落', adjust: { bright: 3, contrast: 7, saturate: 16, temp: 18, tint: 8 } }
+    ]
+  },
+  {
+    name: '美食',
+    items: [
+      { zh: '暖食', adjust: { bright: 6, contrast: 6, saturate: 14, temp: 14, tint: 4 } },
+      { zh: '鲜亮', adjust: { bright: 10, contrast: 8, saturate: 18, temp: 6, tint: -2 } },
+      { zh: '焦糖', adjust: { bright: 1, contrast: 13, saturate: 12, temp: 16, tint: 6 } },
+      { zh: '冷白餐盘', adjust: { bright: 9, contrast: 5, saturate: 4, temp: -8, tint: -4 } }
+    ]
+  },
+  {
+    name: '夜景',
+    items: [
+      { zh: '夜色', adjust: { bright: -10, contrast: 13, saturate: 6, temp: -10, tint: 6 } },
+      { zh: '霓虹', adjust: { bright: 6, contrast: 16, saturate: 22, temp: 6, tint: 12 } },
+      { zh: '蓝调时刻', adjust: { bright: -4, contrast: 9, saturate: -6, temp: -16, tint: 4 } },
+      { zh: '压暗保高光', adjust: { bright: -14, contrast: 18, saturate: 4, temp: 0, tint: 0 } }
+    ]
+  }
+]

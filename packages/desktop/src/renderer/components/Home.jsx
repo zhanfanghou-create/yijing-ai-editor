@@ -60,7 +60,7 @@ function DraftsPage({ drafts, onOpenDraft, onDeleteDraft, onNewDraft, fmtTime, f
             <div key={draft.id} className="home-draft-row">
               <button type="button" className="home-draft-open" onClick={() => onOpenDraft?.(draft)}>
                 <span className="home-draft-thumb">
-                  <IconDraft size={20} />
+                  <IconDraft size={22} />
                 </span>
                 <span className="home-draft-meta">
                   <b>{draft.name}</b>
@@ -75,7 +75,7 @@ function DraftsPage({ drafts, onOpenDraft, onDeleteDraft, onNewDraft, fmtTime, f
                 title="删除这份草稿"
                 onClick={() => onDeleteDraft?.(draft)}
               >
-                <IconEraser size={15} />
+                <IconEraser size={14} />
               </button>
             </div>
           ))}
@@ -146,7 +146,7 @@ export default function Home({
               type="button"
               onClick={() => pickNav(item)}
             >
-              <item.Icon size={24} />
+              <item.Icon size={22} />
               {item.label}
             </button>
           ))}
@@ -163,18 +163,18 @@ export default function Home({
             onClick={onOpenSettings}
             data-home-round="settings"
           >
-            <IconRingDot size={19} />
+            <IconRingDot size={22} />
           </button>
           {bridge ? (
             <div className="home-wins">
               <button type="button" onClick={() => bridge.window.minimize()} aria-label="最小化">
-                <IconMinimize size={25} />
+                <IconMinimize size={22} />
               </button>
               <button type="button" onClick={() => bridge.window.toggleMaximize()} aria-label="最大化">
-                <IconMaximize size={21} />
+                <IconMaximize size={22} />
               </button>
               <button className="danger" type="button" onClick={() => bridge.window.close()} aria-label="关闭">
-                <IconClose size={23} />
+                <IconClose size={22} />
               </button>
             </div>
           ) : null}
@@ -252,7 +252,7 @@ export default function Home({
                   aria-label="查看更多工具"
                   onClick={() => onNavigate?.({ key: 'media', label: '素材库', enterEditor: true, tab: 'media', node: 'local' })}
                 >
-                  <IconChevronRight size={17} />
+                  <IconChevronRight size={16} />
                 </button>
               </section>
 
@@ -260,8 +260,8 @@ export default function Home({
                 <div className="home-sec-head is-draft">
                   <h3>最近草稿</h3>
                   <span className="home-viewswitch">
-                    <IconGridView size={17} data-on="true" />
-                    <IconListView size={17} />
+                    <IconGridView size={16} data-on="true" />
+                    <IconListView size={16} />
                   </span>
                 </div>
                 {drafts.length ? (

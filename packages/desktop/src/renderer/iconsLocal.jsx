@@ -405,6 +405,24 @@ export const IconMagnet = make(
   </>
 )
 
+export const IconLink = make(
+  <>
+    <path d="M10 13a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.4 6" />
+    <path d="M14 11a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.6 18" />
+  </>
+)
+
+export const IconStar = make(
+  <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.8l5.9-.8z" />
+)
+
+export const IconFlag = make(
+  <>
+    <path d="M6 21V4" />
+    <path d="M6 5h9l-2 3 2 3H6" />
+  </>
+)
+
 export const IconRatio = make(
   <>
     <rect x="3" y="5" width="18" height="14" rx="2" />
@@ -670,6 +688,16 @@ export const IconTransition = make(
   </>
 )
 
+/** 录音配音：一支干净的麦克风（配音按钮用；不带任何角标 —— 它是"动作"，不是"AI 能力"） */
+export const IconMic = make(
+  <>
+    <rect x="9" y="2.8" width="6" height="10.4" rx="3" />
+    <path d="M5.6 11.4a6.4 6.4 0 0 0 12.8 0" />
+    <path d="M12 17.8v3.4" />
+    <path d="M8.6 21.2h6.8" />
+  </>
+)
+
 /** 音色克隆：麦克风 + 右上复制角标 */
 export const IconVoiceClone = make(
   <>
@@ -746,5 +774,22 @@ export const IconDialogue = make(
     <circle cx="10.4" cy="8.8" r="1.1" />
     <circle cx="14.8" cy="14.6" r="1.1" />
     <circle cx="17.6" cy="14.6" r="1.1" />
+  </>
+)
+
+export const IconAdjust = make(
+  <>
+    <path d="M3.5 7h17M3.5 12h17M3.5 17h17" />
+    <circle cx="9" cy="7" r="2.1" fill="currentColor" stroke="none" />
+    <circle cx="15.5" cy="12" r="2.1" fill="currentColor" stroke="none" />
+    <circle cx="7.5" cy="17" r="2.1" fill="currentColor" stroke="none" />
+  </>
+)
+
+export const IconColorFilter = make(
+  <>
+    <circle cx="9.4" cy="9.6" r="5.4" />
+    <circle cx="14.6" cy="9.6" r="5.4" />
+    <circle cx="12" cy="14.4" r="5.4" />
   </>
 )

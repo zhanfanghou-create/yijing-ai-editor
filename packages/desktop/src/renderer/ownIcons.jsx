@@ -1,15 +1,14 @@
 /**
- * 自绘图标组件 —— **本文件由 tools/build-icons.mjs 从 assets/icons/raw/ 的自绘 SVG 生成，请勿手改。**
+ * 自有图标组件 —— **本文件由 tools/build-icons.mjs 从 assets/icons/raw/ 的自绘 SVG 生成，请勿手改。**
  *
- * 来源：参考客户端可执行体里的 Qt 资源段。提取方式是按「4 字节大端长度前缀 == 载荷长度」
- * 逐块帧定，也就是**逐字节原样**取出，不是描摹重绘。原始 SVG 副本在
- * `src/renderer/assets/icons/raw/<角色名>.svg`。
+ * 版权：全部图标由 `tools/build-own-icons.mjs` 按统一规格**程序生成**（几何由脚本算出，
+ * 不是描摹、不是从任何第三方资源里提取）。规格：24×24 网格、四周留 2px 安全边、
+ * 线宽 1.7、圆角端点与圆角转折、单色 `currentColor`。
  *
  * 生成时做了三件归一化（原因见生成脚本注释）：
- *   1. 剥掉满画布的实心底板（参考里有些图标是「按钮式」资源，带一整块圆/方底）；
+ *   1. 剥掉满画布的实心底板（本项目图标一律不带底板，底板由 CSS 提供）；
  *   2. 所有颜色 → currentColor，交给 CSS 决定实际颜色与 hover/禁用态；
- *   3. 去掉 fill-opacity / stroke-opacity / opacity，避免参考里「次要态」的透明度
- *      在本项目里显得比周围图标暗一档。
+ *   3. 去掉 fill-opacity / stroke-opacity / opacity，避免个别图标比周围暗一档。
  *
  * 共同 props：`size`（默认 18，同时作为宽高），其余透传到 <svg>。
  */
