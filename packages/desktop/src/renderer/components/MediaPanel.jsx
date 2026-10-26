@@ -87,7 +87,30 @@ function thumbStyle(asset) {
   return { aspectRatio: `${width} / ${height}` }
 }
 
-/** 缩略图：图片直接显示；视频取一帧；音频和文本用文字块 */
+/**
+ * 音频/文本这类"没有画面可看"的素材，用一排固定高度的竖条当波形。
+ *
+ * 为什么不是留一格纯黑 + 两个字：素材网格是一排彩色画面的地方，
+ * 中间突然凹进一个**看起来什么都没加载出来**的黑洞，第一眼会被当成加载失败。
+ * 高度序列是**写死的常量**，不随机 —— 每次渲染同一张卡长得一样，
+ * 截图、重开、切视图都不会变。
+ */
+const WAVE_BARS = [38, 62, 84, 54, 96, 70, 44, 88, 58, 100, 48, 74, 36]
+
+function WaveThumb({ asset }) {
+  return (
+    <div className="media-thumb is-wave" style={thumbStyle(asset)}>
+      <span className="media-wave" aria-hidden="true">
+        {WAVE_BARS.map((height, index) => (
+          <i key={index} style={{ height: `${height}%` }} />
+        ))}
+      </span>
+      <em>{KIND_LABEL[asset.kind] || '文件'}</em>
+    </div>
+  )
+}
+
+/** 缩略图：图片直接显示；视频取一帧；音频和文本用波形条 */
 function Thumb({ asset }) {
   if (asset.kind === 'image' && asset.url) {
     return (
@@ -97,11 +120,7 @@ function Thumb({ asset }) {
     )
   }
   if (asset.kind === 'video' && asset.url) return <VideoThumb asset={asset} />
-  return (
-    <div className="media-thumb" style={thumbStyle(asset)}>
-      <span>{KIND_LABEL[asset.kind] || '文件'}</span>
-    </div>
-  )
+  return <WaveThumb asset={asset} />
 }
 
 /** 中栏底部的创作入口：全部是本机就能跑的动作（录屏 / 提取音频走本地 ffmpeg） */

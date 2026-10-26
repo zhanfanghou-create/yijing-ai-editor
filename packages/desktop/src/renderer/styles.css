@@ -798,6 +798,40 @@ button:disabled {
   display: block;
 }
 
+/* 音频 / 文本：一排竖条当波形。用 currentColor 的透明度做亮度，
+   配色跟着令牌走（换主题不用改这里）。 */
+.media-thumb.is-wave {
+  position: relative;
+  display: block;
+  background: #1b1b1f;
+  color: var(--faint);
+}
+
+.media-thumb.is-wave .media-wave {
+  position: absolute;
+  inset: 14% 9% 30%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.media-thumb.is-wave .media-wave i {
+  flex: 1;
+  min-width: 0;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.media-thumb.is-wave em {
+  position: absolute;
+  left: 8px;
+  bottom: 5px;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+}
+
 /**
  * ⚠️ 这一条不能省。`<video>` 不像 `<img>`，它没有"填满容器"的默认行为：
  * 不给宽高就按自身像素尺寸排布，1080p 的片子会撑破 16:10 的格子，

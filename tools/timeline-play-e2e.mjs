@@ -349,16 +349,35 @@ async function main() {
 
     /* ------------------------ 真按播放键：时间真的在走 ------------------------ */
 
+    /*
+     * ⚠️ 这里**先退回 1.0s 再起播**，不从 4.0s 起播。
+     *
+     * 2026-10-24 真实踩到一次假红：`1.000 → 0.000`。原因不是功能坏了 ——
+     * 4.0s 起播只剩 2s 余量，而 `sleep(1500)` 在机器被别的构建拖慢时会被拉长，
+     * 播放越过 6.0s 结尾**回绕到 0**，于是"源时间"从 1.000 变成 0.000，
+     * 断言"没推进"就这么红了。功能是对的，判据假设了"1.5 秒内到不了结尾"。
+     *
+     * 改成：① 退到 1.0s（留 5s 余量，回绕不可能发生）；
+     *      ② 播到中途**再采样一次** —— 这样证明的是"连续在走"，
+     *         比原来只看首尾两个点更强（原来"跳一下就停"也能过）。
+     */
+    await page.keyboard.press('Home')
+    await sleep(150)
+    await stepSeconds(page, 1)
+    await sleep(250)
+
     const before = Number(await sourceTimeOf(page))
     await page.locator('.wb-transport-btns button.play').click()
-    await sleep(1500)
+    await sleep(500)
+    const mid = Number(await sourceTimeOf(page))
+    await sleep(700)
     await page.locator('.wb-transport-btns button.play').click()
     await sleep(200)
     const after = Number(await sourceTimeOf(page))
     check(
-      '真按播放键 1.5s → 预览的源时间真的在推进（不是只画一帧）',
-      after > before,
-      `${before.toFixed(3)} → ${after.toFixed(3)}`
+      '真按播放键 ~1.2s → 预览的源时间连续推进（不是只画一帧，也不是跳一下就停）',
+      mid > before + 0.2 && after > mid,
+      `${before.toFixed(3)} → ${mid.toFixed(3)} → ${after.toFixed(3)}`
     )
 
     const realErrors = pageErrors.filter((text) => !/Failed to load resource|net::ERR|403|401/i.test(text))

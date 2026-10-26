@@ -263,7 +263,7 @@ export function IconMedia({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="4.5" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M10.5 9.5L16 12L10.5 14.5Z" fill="currentColor" stroke="none" />
+      <rect x="3" y="4.5" width="18" height="15" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M10.5 9.5L16 12L10.5 14.5Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -297,7 +297,7 @@ export function IconCaption({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6.5 15.5h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M6.5 11.5h11" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6.5 15.5h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M6.5 11.5h11" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -552,7 +552,7 @@ export function IconGridView({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3.5" y="3.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="13" y="3.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="3.5" y="13" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="13" y="13" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="13" y="13" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.7" />
     </svg>
   )
 }
@@ -569,7 +569,7 @@ export function IconListView({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3.5" y="5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M11.5 7.5h9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><rect x="3.5" y="14" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M11.5 16.5h9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3.5" y="5" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M11.5 7.5h9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><rect x="3.5" y="14" width="5" height="5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M11.5 16.5h9" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -688,7 +688,7 @@ export function IconCreateVideo({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="4.5" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M12 8.5v7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M8.5 12h7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3" y="4.5" width="18" height="15" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M12 8.5v7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M8.5 12h7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -722,7 +722,7 @@ export function IconTemplate({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3.5" y="7.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M5 4.2h14l1.5 3.3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M7.2 4.4L8.7 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 4.4L13.5 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M16.8 4.4L18.3 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.6 11L14.4 13.2L10.6 15.4Z" fill="currentColor" stroke="none" />
+      <rect x="3.5" y="7.5" width="17" height="11.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M5 4.2h14l1.5 3.3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M7.2 4.4L8.7 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 4.4L13.5 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M16.8 4.4L18.3 7.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.6 11L14.4 13.2L10.6 15.4Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -739,7 +739,7 @@ export function IconToolbox({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="7.5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M8 7.5V5.5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M3 12.5h18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M9.5 12.5v3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M14.5 12.5v3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3" y="7.5" width="18" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M8 7.5V5.5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M3 12.5h18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M9.5 12.5v3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M14.5 12.5v3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -756,7 +756,7 @@ export function IconAiVideo({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="2.5" y="5.5" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6.5 9.4L11 12L6.5 14.6Z" fill="currentColor" stroke="none" /><path d="M19.50 2.50L20.28 4.72L22.50 5.50L20.28 6.28L19.50 8.50L18.72 6.28L16.50 5.50L18.72 4.72Z" fill="currentColor" stroke="none" />
+      <rect x="2.5" y="5.5" width="13.5" height="13" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6.5 9.4L11 12L6.5 14.6Z" fill="currentColor" stroke="none" /><path d="M19.50 2.50L20.28 4.72L22.50 5.50L20.28 6.28L19.50 8.50L18.72 6.28L16.50 5.50L18.72 4.72Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -773,7 +773,7 @@ export function IconAiImage({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="2.5" y="5" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><circle cx="7" cy="9.2" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M3.6 17.6L8 12.6L10.6 15.4L12.6 13.4L15.6 17.6Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.50 2.00L20.28 4.22L22.50 5.00L20.28 5.78L19.50 8.00L18.72 5.78L16.50 5.00L18.72 4.22Z" fill="currentColor" stroke="none" />
+      <rect x="2.5" y="5" width="13.5" height="14" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><circle cx="7" cy="9.2" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M3.6 17.6L8 12.6L10.6 15.4L12.6 13.4L15.6 17.6Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.50 2.00L20.28 4.22L22.50 5.00L20.28 5.78L19.50 8.00L18.72 5.78L16.50 5.00L18.72 4.22Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -790,7 +790,7 @@ export function IconVideoBoost({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="2.5" y="5.5" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6 15L9.2 11.2L11.4 13.6L15 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 9h-2.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 9v2.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.50 2.50L20.28 4.72L22.50 5.50L20.28 6.28L19.50 8.50L18.72 6.28L16.50 5.50L18.72 4.72Z" fill="currentColor" stroke="none" />
+      <rect x="2.5" y="5.5" width="13.5" height="13" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M6 15L9.2 11.2L11.4 13.6L15 9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 9h-2.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M15 9v2.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.50 2.50L20.28 4.72L22.50 5.50L20.28 6.28L19.50 8.50L18.72 6.28L16.50 5.50L18.72 4.72Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -807,7 +807,7 @@ export function IconImageBoost({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="2.5" y="5" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><circle cx="7" cy="9.2" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M3.6 17.6L8 12.6L10.6 15.4L12.6 13.4L15.6 17.6Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M6.40 12.20L7.02 13.98L8.80 14.60L7.02 15.22L6.40 17.00L5.78 15.22L4.00 14.60L5.78 13.98Z" fill="currentColor" stroke="none" />
+      <rect x="2.5" y="5" width="13.5" height="14" rx="2.2" fill="none" stroke="currentColor" strokeWidth="1.7" /><circle cx="7" cy="9.2" r="1.7" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M3.6 17.6L8 12.6L10.6 15.4L12.6 13.4L15.6 17.6Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /><path d="M6.40 12.20L7.02 13.98L8.80 14.60L7.02 15.22L6.40 17.00L5.78 15.22L4.00 14.60L5.78 13.98Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -824,7 +824,7 @@ export function IconLibrary({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="9.5" y="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="16" y="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <rect x="3" y="6" width="5.5" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="9.5" y="6" width="5.5" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" /><rect x="16" y="6" width="5.5" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
     </svg>
   )
 }
@@ -841,7 +841,7 @@ export function IconSmartCut({ size = 18, ...rest }) {
       aria-hidden="true"
       {...rest}
     >
-      <rect x="3" y="6.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M12 4.2v15.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.60 1.70L20.30 3.70L22.30 4.40L20.30 5.10L19.60 7.10L18.90 5.10L16.90 4.40L18.90 3.70Z" fill="currentColor" stroke="none" />
+      <rect x="3" y="6.5" width="18" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M12 4.2v15.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M19.60 1.70L20.30 3.70L22.30 4.40L20.30 5.10L19.60 7.10L18.90 5.10L16.90 4.40L18.90 3.70Z" fill="currentColor" stroke="none" />
     </svg>
   )
 }

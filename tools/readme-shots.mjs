@@ -271,8 +271,10 @@ await pick('r_v1')
 await tap('[data-aspect-chip="1"]', '比例 chip')
 await shoot('11-aspect')
 
-/* 12) 音频库 */
+/* 12) 音频库 —— 点左栏「音乐」，中栏才是"本地音乐的浏览与入轨"；
+   停在默认的「提取音频」节点会拍成另一件事 */
 await T('audio')
+await tap('[data-wb-node="audio-music"]', '左栏 音乐')
 await shoot('12-audio-lib')
 
 /* 13) 时间线特写（把播放头拉到第一处转场） */
@@ -280,11 +282,13 @@ await T('media')
 await pick('r_v1')
 await page.keyboard.press('Home').catch(() => {})
 await sleep(200)
-for (let i = 0; i < 75; i += 1) {
+/* 主轨第一处叠化在 6.0s（r_v1 末尾）。30fps 下逐帧右移 180 次才到位 ——
+   先前写 75 次停在 2.5s，那是画中画的入点，拍出来的根本不是转场。 */
+for (let i = 0; i < 180; i += 1) {
   await page.keyboard.press('ArrowRight').catch(() => {})
 }
 await sleep(700)
-await shoot('13-timeline-transition')
+await shoot('13-timeline')
 
 /* 14) 导出面板 */
 await T('media')

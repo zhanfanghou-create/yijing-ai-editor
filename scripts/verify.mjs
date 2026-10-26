@@ -416,13 +416,15 @@ const GATES = [
   },
   {
     id: 'logo-sync',
-    name: '静态·界面 logo 与 ico/ 源图逐字节一致',
+    name: '静态·界面/安装器图标与 ico/ 源图一致（字节 + 像素）',
     argv: [NODE, 'tools/check-logo-sync.mjs'],
     // 这道闸门治的是「换了 ico/ 里的 logo、也重新打包了，界面还是旧 logo」——
-    // 界面里的 logo 是由 tools/extract-ico-frame.mjs 从 ico/256X256.ico 解出的
-    // assets/logo-256.png，中间隔了一层生成步骤，所以这两者必然会漂移。
-    // 它不报错、不影响构建、尺寸也对，只是"图是上一版"，跟"配了图没生效"长得一样。
-    expected: 1,
+    // 图标全靠生成链派生：界面 logo 由 extract-ico-frame 从 ico/256X256.ico 解出，
+    // 安装器的 app256/logo48 与三份 icon.ico 由 gen-app-icon.py 从 source-1024.png 出。
+    // 中间隔着一层生成步骤，就必然会漂移：不报错、不影响构建、尺寸也对，只是"图是上一版"。
+    // 5 项 = 渲染层 logo（逐字节）+ 安装器 app256/logo48（逐像素，Pillow 另一条编码链）
+    //      + installer build|resources 的 icon.ico（逐字节，与桌面端打包图标同一份）。
+    expected: 5,
     marker: /LOGO_SYNC_OK/,
     count: /LOGO_SYNC_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -430,10 +432,12 @@ const GATES = [
     id: 'logo-sync-selftest',
     name: '自证·logo 同步校验器本身有效（夹具）',
     argv: [NODE, 'tools/check-logo-sync.selftest.mjs'],
-    // 稳定数字：夹具固定 10 项。其中 5 项是"必须红"（logo 对不上 / 源图缺失 /
-    // 产物缺失 / 源图没有该尺寸帧 / 比较方向写反），4 项前置存在性，
-    // 1 项是"当前仓库必须绿"。夹具文件 tools/fixtures/logo-from-64.png 是常驻文件。
-    expected: 10,
+    // 稳定数字：夹具固定 15 项。其中 9 项是"必须红"（logo 对不上 / 源图缺失 /
+    // 产物缺失 / 源图没有该尺寸帧 / 比较方向写反 / 安装器 app256 过期 /
+    // 安装器 logo48 过期 / 安装器 resources icon.ico 不一致 / 同尺寸像素不同），
+    // 3 项前置存在性，1 项"默认模式必须跑满 5 项"，1 项"当前仓库必须绿"。
+    // 安装器夹具树在临时目录现搭（基准永远取仓库里的真产物），不存过期图标。
+    expected: 15,
     marker: /LOGO_SYNC_SELFTEST_PASSED/,
     count: /自证：通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
   },

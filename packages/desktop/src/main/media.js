@@ -61,7 +61,16 @@ function describeMedia(raw) {
     size: stat.size,
     mtime: stat.mtimeMs,
     kind: MEDIA_KIND_BY_EXT[ext],
-    url: mediaUrlOf(absolute)
+    url: mediaUrlOf(absolute),
+    /*
+     * 中栏左栏「本地」节点是按 `source === 'local'` 筛素材的（App.jsx 的 filteredAssets），
+     * 而这里就是"这个文件在本机上"的唯一权威判断 —— 必须由这里给出。
+     *
+     * 漏了这个字段的后果是**静默**的：打开草稿后时间线满满都是片段，中栏却显示
+     * 「拖放或单击此处添加视频、音频、照片和字幕」，像素材全丢了。而且「本地」正是
+     * media 页的默认落地节点，所以一进工作台就是这副样子（README 取景时才发现）。
+     */
+    source: 'local'
   }
 }
 

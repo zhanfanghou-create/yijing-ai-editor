@@ -55,7 +55,20 @@ const ATTR_MAP = {
   'xlink:href': 'xlinkHref',
   'xml:space': 'xmlSpace'
 }
-const DROP_ATTRS = new Set(['xmlns', 'version', 'id', 'class', 'width', 'height', 'opacity', 'fill-opacity', 'stroke-opacity'])
+/**
+ * 这些属性一律不说：`xmlns` 是 React 自己管的，`id`/`class` 会撞名，
+ * 透明度在图标层统一由 currentColor 决定。
+ *
+ * ⚠️ **`width`/`height` 不在这里**。它们先前被塞进来过，而这张表是对**每个元素**生效的
+ * （`toJsx` 里逐元素过滤），于是 `<rect width="7.5" height="7.5">` 变成 `<rect>` ——
+ * 一个没有宽高的 rect 在 SVG 里**什么都不画**，还不报错。
+ * 结果是 49 枚参考图标里有 13 枚的矩形整块消失（「素材」「字幕」两个页签图标、
+ * 素材栏的网格/列表切换、IconLibrary、IconSmartCut…），只剩同图标里的 path 还在，
+ * 看上去像"这枚图标本来就长这样"。这套图标是产物，肉眼只会在成排对比时才察觉。
+ * 宽高该不该剥取决于**元素**：只有根 `<svg>` 上的要剥（尺寸交给 `size` 属性），
+ * rect/image 上的宽高是几何，见下面 `DROP_ATTRS.has(k)` 处的判断。
+ */
+const DROP_ATTRS = new Set(['xmlns', 'version', 'id', 'class', 'opacity', 'fill-opacity', 'stroke-opacity'])
 const KEEP_ATTRS = new Set(['d', 'x', 'y', 'width', 'height', 'rx', 'ry', 'cx', 'cy', 'r', 'points', 'transform', 'viewBox', 'x1', 'y1', 'x2', 'y2', 'offset', 'gradientUnits', 'preserveAspectRatio'])
 
 /** 颜色值归一：none / currentColor / url(#..) 保留，其余一律 currentColor */
@@ -274,7 +287,12 @@ export function ${c.role}({ size = 18, ...rest }) {
 
 const refText = refHeader + refBody + '\n'
 
-fs.writeFileSync(OUT_REF, refText, 'utf8')
+/*
+ * ⚠️ `--check` 绝不写盘。以前这三处写盘是不带条件的，于是 `--check` 会**先把产物重新生成一遍**
+ * 再去比报告 —— 报告恒定匹配，闸门永远绿；更糟的是它会把上一秒还坏着的 ownIcons.jsx
+ * 原地"治"好，让人看不见自己刚改坏了什么。校验必须只读。
+ */
+if (!CHECK) fs.writeFileSync(OUT_REF, refText, 'utf8')
 
 /* ── 把未覆盖的手绘图标搬进 iconsLocal.jsx，icons.jsx 变成汇总层 ── */
 
@@ -384,6 +402,10 @@ const refNames = components.map((c) => c.role)
 // 定义还在，改一下导出来源就行，不会凭空少一个图标。
 const localNames = hand.names.filter((n) => !mappedRoles.has(n))
 
+/* 三份产物的**期望文本**要留到 CHECK 分支里做逐字节比对，所以声明在块外 */
+let localTextOut = ''
+let barrelOut = ''
+
 {
   const headRaw = hand.lines.slice(0, hand.defs[0].from).join('\n')
   // head 必须以换行收尾，否则第一段定义会被**粘**在 head 最后一行的尾部：
@@ -395,7 +417,8 @@ const localNames = hand.names.filter((n) => !mappedRoles.has(n))
     '手绘图标全集（已被自绘图标接管的角色不再从这里导出，见 icons.jsx 汇总层）。'
   )
   const localText = localized + hand.defs.map((d) => hand.lines.slice(d.from, d.end + 1).join('\n')).join('\n\n') + '\n'
-  fs.writeFileSync(OUT_LOCAL, localText, 'utf8')
+  localTextOut = localText
+  if (!CHECK) fs.writeFileSync(OUT_LOCAL, localText, 'utf8')
 
   // 自校验：产物里的定义**逐个按序**等于来源，一个不多一个不少。
   // 前面那两个缺陷（重复搬运 246 个、单行定义整条消失）都是被这条挡住的 ——
@@ -429,7 +452,8 @@ export {
 ${localNames.map((n) => `  ${n}`).join(',\n')}
 } from './iconsLocal.jsx'
 `
-  fs.writeFileSync(OUT_ICONS, barrel, 'utf8')
+  barrelOut = barrel
+  if (!CHECK) fs.writeFileSync(OUT_ICONS, barrel, 'utf8')
 }
 
 // 覆盖度自查：汇总层必须能把「参考层 ∪ 手绘层」的全部角色各导出**恰好一次**。
@@ -464,14 +488,60 @@ if (CHECK) {
      文本是 LF。直接比就是「内容一字不差、却报产物过期」—— 而且**时绿时红**
      （取决于上一条命令碰过没有），是最难信的那种闸门。 */
   const norm = (text) => text.replace(/\r\n/g, '\n')
-  const ok = norm(prev) === norm(report)
-  if (!ok) {
-    console.error('ICONS_OUTDATED：产物与当前输入不一致，请重跑 tools/build-icons.mjs')
+  /*
+   * 内容比对（而不是只比报告）：`--check` 存在的意义是"产物是否还是这批输入的产物"，
+   * 而磁盘上的 ownIcons / iconsLocal / icons.jsx 都可能被人手改过。
+   * 三个文件逐一比，报出**具体哪个**过期，别只说一句"重跑脚本"。
+   */
+  const stale = []
+  const cmp = (file, expected) => {
+    if (!expected) return
+    const actual = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+    if (norm(actual) !== norm(expected)) stale.push(path.basename(file))
+  }
+  cmp(OUT_REF, refText)
+  cmp(OUT_LOCAL, localTextOut)
+  cmp(OUT_ICONS, barrelOut)
+  const fresh = stale.length === 0
+  if (!fresh) {
+    console.error(`ICONS_OUTDATED：${stale.join(' / ')} 与当前输入不一致，请重跑 tools/build-icons.mjs`)
+  }
+  const ok = norm(prev) === norm(report) && fresh
+  /*
+   * 几何完整性：`<rect>` 少了 width/height 是**合法 SVG、但一个像素都不画**，
+   * 既不报错、也不影响"产物是否最新"。实测它一次吃掉 13 枚图标的矩形
+   * （「素材」「字幕」页签、素材栏的网格/列表切换…），只剩同图标里的 path，
+   * 远看像"本来就是这么设计的"。所以这里机械钉住几何：没有尺寸的图元一律算坏。
+   */
+  const brokenGeo = []
+  /* 扫**磁盘上的产物**而不是刚算出来的 components：手改过的 ownIcons.jsx
+     同样会缺尺寸，而只比报告文本（上面那段）根本看不见手改。 */
+  const diskJsx = fs.existsSync(OUT_REF) ? fs.readFileSync(OUT_REF, 'utf8') : ''
+  const blocks = diskJsx.match(/export function \w+[\s\S]*?\n}/g) || []
+  for (const block of blocks) {
+    const role = (block.match(/export function (\w+)/) || [])[1]
+    for (const tag of block.match(/<rect[^>]*>/g) || []) {
+      if (!/\bwidth="/.test(tag) || !/\bheight="/.test(tag)) brokenGeo.push(`${role} · ${tag.slice(0, 70)}`)
+    }
+    for (const tag of block.match(/<circle[^>]*>/g) || []) {
+      if (!/\br="/.test(tag)) brokenGeo.push(`${role} · ${tag.slice(0, 70)}`)
+    }
+    for (const tag of block.match(/<ellipse[^>]*>/g) || []) {
+      if (!/\brx="/.test(tag) || !/\bry="/.test(tag)) brokenGeo.push(`${role} · ${tag.slice(0, 70)}`)
+    }
+    for (const tag of block.match(/<path[^>]*>/g) || []) {
+      if (!/\bd="/.test(tag)) brokenGeo.push(`${role} · ${tag.slice(0, 70)}`)
+    }
+  }
+  const geoOk = brokenGeo.length === 0
+  if (!geoOk) {
+    console.error(`ICONS_BROKEN_GEOMETRY：${brokenGeo.length} 个图元缺尺寸（渲染出来是空白，且不报错）`)
+    brokenGeo.slice(0, 12).forEach((line) => console.error('  ' + line))
   }
   // 统计行放在结论**之前**，避免收尾一挂就拿不到结论
-  console.log(`ICONS_CHECK_STATS total=${components.length} local=${localCount} pass=${ok ? components.length : 0} fail=${ok ? 0 : 1}`)
-  if (ok) console.log('ICONS_CHECK_OK')
-  process.exit(ok ? 0 : 1)
+  console.log(`ICONS_CHECK_STATS total=${components.length} local=${localCount} pass=${ok && geoOk ? components.length : 0} fail=${(ok ? 0 : 1) + (geoOk ? 0 : 1)}`)
+  if (ok && geoOk) console.log('ICONS_CHECK_OK')
+  process.exit(ok && geoOk ? 0 : 1)
 } else {
   fs.writeFileSync(REPORT, report, 'utf8')
   console.log(report)

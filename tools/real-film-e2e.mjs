@@ -1071,8 +1071,32 @@ try {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await settleScroll()
     clipBox = await page.locator('.wb-tllane[data-lane="video"] .clip').first().boundingBox()
-    // 点靠下的本体区域：上方 20px 是头栏，两端 7px 是修剪把手（把手会吃掉 pointerdown）
-    clickX = clipBox.x + clipBox.width * 0.55
+    /*
+     * ⚠️ 点击点必须**避开播放头当前位置**。
+     *
+     * 这条断言的名字是「点哪儿到哪儿，且确实动了」，而"动了"的前提是起点与终点不同。
+     * 实测：上一组（分割 / 修剪 / 清空→撤销）结束时播放头正好停在 clipBox 的 55% 处，
+     * 点下去落在同一像素 ⇒ 画面完全正确（播放头就在点击处），却报「移动 0px」，
+     * 于是一条功能完全正常的断言常年红着。这不是用例在挑刺，是取点方式撞上了巧合。
+     * 所以先看播放头在哪，撞上了就换一个比例重新取点（仍在片段本体、避开两端把手）。
+     */
+    const ratios = [0.55, 0.32, 0.72, 0.45]
+    let picked = false
+    for (const r of ratios) {
+      const x = clipBox.x + clipBox.width * r
+      const gap = await page.evaluate(({ x }) => {
+        const lane = document.querySelector('.wb-tltracks')
+        const head = document.querySelector('.playhead')
+        if (!head) return 9999
+        return Math.abs(x - lane.getBoundingClientRect().left + lane.scrollLeft - parseFloat(head.style.left))
+      }, { x })
+      if (gap > 40) {
+        clickX = x
+        picked = true
+        break
+      }
+    }
+    if (!picked) clickX = clipBox.x + clipBox.width * 0.55
     clickY = clipBox.y + clipBox.height - 6
     clickHit = await page.evaluate(({ x }) => {
       const lane = document.querySelector('.wb-tltracks')

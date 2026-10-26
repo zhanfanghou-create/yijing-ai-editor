@@ -168,7 +168,20 @@ async function shutdown(app) {
   await sleep(500)
 }
 
-const WATCHDOG_MS = Number(process.env.BTN_E2E_TIMEOUT_MS || 10 * 60 * 1000)
+/*
+ * 看门狗：防的是"某个按钮把人卡死"（点了开原生框、进了死循环），不是为了卡住耗时。
+ *
+ * ⚠️ 曾经写 10 分钟，结果**连续三次假红**（日志 70 / 71 与本轮）：扫的是 334 个按钮、
+ * 每个要 600ms 稳定窗口，正常就要 **7 分 41 秒**（实测 BTN_E2E_STATS clicked=334）。
+ * 机器一有残留 electron 僵尸或别的构建在跑，同样的工作量就漂到 10 分钟以上，
+ * 于是"看门狗超时"被当成功能坏了 —— 而它什么都没诊断出来，只是把慢当成错。
+ *
+ * 所以给到 18 分钟：足够容忍 2~3 倍负载，又仍然能把真正卡死的点揪出来；
+ * 同时**刻意留在套件的 GATE_TIMEOUT_MS（20 分钟）以内** —— 外层的强杀是无声的，
+ * 而这里的看门狗会先把分桶结论写完再退，报告里能看出"慢在哪一个桶"。
+ * 需要收紧时用 `BTN_E2E_TIMEOUT_MS=<ms>` 覆盖（本轮就是用 1500000 取证 461s 跑完的）。
+ */
+const WATCHDOG_MS = Number(process.env.BTN_E2E_TIMEOUT_MS || 18 * 60 * 1000)
 const watchdog = setTimeout(() => {
   console.error(`\n[!] 看门狗触发：${Math.round(WATCHDOG_MS / 1000)}s 内没跑完，判定失败`)
   failures.push('看门狗超时（进程被强杀）')
