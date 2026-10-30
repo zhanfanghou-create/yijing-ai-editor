@@ -24,5 +24,8 @@
   },
   "devDependencies": {
     "playwright-core": "^1.63.0"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.0"
   }
 }

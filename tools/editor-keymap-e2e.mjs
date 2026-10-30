@@ -45,10 +45,20 @@ const PROFILE_PREFIX = '.keymap-profile'
  *  「停用片段」），参考客户端同款功能同名键位。
  *  22 → 25（2026-10-19）：新增用户标记三项（M 打点 / Ctrl+← → 在标记间跳）。
  *  25 → 28（2026-10-20）：新增时间区域三项（I 入点 / O 出点 / Shift+Delete 删除区间）。
+ *  28 → 36（2026-10-27）：补齐参考客户端 G 系与属性剪贴板八项 ——
+ *    主轨联动 Ctrl+L、组合 Alt+G、取消组合 Alt+Shift+G、复合 Ctrl+G、解除复合 Ctrl+Shift+G、
+ *    复制属性 Ctrl+Alt+C、粘贴属性 Ctrl+Alt+V、批量分割 Ctrl+Shift+K。
+ *    这八条**原本只有功能没有键位**：右键菜单里点得到，但键盘按不出来，
+ *    也就进不了「设置 · 快捷键」这张表（用户没法看、也没法改）。
+ *  36 → 39（2026-10-28）：时间线导航三项 ——
+ *    切点跳转 ↑ / ↓、适配全片 Shift+Z。↑/↓ 在改动前是**完全没被占用**的键位
+ *    （左右逐帧、上下跳接缝，一横一竖不打架），所以不需要动任何既有绑定。
+ *  39 → 42（2026-10-28）：三键播放 J / K / L。行业两套键位方案（剪辑台式 / 拇指单手）
+ *    要用它们，而「方案里引用一个没实现的动作」比没有这个键更糟 —— 先有动作再有方案。
  *  固定键位行不算在动作行里（它是单独的一块说明），所以恒比动作行多 1。 */
 const EXPECTED_GROUPS = ['编辑', '播放', '跳转', '视图', '项目', '固定键位']
-const EXPECTED_ACTION_ROWS = 28
-const EXPECTED_TOTAL_ROWS = 29
+const EXPECTED_ACTION_ROWS = 42
+const EXPECTED_TOTAL_ROWS = 43
 
 function rmrf(target, { attempts = 24, waitMs = 300 } = {}) {
   for (let i = 0; i < attempts; i += 1) {
@@ -67,7 +77,7 @@ let pass = 0
 let fail = 0
 let skip = 0
 const failures = []
-const TOTAL_ASSERTIONS = 31
+const TOTAL_ASSERTIONS = 37
 let emitted = 0
 
 function check(label, ok, detail = '') {
@@ -294,6 +304,69 @@ async function main() {
 
     const footDefault = await page.locator('.wb-keys-count').textContent()
     check('11. 页脚显示「当前全部为默认键位」', /全部为默认/.test(String(footDefault)), String(footDefault).trim())
+
+    /* --------------------- B0. 键位方案（整套替换） ---------------------
+       方案这一层最典型的三种失效：① 按钮画出来了但点了不写存储（重启就没了）；
+       ② 只改了表格显示、派发器读的还是旧表；③ 切回默认时残留几条改过的。
+       ② 由下面 B 段那条「改绑 F9 → 真按 F9 生效」**同源证明**（两者走同一个
+       settings.keymap），所以这里不重复按一遍键，只钉住"表变了 + 存储变了 + 可逆"。 */
+    console.log('\n-- B0. 五套键位方案：整套替换、写进存储、可逆 --')
+
+    /* 5 套：默认 / 单键流 / 修饰优先 / 剪辑台式 / 拇指单手。
+       写死数字（不从源码 import）—— 新增方案时这一条会红，正好提醒同步基线；
+       但它红得**说得清**：
+       如果只数 chip 数量、不点进去试，"多了两个按钮但点下去没反应"照样绿。
+       所以下面 11c 之后又把两套新方案各点一次、读键位列。 */
+    const presetCount = await page.locator('[data-keymap-preset] [data-preset]').count()
+    check('11b. 快捷键页提供 5 套键位方案', presetCount === 5, `实测 ${presetCount} 套`)
+
+    /* 两套行业方案各点一次，读「分割」行的键位列 —— 它们在两套里**刻意不同**
+       （剪辑台式 B / 拇指单手 Alt+S），所以这两条同时绿，说明方案真的整套换了，
+       而不是两个按钮指向同一张表。 */
+    await page.locator('[data-preset="editDesk"]').click()
+    await sleep(250)
+    const deskSplit = await page.locator('[data-action="split"]').getAttribute('data-keys')
+    const deskPlay = await page.locator('[data-action="playBackward"]').getAttribute('data-keys')
+    check(
+      '11b-2. 剪辑台式：分割 = B、倒放 = J',
+      deskSplit === 'B' && deskPlay === 'J',
+      `split=${deskSplit} playBackward=${deskPlay}`
+    )
+
+    await page.locator('[data-preset="thumbOnly"]').click()
+    await sleep(250)
+    const thumbSplit = await page.locator('[data-action="split"]').getAttribute('data-keys')
+    check(
+      '11b-3. 拇指单手：分割 = Alt+S（与剪辑台式确实不是同一张表）',
+      thumbSplit === 'Alt+S',
+      `split=${thumbSplit}`
+    )
+
+    /* 回到「单键流」再往下走：11c 之后几条都假设当前是单键流 */
+    await page.locator('[data-preset="singleKey"]').click()
+    await sleep(250)
+
+    await page.locator('[data-preset="singleKey"]').click()
+    await sleep(300)
+    const splitAfterPreset = await page.locator('[data-action="split"]').getAttribute('data-keys')
+    check('11c. 切到「单键流」后分割行变成 S', splitAfterPreset === 'S', String(splitAfterPreset))
+
+    const presetStored = (await settingsOf(page)).keymap
+    check(
+      '11d. 方案写进了主进程设置（不是只改了界面）',
+      Boolean(presetStored) && Array.isArray(presetStored.split) && presetStored.split.join(',') === 'S',
+      JSON.stringify(presetStored && presetStored.split)
+    )
+
+    await page.locator('[data-preset="default"]').click()
+    await sleep(300)
+    const splitBack = await page.locator('[data-action="split"]').getAttribute('data-keys')
+    const backStored = (await settingsOf(page)).keymap
+    check(
+      '11e. 切回「默认」后整套恢复（表格与存储都不残留单键流）',
+      splitBack === 'Ctrl+B' && Array.isArray(backStored?.split) && backStored.split.join(',') === 'Ctrl+B',
+      `表格=${splitBack} 存储=${JSON.stringify(backStored && backStored.split)}`
+    )
 
     /* --------------------- B. 改绑 + 真派发器（一正一反） --------------------- */
 

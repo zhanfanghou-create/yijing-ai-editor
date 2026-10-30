@@ -185,8 +185,12 @@ fs.writeFileSync(ORPHAN, Buffer.alloc(2048, 7))
  *    以前拿它做前置判断 ⇒ PATH 上的 ffmpeg 永远没被试过。
  */
 function findFfmpeg() {
+  // 顺序与 README「ffmpeg 查找顺序」一致，别让闸门认的和产品认的不是一套：
+  //   环境变量 → 随包 resources/ffmpeg/ → PATH
   const candidates = [
+    process.env.YIJAI_FFMPEG,
     process.env.FFMPEG_PATH,
+    path.join(ROOT, 'resources', 'ffmpeg', 'ffmpeg.exe'),
     path.join(ROOT, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
     'ffmpeg.exe',
     'ffmpeg'
@@ -239,6 +243,12 @@ const UI_CHECKS = [
 
 console.log('夹具目录：' + FIX)
 console.log('ffmpeg：  ' + (ffmpeg || '(无)'))
+if (!ffmpeg) {
+  // 找不到时**必须吵**：视频组 8 条 + 缩略图 2 条会整组记 SKIP，
+  // 而 SKIP 在判定上和"验过了"长得一样。日志里说清怎么补，别让人只看到一片绿。
+  console.log('[WARN] 本机没找到 ffmpeg，视频组 8 条 + 缩略图 2 条将整组跳过。')
+  console.log('[WARN] 补法：set FFMPEG_PATH=<ffmpeg.exe 绝对路径> 后重跑本闸门。')
+}
 console.log('\n启动 Electron …\n')
 
 const env = { ...process.env, NODE_ENV: 'production' }
@@ -445,7 +455,17 @@ try {
   })
   check('拖入时出现落点提示', dragOpen.veil && /is-dragging/.test(dragOpen.appClass),
     `${dragOpen.appClass} types=${JSON.stringify(dragOpen.types)} items=${JSON.stringify(dragOpen.items)}`)
-  if (dragOpen.veil) await page.screenshot({ path: path.join(SHOTS, '01-拖拽落点提示.png') })
+  /* ⚠️ 这张图只是**取证**，不是判据 —— 拿不到就不拿，绝不能让整道闸门因为它红。
+     2026-10-28 实测：整机被别的闸门拖慢时，`page.screenshot` 在 30s 后超时抛出，
+     直接把后面 14 条断言全部作废（报出来的是"断言数不符 21/35"，看着像有人删了断言）。
+     证据缺失是一回事，被测功能好坏是另一回事，两者不能互相冒充。 */
+  if (dragOpen.veil) {
+    try {
+      await page.screenshot({ path: path.join(SHOTS, '01-拖拽落点提示.png'), timeout: 8000 })
+    } catch {
+      console.log('  [NOTE] 取证截图未取到（不影响判定）')
+    }
+  }
 
   const dragClose = await page.evaluate(async () => {
     document.querySelector('.app').dispatchEvent(new DragEvent('dragleave', { bubbles: true }))
@@ -494,19 +514,22 @@ try {
   await page.screenshot({ path: path.join(SHOTS, '02-媒体库导入入口.png') })
 
   // 不真点按钮 —— 那会弹起系统文件框，既挡不住也关不掉，还可能留在用户桌面上。
-  // 改为把桥接的 pick() 换成返回我们夹具的桩，再点：这样验的是「导入 → 媒体库 → 自动选中」
-  // 这条真实链路（含元数据探测与去重），比断言"按钮存在"有意义得多。
-  const stubbed = await page.evaluate((row) => {
-    const stub = async () => [row]
-    try {
-      window.yjai.media.pick = stub
-    } catch (error) {
-      return { patched: false, why: '赋值抛错：' + error.message }
+  // 但也**不能去冻住的桥接对象上赋值**：contextBridge 暴露的对象是冻结的，赋值会静默失败，
+  // 于是这一段长期以「6 条 SKIP」收场 —— 等于"导入 → 进媒体库 → 自动选中 → 缩略图出来"
+  // 这条最主用的链路从来没被真跑过（和 ffmpeg 那次同一个病：跳过不算失败，绿得很体面）。
+  // 改在**主进程**把 dialog.showOpenDialog 换成返回夹具路径：media:pick 走真代码，
+  // describeMedia / 去重 / 建卡片 / 缩略图协议全部真执行。
+  const stubbed = await app.evaluate((electronModule, filePath) => {
+    const { dialog } = electronModule || {}
+    if (!dialog || typeof dialog.showOpenDialog !== 'function') {
+      return { patched: false, why: '主进程里没有 dialog.showOpenDialog' }
     }
-    // 冻结对象上赋值会静默失败，所以必须比对象身份，不能只看"是不是函数"
-    const ok = window.yjai.media.pick === stub
-    return { patched: ok, why: ok ? '' : '赋值被忽略（contextBridge 对象已冻结）' }
-  }, png)
+    const original = dialog.showOpenDialog
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] })
+    // 比对象身份：函数被换成桩才算真的打上了（换成同一个原函数等于没打）
+    const ok = dialog.showOpenDialog !== original
+    return { patched: ok, why: ok ? '' : '替换被忽略' }
+  }, PNG)
 
   if (!stubbed.patched) {
     for (const name of UI_CHECKS) skip(name, `${stubbed.why}；stat/probe/协议各环节已单独验证`)
@@ -544,6 +567,18 @@ try {
     await page.waitForTimeout(1200)
     const deduped = await page.evaluate(() => document.querySelectorAll('.media-card').length)
     check('同一文件重复导入不产生重复卡片', deduped === after.count, `${after.count} → ${deduped}`)
+
+    /* 底部工具区的引导语：库里已有素材时**不能**再写「没有媒体文件？」。
+     * 这句原先写死在 JSX 里，于是 3 个素材的界面上顶着一句"没有素材"的自我否定 ——
+     * 不报错、不崩、没有任何闸门会红，只能靠看截图发现。
+     * 判据读消费端：DOM 文案 + 钩子取值，不去读 state。 */
+    const toolsSplit = await page.evaluate(() => {
+      const el = document.querySelector('.wb-tools-split')
+      return { text: el ? el.textContent.trim() : '', hook: el?.getAttribute('data-wb-tools-split') || '' }
+    })
+    check('已有素材时工具区不再自称「没有媒体文件」',
+      Boolean(toolsSplit.text) && !/没有媒体文件/.test(toolsSplit.text) && toolsSplit.hook === 'filled',
+      `「${toolsSplit.text}」hook=${toolsSplit.hook || '-'}`)
   }
 
   /* ---------------- 缩略图与像素比例（视频 / 音频这两条真实分支） ----------------
@@ -563,19 +598,22 @@ try {
   // 重新登记一遍拿行数据（视频组的 `vRows` 定义在上面的分支里，作用域不外泄）
   const mp4Row = hasVideo ? (await page.evaluate((p) => window.yjai.media.stat([p]), MP4))?.[0] : null
   const wavRow = (await page.evaluate((p) => window.yjai.media.stat([p]), WAV))?.[0]
-  const moreRows = [mp4Row, wavRow].filter(Boolean)
-  const stubbed2 = await page.evaluate((list) => {
-    const stub = async () => list
-    try {
-      window.yjai.media.pick = stub
-    } catch {
-      return false
-    }
-    return window.yjai.media.pick === stub
-  }, moreRows)
+  /* 同样走**主进程**打桩（而不是给冻住的桥接对象赋值 —— 那样会静默失败，
+     这三条就一直停在 SKIP 上）。只放真实存在的夹具路径：拿不存在的文件去导入，
+     media:pick 会老实返回空数组，界面上一张卡都不多，反而更难查。 */
+  const morePaths = [hasVideo ? MP4 : null, WAV].filter((p) => p && fs.existsSync(p))
+  const stubbed2 = morePaths.length
+    ? await app.evaluate((electronModule, filePaths) => {
+        const { dialog } = electronModule || {}
+        if (!dialog || typeof dialog.showOpenDialog !== 'function') return false
+        const original = dialog.showOpenDialog
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths })
+        return dialog.showOpenDialog !== original
+      }, morePaths)
+    : false
 
   if (!stubbed2 || !wavRow) {
-    for (const name of ['视频缩略图铺满缩略图格', '缩略图格用素材真实像素比例', '音频轨画出真实波形']) {
+    for (const name of ['视频缩略图铺满缩略图格', '缩略图格高度统一', '音频轨画出真实波形']) {
       skip(name, stubbed2 ? 'WAV 没能登记' : 'bridge 已冻结，无法打桩导入入口')
     }
   } else {
@@ -584,7 +622,7 @@ try {
 
     if (!hasVideo) {
       skip('视频缩略图铺满缩略图格', '本机没有可用 ffmpeg，造不出 MP4 夹具')
-      skip('缩略图格用素材真实像素比例', '本机没有可用 ffmpeg，造不出 MP4 夹具')
+      skip('缩略图格高度统一', '本机没有可用 ffmpeg，造不出 MP4 夹具')
     } else {
       const videoThumb = await page.evaluate(() => {
         const cards = Array.from(document.querySelectorAll('.media-card'))
@@ -611,11 +649,26 @@ try {
           ? `video ${videoThumb.w.toFixed(0)}×${videoThumb.h.toFixed(0)} vs 格 ${videoThumb.boxW.toFixed(0)}×${videoThumb.boxH.toFixed(0)}｜object-fit=${videoThumb.objectFit}`
           : '媒体库里没有视频卡'
       )
-      const ratio = videoThumb && videoThumb.boxH > 0 ? videoThumb.boxW / videoThumb.boxH : 0
+      /**
+       * 缩略图**格子**的统一高度。
+       *
+       * 这条早先写的是"格子比例应当是素材真实比例（4:3）"，实测 1.598 就红了 ——
+       * 但那是**过期的期望**：工作台的缩略图格是刻意的"统一高 64 + cover 裁切"
+       * （见 workbench.css 那一段注释：按素材比例排会让竖版素材把一行撑高，
+       * 同一行卡片的文字基线全错开，实测 toneC.wav 那块 103 高、picB 只有 55）。
+       * 所以这里改成守**设计真正要守的东西**：所有格子高度一致。
+       * 素材比例不同时由 `object-fit: cover` 裁切，不是把格子撑变形。
+       */
+      const cellHeights = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.media-card .media-thumb')).map(
+          (el) => el.getBoundingClientRect().height
+        )
+      )
+      const spread = cellHeights.length ? Math.max(...cellHeights) - Math.min(...cellHeights) : 999
       check(
-        '缩略图格用素材真实像素比例（320×240 → 4:3，不是写死的 16:10）',
-        Math.abs(ratio - 4 / 3) <= 0.06,
-        ratio ? `格比例 ${ratio.toFixed(3)}（4:3 = 1.333）` : '量不到格子'
+        '缩略图格高度统一（不同比例的素材不出高低行、文字基线不错开）',
+        cellHeights.length >= 2 && spread <= 1,
+        `${cellHeights.length} 格，高差 ${spread.toFixed(1)}px（${cellHeights.map((h) => h.toFixed(0)).join('/')}）`
       )
     }
 
@@ -633,7 +686,23 @@ try {
       const box = await wavCard.boundingBox()
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
       await page.waitForTimeout(250)
-      const addBox = await page.locator('.media-card button[title="加入时间线"]').first().boundingBox()
+      /* ⚠️ 必须在**这张卡**里找按钮，不能 `.first()` 拿到全列表第一个：
+         「加入时间线」只在 hover 时显形，而 `.first()` 命中的是第一张卡（没 hover ⇒ 量不到盒子 ⇒ null）。
+         第一次真跑就被这个写法坑了：报的是 "Cannot read properties of null (reading 'x')"，
+         看起来像功能坏了，其实只是选择器选错了卡。 */
+      /* hover 显形的按钮要**等它可见**再量，不能"挪过去 + 睡 250ms 就量"：
+         全量跑到这一道时机器正忙，250ms 不够样式与布局落地，会偶发量到 null，
+         报出"量不到按钮"——看着像功能坏了，其实只是抢跑（2026-10-28 全量实测：
+         单独跑 36/36，全量里偶发这一条红）。 */
+      const addBtn = wavCard.locator('button[title="加入时间线"]').first()
+      let addBox = null
+      for (let attempt = 0; attempt < 6 && !addBox; attempt += 1) {
+        await wavCard.hover({ timeout: 3000 }).catch(() => {})
+        await addBtn.waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+        addBox = await addBtn.boundingBox().catch(() => null)
+        if (!addBox) await page.waitForTimeout(150)
+      }
+      if (!addBox) throw new Error('hover 后仍量不到「加入时间线」按钮（重试 6 次）')
       await page.mouse.click(addBox.x + addBox.width / 2, addBox.y + addBox.height / 2)
       await page.waitForTimeout(3500)
       waveInfo = await page.evaluate(() => {

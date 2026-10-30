@@ -115,9 +115,20 @@ export function textStyleCss(key, base = STYLE_BASE_WIDTH, clip = null) {
 
   const inner = {
     display: 'inline-block',
-    /* 左右对齐时收窄到 84%：导出侧左右对齐用的是 6% 的边距（见 subtitles.js 的 x），
-       这里留一样的余量，否则"预览顶到画布边、成片里离边 6%" */
-    maxWidth: def.align && def.align !== 'center' ? '88%' : '92%',
+    /*
+     * ⚠️ maxWidth 必须用 **cqw**，不能用 `%`。
+     *
+     * 这一层的外面还套着两层 `.ta-move`（入场 / 出场动画各一层，都是
+     * `display: inline-block; max-width: 100%`）。`%` 的包含块是**外层那个
+     * 已经被内容撑开的 shrink-to-fit 盒子**，不是画布 —— 于是 `maxWidth: 92%`
+     * 等于"这条文字只能占它自己宽度的 92%"，最后几个字永远被挤到下一行。
+     * 实测：「未命名项目」5 字，外层 165.8px，92% = 152.5px ⇒ 断成 4+1 两行，
+     * 而画布还有 466px 可用。改成 88cqw 后 maxWidth 算成 466.87px，单行。
+     *
+     * 88cqw = 画布宽 100% 减去两侧各 6% 的内边距；左右对齐时再收窄 6 个百分点，
+     * 与导出侧那 6% 的边距（subtitles.js 的 x）对齐。
+     */
+    maxWidth: def.align && def.align !== 'center' ? '82cqw' : '88cqw',
     fontFamily: def.fontFamily || 'inherit',
     fontSize: q(def.size, base),
     fontWeight: String(def.weight || 600),

@@ -8,7 +8,7 @@
  *   - 拒绝一切权限申请（摄像头/麦克风/通知等按需再单独开）
  *   - 令牌用 safeStorage 加密后落盘，不散落在 localStorage
  */
-const { app, BrowserWindow, shell, ipcMain, safeStorage, nativeTheme, dialog, protocol } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, safeStorage, nativeTheme, dialog, protocol, Tray, Menu } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 /* 素材入库要用它给副本文件名加短哈希（不同目录下的同名文件不能互相覆盖） */
@@ -34,6 +34,19 @@ const { createDraftStore } = require('./drafts')
 const packOf = require('./pack')
 const packTable = require('../shared/pack')
 const hdrTable = require('../shared/hdr')
+/* 导出编码格式：保存对话框的扩展名与 render:start 的落地扩展名都按它走，
+   见 shared/exportCodec.js（容器与编码器必须配套，否则 ffmpeg 直接拒绝） */
+const exportCodec = require('../shared/exportCodec')
+/* 字幕读写：主进程只做落盘与编码嗅探，解析/拼装全在 shared/subtitle.js
+   （渲染层 import 同一份，见 vite.config.mjs 的白名单） */
+const subtitleTable = require('../shared/subtitle')
+/* 内置贴纸库：清单与路径校验在 stickers.js（纯 Node，可脱机自测） */
+const stickers = require('./stickers')
+/* 内置边框库：同一套读取器（materialPack.js），素材由 tools/gen-borders.py 生成 */
+const borders = require('./borders')
+/* 本地插件（素材包）：清单校验在 shared/pluginPack.js，落盘在 plugins.js */
+const plugins = require('./plugins')
+const facefx = require('./facefx')
 const { registerMcpServer } = require('./mcp-register')
 
 const isDev = !app.isPackaged
@@ -57,6 +70,17 @@ app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar')
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:'])
 
 let mainWindow = null
+/** 右下角托盘（Windows 通知区）—— 常驻，谁都不能 GC 掉它，否则图标凭空消失 */
+let tray = null
+/**
+ * 托盘的**运行时事实**（只写不读，不参与任何业务判断）。
+ *
+ * 为什么需要它：`createTray()` 是 try/catch 静默兜底的（托盘建不起来绝不能让主窗口跟着挂），
+ * 于是「图标路径写错 / ico 没随包 / 系统拒绝」这三种失败**一行日志之外没有任何痕迹**，
+ * 编辑器照常启动、静态闸门照常全绿。这份快照就是给运行时闸门
+ * （tools/tray-runtime-e2e.mjs）与现场排障读的**消费端证据**。
+ */
+let trayRuntime = { created: false, error: null, iconPath: '', menuLabels: [], tooltip: '' }
 /** 同一时刻只允许一个渲染任务；渲染进程点「取消」时靠它 abort */
 let activeRender = null
 
@@ -190,6 +214,64 @@ function describeMedia(raw) {
   return described
 }
 
+/* ------------------------------ 内置贴纸库 ------------------------------ */
+
+/**
+ * 随包素材清单（惰性读 + 进程内缓存）。贴纸 / 边框共用这一段。
+ *
+ * ⚠️ 每个素材都**必须**登记进 allowedMedia。漏了不会报错，协议层回 403、
+ *    面板上是一片空白，Console 里只有一条 "Failed to load resource" ——
+ *    看起来像素材文件不存在，实际是访问控制。与字体那条坑同一个成因。
+ *    两类素材各写一份缓存的下场就是「贴纸能显示、边框全白」，所以合成一个函数。
+ * ⚠️ 缓存是必要的：面板每切一次页签都会问一次，140+24 个文件每次 statSync 一遍
+ *    会让切页签肉眼可见地顿一下（冷读约 8ms，但不该每次付）。
+ */
+const packCaches = new Map()
+
+/**
+ * 用户自己装的插件素材（`<userData>/plugins`）。
+ *
+ * `name` 恰好就是插件类型（'border' / 'sticker'），所以直接透传给 groupsOf。
+ * 拿不到 userData 时回空数组而不是抛错：素材库照样能用，只是没有"我的"那几组。
+ */
+function pluginGroupsOf(name) {
+  try {
+    return plugins.groupsOf(name, { userData: app.getPath('userData') })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 丢掉素材缓存 —— **导入 / 启停 / 卸载插件之后必须调**。
+ *
+ * 不调的下场：面板上写着"已导入"，回到边框页还是原来那 24 款。
+ * 这类「状态变了、画面没变」是静默失效第 ⑤ 类，构建和静态扫描都看不见。
+ */
+function invalidatePackCaches() {
+  packCaches.clear()
+}
+
+function packCatalog(name, read) {
+  if (packCaches.has(name)) return packCaches.get(name)
+  const cat = read({
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    /* 开发模式唯一靠得住的那条：monorepo 下 app.getAppPath() 会落到仓库根 */
+    mainDir: __dirname,
+    extraGroups: pluginGroupsOf(name)
+  })
+  for (const item of cat.items) {
+    allowedMedia.add(item.abs)
+    item.url = mediaUrlOf(item.abs)
+  }
+  packCaches.set(name, cat)
+  return cat
+}
+
+const stickerCatalog = () => packCatalog('sticker', stickers.readCatalog)
+const borderCatalog = () => packCatalog('border', borders.readCatalog)
+
 /** 扩展名 → MIME。自己回流体就得自己给 Content-Type，给错了 <video> 直接不认。 */
 const MIME_BY_EXT = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -199,7 +281,11 @@ const MIME_BY_EXT = {
   '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg',
   '.wma': 'audio/x-ms-wma',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif'
+  '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif',
+  /* WASM 必须给 application/wasm：给成 octet-stream 时浏览器会走
+     "streaming compile failed → 回落 ArrayBuffer" 的慢路径（能跑，但白等一次 +
+     console 一直红）。`.task` 是 MediaPipe 的模型包，按二进制给就行。 */
+  '.wasm': 'application/wasm', '.task': 'application/octet-stream'
 }
 
 /**
@@ -452,6 +538,85 @@ function createWindow() {
   }
   mainWindow.on('maximize', pushMaximizeState)
   mainWindow.on('unmaximize', pushMaximizeState)
+}
+
+/**
+ * 右下角托盘（Windows 通知区）。
+ *
+ * 只加「多一个入口」这一件事，**刻意不改关闭语义**：点窗口的叉仍然是退出，托盘随之消失。
+ * 不改的理由是硬的 —— 全套 E2E 闸门都靠关闭窗口来结束进程，一旦把 close 改成 hide，
+ * 它们会集体挂在"进程不退出"上；而对用户来说"点了叉关不掉"是比"没有托盘"严重得多的缺陷。
+ *
+ * ⚠️ 图标路径与窗口 icon 用同一个 `../../build/icon.ico`，该文件由
+ *   electron-builder.yml 的 files 显式随包（见那条注释）。
+ */
+function createTray() {
+  if (tray) return
+  const iconPath = path.join(__dirname, '..', '..', 'build', 'icon.ico')
+  trayRuntime = { created: false, error: null, iconPath, menuLabels: [], tooltip: '' }
+  try {
+    tray = new Tray(iconPath)
+  } catch (e) {
+    /* 图标缺失或系统不允许托盘：记一行日志就走，绝不能让托盘把主窗口拖垮 */
+    console.warn('[Tray] 创建失败（不影响软件本身）：', e && e.message)
+    tray = null
+    trayRuntime.error = String((e && e.message) || e)
+    return
+  }
+  trayRuntime.created = true
+
+  const TOOLTIP = '艺镜AI剪辑'
+  tray.setToolTip(TOOLTIP)
+  trayRuntime.tooltip = TOOLTIP
+
+  const show = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow()
+      return
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+
+  const menu = Menu.buildFromTemplate([
+    { label: '显示主界面', click: show },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() }
+  ])
+  tray.setContextMenu(menu)
+  /* 从**真实的 Menu 对象**读回条目（不是回显上面那两个字面量）：
+     模板若被吃掉 / 菜单没挂上，这里会跟着空，闸门才分辨得出来 */
+  trayRuntime.menuLabels = menu.items.filter((item) => item.type !== 'separator').map((item) => item.label)
+
+  /* Windows 上左键单击托盘图标 = 把窗口叫到前面；右键才是菜单 */
+  tray.on('click', show)
+}
+
+/**
+ * 运行时自检快照（只读）。
+ *
+ * 挂在 `app` 上供 E2E（tools/tray-runtime-e2e.mjs）读取，生产逻辑不消费它。
+ * 判据刻意读**运行时事实**（Tray 实例是否活着、系统给的 bounds、真实 Menu 条目），
+ * 而不是源码里那几个字面量 —— 后者 tools/check-app-icon-wiring.mjs 已经在静态层看过了。
+ */
+function runtimeProbe() {
+  let alive = false
+  let bounds = null
+  try {
+    alive = Boolean(tray && !tray.isDestroyed())
+    if (alive) bounds = tray.getBounds()
+  } catch (e) {
+    /* 读不到就当没建起来，交给闸门判红 */
+    alive = false
+  }
+  let appUserModelId = null
+  try {
+    appUserModelId = app.getAppUserModelId()
+  } catch {
+    /* 非 Windows 平台上没有这个概念 */
+  }
+  return { tray: { ...trayRuntime, alive, bounds }, appUserModelId }
 }
 
 /* --------------------------------- IPC --------------------------------- */
@@ -725,12 +890,15 @@ function registerIpc() {
 
   ipcMain.handle('render:probe', () => probeFfmpeg())
 
-  ipcMain.handle('render:pickOutput', async (event, suggested) => {
+  ipcMain.handle('render:pickOutput', async (event, suggested, codecKey) => {
     const win = BrowserWindow.fromWebContents(event.sender)
+    /* 扩展名跟着编码格式走：选了 ProRes 却只能存 .mp4 的话，
+       ffmpeg 会在封装那一步拒绝（`codec not currently supported in container`）。 */
+    const pickedCodec = exportCodec.readCodec(codecKey)
     const options = {
       title: '导出成片',
-      defaultPath: suggested ? sanitizeOutName(suggested) : '艺镜AI-成片.mp4',
-      filters: [{ name: 'MP4 视频', extensions: ['mp4'] }]
+      defaultPath: exportCodec.matchExtension(sanitizeOutName(suggested) || `艺镜AI-成片.mp4`, pickedCodec.key),
+      filters: exportCodec.dialogFilters(pickedCodec.key)
     }
     const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
     return result.canceled || !result.filePath ? '' : result.filePath
@@ -738,7 +906,14 @@ function registerIpc() {
 
   ipcMain.handle('render:start', async (event, payload) => {
     if (activeRender) throw new Error('已有一个导出任务在进行中，请等它结束或先取消')
-    const outPath = sanitizeOutName(payload && payload.outPath)
+    /**
+     * 扩展名以**编码格式**为准，不信调用方传的：面板上从 H.264 切到 ProRes 4444 后，
+     * 已经填好的 `xxx.mp4` 不会自己改名。不纠正就等到 ffmpeg 那句
+     * `Could not find tag for codec prores in stream #0` —— 没人能从这句话猜到
+     * "是文件后缀错了"。
+     */
+    const outCodec = exportCodec.readCodec(payload && payload.options && payload.options.codec)
+    const outPath = exportCodec.matchExtension(sanitizeOutName(payload && payload.outPath), outCodec.key)
     if (!outPath) throw new Error('输出路径不合法')
     const sender = event.sender
     const controller = new AbortController()
@@ -875,6 +1050,272 @@ function registerIpc() {
     })
   })
 
+  /* ---------------------------- 字幕文件读写 ---------------------------- */
+
+  /**
+   * 字幕文件的白名单扩展名。
+   *
+   * 即使渲染层直传了一个路径（E2E 就是这么做的，为了不弹原生对话框），
+   * 也必须落在这几个扩展名里 —— 否则这个 IPC 就成了"读任意文件"的入口，
+   * 而渲染层本来是被 sandbox + contextIsolation 挡住的。
+   * `txt` 放进来是因为很多人会把 srt 存成 .txt。
+   */
+  const SUBTITLE_EXTS = ['srt', 'vtt', 'lrc', 'ass', 'ssa', 'txt']
+
+  /**
+   * 读一份字幕文件。
+   *
+   * 只把**文本**交回渲染层解析：解析器在 shared/subtitle.js（渲染层能直接 import），
+   * 主进程不做第二份解析 —— 两份解析器迟早分叉，而分叉的表现是"同一个文件
+   * 导入两次结果不同"，最难查。
+   *
+   * 编码不在这里赌：交给 `decodeTextBuffer`（先 UTF-8 后 GB18030），
+   * 中文字幕文件有大量是 GBK。
+   */
+  ipcMain.handle('subtitle:read', async (event, payload) => {
+    let filePath = String((payload && payload.path) || '')
+    if (!filePath) {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const options = {
+        title: '导入字幕',
+        properties: ['openFile'],
+        filters: [
+          { name: '字幕文件', extensions: SUBTITLE_EXTS },
+          { name: '全部文件', extensions: ['*'] }
+        ]
+      }
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true }
+      filePath = result.filePaths[0]
+    }
+    const ext = path.extname(filePath).slice(1).toLowerCase()
+    if (!SUBTITLE_EXTS.includes(ext)) {
+      return { ok: false, error: '只支持 SRT / VTT / LRC / ASS 这几种字幕文件' }
+    }
+    try {
+      const stat = fs.statSync(filePath)
+      if (!stat.isFile()) return { ok: false, error: '选的不是文件' }
+      /* 字幕文件不该有几 MB。上限不是防攻击，是防"用户手滑选了视频"时把
+         一个 2GB 的文件读进内存 —— 那会让主进程直接 OOM 白屏。 */
+      if (stat.size > 8 * 1024 * 1024) return { ok: false, error: '文件太大（字幕文件不该超过 8MB）' }
+      const text = subtitleTable.decodeTextBuffer(new Uint8Array(fs.readFileSync(filePath)))
+      return { ok: true, path: filePath, name: path.basename(filePath), text }
+    } catch (error) {
+      return { ok: false, error: `读不到这个文件：${(error && error.message) || '未知原因'}` }
+    }
+  })
+
+  /**
+   * 写一份字幕文件（导出）。
+   *
+   * `content` 由渲染层用 shared/subtitle.js 的 toSrt / toVtt 生成 —— 与导入对称，
+   * 主进程只负责落盘。扩展名缺失时按格式补回来：用户把名字删干净是常事，
+   * 而一个没有扩展名的文件在任何播放器里都不会被当成字幕。
+   */
+  ipcMain.handle('subtitle:write', async (event, payload) => {
+    const content = String((payload && payload.content) || '')
+    const format = (payload && payload.format) === 'vtt' ? 'vtt' : 'srt'
+    if (!content.trim()) return { ok: false, error: '字幕轨是空的，没有可导出的内容' }
+    let outPath = String((payload && payload.path) || '')
+    if (!outPath) {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const suggested = String((payload && payload.name) || '字幕').replace(/[\\/:*?"<>|]/g, '_')
+      const options = {
+        title: '导出字幕',
+        defaultPath: path.join(app.getPath('documents'), `${suggested}.${format}`),
+        filters: [
+          { name: format === 'vtt' ? 'WebVTT 字幕' : 'SRT 字幕', extensions: [format] },
+          { name: '全部文件', extensions: ['*'] }
+        ]
+      }
+      const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+      outPath = result.filePath
+    }
+    if (!/\.(srt|vtt)$/i.test(outPath)) outPath = `${outPath}.${format}`
+    try {
+      fs.writeFileSync(outPath, content, 'utf8')
+      return { ok: true, path: outPath, name: path.basename(outPath) }
+    } catch (error) {
+      return { ok: false, error: `写不进这个位置：${(error && error.message) || '未知原因'}` }
+    }
+  })
+
+  /**
+   * 内置素材清单（贴纸 / 边框）。
+   *
+   * 只回传渲染层真正要用的几样：`url`（直接塞进 <img src> / CSS background）、
+   * `w/h`（算默认尺寸）、`key`（写回片段、去重用）。
+   * **不回传磁盘绝对路径** —— 导出侧按 `yjai-media://` 反解就够，
+   * 渲染层没有理由知道安装目录长什么样。
+   */
+  const packPayload = (cat) => ({
+    ok: !cat.error,
+    error: cat.error || '',
+    license: cat.license || '',
+    source: cat.source || '',
+    groups: cat.groups.map((group) => ({
+      key: group.key,
+      name: group.name,
+      items: group.items.map((item) => ({
+        key: item.key,
+        name: item.name,
+        url: item.url,
+        w: item.w,
+        h: item.h
+      }))
+    }))
+  })
+
+  ipcMain.handle('sticker:catalog', async () => packPayload(stickerCatalog()))
+
+  ipcMain.handle('border:catalog', async () => packPayload(borderCatalog()))
+
+  /* ───────────────── 本地插件（素材包） ─────────────────
+   *
+   * 与参考客户端的 .ofx 原生插件不是一回事：这里装的是**素材**（自定义边框 / 贴纸），
+   * 装完立刻进对应素材库、能拖能导出。页面上写明了不支持 .ofx。
+   *
+   * ⚠️ 每个改动动作（安装 / 启停 / 卸载）之后都必须 `invalidatePackCaches()`。
+   *    不清缓存的话，面板会显示"已导入"而边框页还是原来那 24 款 ——
+   *    状态变了、画面没变，静默失效第 ⑤ 类。
+   */
+  const pluginUserData = () => app.getPath('userData')
+
+  function pluginPayload() {
+    const list = plugins.listPlugins({ userData: pluginUserData() })
+    return list.map((p) => {
+      /* 缩略图走同一套媒体协议 ⇒ 必须登记白名单（漏了就 403 + 面板一片空白） */
+      const first = p.images && p.images[0]
+      let preview = ''
+      if (first) {
+        allowedMedia.add(first.abs)
+        preview = mediaUrlOf(first.abs)
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        version: p.version,
+        author: p.author,
+        kind: p.kind,
+        kindLabel: p.kindLabel,
+        enabled: p.enabled,
+        imageCount: p.imageCount,
+        installedAt: p.installedAt,
+        preview
+      }
+    })
+  }
+
+  ipcMain.handle('plugin:list', async () => {
+    try {
+      return { ok: true, plugins: pluginPayload() }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || '读插件列表失败', plugins: [] }
+    }
+  })
+
+  /**
+   * 安装。`dir` 是给自动化用的：传了就直接装，**不弹原生对话框**。
+   * E2E 里原生框一弹就是永久卡住（这条坑记在 MEMORY 里）。
+   */
+  ipcMain.handle('plugin:install', async (event, payload) => {
+    let dir = String((payload && payload.dir) || '')
+    if (!dir) {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const options = {
+        title: '选择插件文件夹',
+        buttonLabel: '导入插件',
+        properties: ['openDirectory'],
+        message: '插件文件夹里需要有一个 manifest.json，说明它是边框还是贴纸'
+      }
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true }
+      dir = result.filePaths[0]
+    }
+    const res = plugins.install(dir, { userData: pluginUserData() })
+    if (res.ok) invalidatePackCaches()
+    return { ...res, plugins: pluginPayload() }
+  })
+
+  ipcMain.handle('plugin:toggle', async (event, payload) => {
+    const res = plugins.setEnabled((payload && payload.id) || '', Boolean(payload && payload.enabled), {
+      userData: pluginUserData()
+    })
+    if (res.ok) invalidatePackCaches()
+    return { ...res, plugins: pluginPayload() }
+  })
+
+  ipcMain.handle('plugin:remove', async (event, payload) => {
+    const res = await plugins.remove((payload && payload.id) || '', {
+      userData: pluginUserData(),
+      /* 走回收站：用户自己攒的素材，误点一下不该永久消失 */
+      trash: (target) => shell.trashItem(target)
+    })
+    if (res.ok) invalidatePackCaches()
+    return { ...res, plugins: pluginPayload() }
+  })
+
+  ipcMain.handle('plugin:reveal', async (event, payload) => {
+    const id = String((payload && payload.id) || '')
+    if (!/^[a-z0-9][a-z0-9-]{1,39}$/.test(id)) return { ok: false, error: 'id 不合法' }
+    const dir = path.join(pluginUserData(), 'plugins', id)
+    try {
+      if (!fs.statSync(dir).isDirectory()) return { ok: false, error: '这个插件不在了' }
+    } catch {
+      return { ok: false, error: '这个插件不在了' }
+    }
+    await shell.openPath(dir)
+    return { ok: true }
+  })
+
+
+  /**
+   * 人物特效的运行时位置（wasm + 模型）。
+   *
+   * ⚠️ 只回**地址**与**缺什么**，不回磁盘路径：渲染层用不到路径，
+   *    而一旦回了，就等于把一个"读任意磁盘文件"的入口挂到 preload 上。
+   * ⚠️ 三个文件任一缺失都不抛错，而是 `ok:false` + `missing:[...]`：
+   *    界面要能说"缺 face_landmarker.task"，而不是笼统的"加载失败"。
+   *    这道判断是**唯一**能提前发现"装出来的包少了 extraResources"的地方。
+   */
+  ipcMain.handle('facefx:runtime', async () => {
+    const rt = facefx.faceRuntime({
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      mainDir: __dirname,
+      allow: (abs) => allowedMedia.add(abs),
+      mediaUrlOf
+    })
+    return { ok: rt.ok, missing: rt.missing, wasm: rt.wasm, model: rt.model }
+  })
+
+  /**
+   * wasm 加载器的源码文本（MediaPipe 内部要用 `createElement('script')` 注入它）。
+   *
+   * 为什么不放进 bundle 用 `?raw`：`@mediapipe/tasks-vision` 的 `exports` 字段
+   * 不放行深路径，构建期直接报 `Missing "./wasm/vision_wasm_internal.js" specifier`。
+   * 为什么不把加载器放进 `resources` 直接用 `yjai-media://` 给 `<script src>`：
+   * 那要把素材协议加进 CSP 的 `script-src`，而素材目录是用户可写的 —— 等于开了
+   * "投放脚本"的口子。所以**读成文本**、由渲染层转 blob 注入。
+   *
+   * ⚠️ 路径完全由主进程算（`faceRuntime()` 返回的 `loader`），**不接受任何入参**。
+   *    一旦让渲染层传路径，这个接口就变成"读任意文件"。
+   */
+  ipcMain.handle('facefx:loader', async () => {
+    const rt = facefx.faceRuntime({
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      mainDir: __dirname
+    })
+    if (!rt.loader) return { ok: false, text: '', error: '找不到 wasm 加载器' }
+    try {
+      return { ok: true, text: fs.readFileSync(rt.loader, 'utf8') }
+    } catch (err) {
+      return { ok: false, text: '', error: (err && err.message) || '读不出来' }
+    }
+  })
+
   /**
    * 生成预览代理（预览画质档位用它）。
    *
@@ -942,12 +1383,19 @@ function registerIpc() {
 }
 
 /** 导出路径只接受绝对路径 + .mp4，杜绝渲染进程随手写别的文件 */
+/**
+ * 输出路径校验：必须是绝对路径、且扩展名在我们的视频容器白名单里。
+ *
+ * ⚠️ 白名单原来只有 `.mp4`。加了 ProRes 之后仍然只放 `.mp4` 的话，
+ *    用户在保存对话框里选成 .mov 会被判成"输出路径不合法" —— 而对话框本身
+ *    是照编码格式给的过滤器，等于自己把自己的选项否掉。
+ */
 function sanitizeOutName(raw) {
   const text = String(raw || '').trim()
   if (!text) return ''
   const absolute = path.resolve(text)
   if (!path.isAbsolute(absolute)) return ''
-  return path.extname(absolute).toLowerCase() === '.mp4' ? absolute : ''
+  return exportCodec.VIDEO_EXTS.includes(path.extname(absolute).toLowerCase()) ? absolute : ''
 }
 
 /* -------------------------------- 启动 -------------------------------- */
@@ -970,6 +1418,17 @@ if (!gotLock) {
    */
   applyHardwareAccelerationSetting()
 
+  /**
+   * AppUserModelID —— Windows 靠它把「任务栏图标 / 通知 / 跳转列表」归到这个应用自己身上。
+   *
+   * ⚠️ 不设的后果**不报错**，只是图标"有时候不对"：
+   *   · 开发模式（跑 electron.exe）下任务栏永远是 Electron 默认图标，换了 icon.ico 也没用；
+   *   · 打包后即便 exe 内嵌图标是对的，没有 AppID 时 Windows 会按 exe 路径分组，
+   *     通知区里显示的是一个空白方块 + 「electron.app.Electron」。
+   * 所以这一行必须与 electron-builder.yml 的 `appId` 一字不差（闸门 app-user-model-id 在盯）。
+   */
+  app.setAppUserModelId('com.yijing.aieditor')
+
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
@@ -981,6 +1440,9 @@ if (!gotLock) {
     registerMediaProtocol()
     registerIpc()
     createWindow()
+    createTray()
+    /* 只读自检钩子：运行时闸门靠它读托盘的**真实**状态（见 runtimeProbe 的注释） */
+    app.__yjaiRuntimeProbe = runtimeProbe
 
     /**
      * 把自己注册进「艺镜·镜枢」的 MCP 配置 —— 让镜枢里的 agent 能直接驱动本软件

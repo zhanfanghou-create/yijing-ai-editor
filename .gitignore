@@ -6,6 +6,10 @@ dist-win/
 dist-installer/
 # 中间产物绕行目录：输出目录被占用时用 --app-out / --installer-out 落到带后缀的目录
 dist-win*/
+# 打包验证用的临时输出（绕过被锁的 dist-win/ 时用，别提交 295MB）
+dist-check/
+# 打包正式输出（2026-10-31 从 dist-win 改名，绕开被独占的旧目录）
+dist-app/
 dist-installer*/
 release/
 _site/
@@ -23,6 +27,13 @@ packages/desktop/resources/ffmpeg/*.exe
 packages/desktop/resources/ffmpeg/*.zip
 packages/desktop/resources/ffmpeg/*.7z
 
+# 人物特效的随包运行时（MediaPipe wasm 13.8MB + 模型 3.6MB，Apache-2.0）
+# 同 ffmpeg：二进制与模型不入库，仓库里只留抓取脚本 + 许可证说明。
+#   node tools/fetch-mediapipe.mjs
+packages/desktop/resources/mediapipe/*.wasm
+packages/desktop/resources/mediapipe/*.task
+packages/desktop/resources/mediapipe/*.js
+
 # 运行期数据（导出临时文件、用户数据目录）
 packages/desktop/exports/
 *.sqlite
@@ -36,6 +47,8 @@ packages/desktop/exports/
 
 # 排查产物（本仓库根目录下的侦察/调试文件）
 _probe_*
+# 临时探测与取景产物（截图/探针脚本），别入库
+_probe/
 _smoke*
 _srv*
 _tmp_*
@@ -46,6 +59,11 @@ npm-debug.log*
 _recon/
 _evidence/
 
+# 第三方客户端逆向规格：正文含厂商/产品品牌词，**绝不能入库**
+# （开源分发版的合规词表把那些词全部列为禁用词；这里一旦被 git add，
+#   公开仓库的 diff 里就永久留下了"参考了谁"的证据，删也删不掉）
+docs/jianying-re/
+
 # 编辑器
 .vscode/*
 !.vscode/extensions.json
@@ -55,3 +73,6 @@ Thumbs.db
 
 # vite 运行期临时文件
 vite.config.mjs.timestamp-*
+
+# 自动化任务的运行时目录（UUID 子目录、随时变），与 memory 文档不同 —— 不入库
+.workbuddy/memory/automations/

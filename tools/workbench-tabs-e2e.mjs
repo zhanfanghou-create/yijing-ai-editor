@@ -3,7 +3,7 @@
  *
  * 为什么必须单独立这道：本项目的闸门里，左栏是**静态**检查的
  * （tools/check-workbench-tree.mjs 只验那张数据表写得对不对），
- * 顶部九个功能标签更是完全没人点过 —— tools/desktop-shoot.mjs 只是
+ * 顶部十个功能标签更是完全没人点过 —— tools/desktop-shoot.mjs 只是
  * `page.$$('.wb-tab')` 数了个数。于是有一整类缺陷闸门全绿也照样存在：
  *   · 点下去中栏显示「左侧选一个功能开始」的空壳（panel 名字对不上）；
  *   · 点下去中栏是空的（过滤条件筛不出任何东西，且连"没有素材"都不提示）；
@@ -72,6 +72,18 @@ const TABS = [
     ]
   },
   {
+    key: 'sticker',
+    label: '贴纸',
+    root: '贴纸',
+    /* 左栏是八个分类（AssetTree 的 STICKER_GROUP_CHILDREN，与 catalog.json 同序）。
+       ⚠️ 它们挂在 **root.children** 上（与「素材 → 本地」同一种结构），
+       靠 defaultNodeOf 落到 stk-g-face 才会展开 —— 手风琴不展开时点不到。 */
+    nodes: [
+      'stk-g-face', 'stk-g-hand', 'stk-g-heart', 'stk-g-spark',
+      'stk-g-party', 'stk-g-animal', 'stk-g-food', 'stk-g-mark'
+    ]
+  },
+  {
     key: 'subtitle',
     label: '字幕',
     root: '字幕',
@@ -107,10 +119,15 @@ const TABS = [
     key: 'effect',
     label: '特效',
     root: '视频特效',
-    /* 左栏就是特效分组树的 10 组（materials.js 的 EFFECT_GROUPS 顺序一一对应） */
+    /* 左栏前 10 项是特效分组树（materials.js 的 EFFECT_GROUPS 顺序一一对应），
+       第 11 项「边框」不是画面特效的又一个分类，而是**另一类素材**
+       （PNG 贴在片段画框上，走内置边框库、写 clip.border）。它得在这里列出来，
+       否则"表外节点"那条会把合法的第 11 项判成"混进了没人点的东西"。
+       第 12 项「人物特效」同理：它不是特效分组，而是**一套跟着人脸走的效果**
+       （识别后写 clip.faceTrack + clip.face，预览与导出读同一份）。 */
     nodes: [
       'ef-g0', 'ef-g1', 'ef-g2', 'ef-g3', 'ef-g4',
-      'ef-g5', 'ef-g6', 'ef-g7', 'ef-g8', 'ef-g9'
+      'ef-g5', 'ef-g6', 'ef-g7', 'ef-g8', 'ef-g9', 'ef-gb', 'ef-face'
     ]
   },
   {
@@ -119,6 +136,33 @@ const TABS = [
     root: '调节',
     /* 左栏是调节分组树的 5 组（materials.js 的 ADJUST_GROUPS 顺序一一对应） */
     nodes: ['ad-g0', 'ad-g1', 'ad-g2', 'ad-g3', 'ad-g4']
+  },
+  {
+    key: 'template',
+    label: '模板',
+    root: '模板',
+    /* 左栏三组（AssetTree 的 TEMPLATE_GROUP_CHILDREN，与 shared/templates.json 的 groups 同序）。
+       与「贴纸」同一种结构：挂在 root.children 上，靠 defaultNodeOf 落到 tpl-g-open 才会展开 ——
+       手风琴不展开时子项点不到（先点子项会 locator 超时）。 */
+    nodes: ['tpl-g-open', 'tpl-g-end', 'tpl-g-pack']
+  },
+  {
+    key: 'packaging',
+    label: '智能包装',
+    root: '智能包装',
+    /* 左栏两项 = **包谁**：口播包装（文字轨）/ 画面包装（主轨）。
+       两者共用同一个面板，靠 `packMode` 分；节点 key 别写成同一个，
+       否则"表外节点"那条会把第二项判成漏登记。 */
+    nodes: ['pack-line', 'pack-scene']
+  },
+  {
+    key: 'plugin',
+    label: '插件',
+    root: '插件',
+    /* 左栏三项 = **看什么**（不是三个来源）：我的插件（全部）/ 我的边框 / 我的贴纸。
+       三者共用同一个面板，靠 `pluginTab` 分 —— 节点 key 必须各不相同，
+       否则"表外节点"那条会把后两项判成漏登记。 */
+    nodes: ['plug-mine', 'plug-border', 'plug-sticker']
   }
 ]
 

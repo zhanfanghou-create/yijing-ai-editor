@@ -1,0 +1,1455 @@
+{
+  "source": "Noto Animated Emoji (static 512 frame)",
+  "license": "Apache-2.0",
+  "origin": "https://fonts.gstatic.com/s/e/notoemoji/latest",
+  "groups": [
+    {
+      "key": "face",
+      "name": "表情",
+      "items": [
+        {
+          "key": "face-1f600",
+          "name": "咧嘴笑",
+          "cp": "1f600",
+          "file": "face/1f600.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 25350,
+          "sha1": "4a2e11b99200080b495b8b0dfa4ed80d17005deb"
+        },
+        {
+          "key": "face-1f602",
+          "name": "笑哭",
+          "cp": "1f602",
+          "file": "face/1f602.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 27655,
+          "sha1": "42fc073370507f2c48a66579ac97a3305793f284"
+        },
+        {
+          "key": "face-1f60d",
+          "name": "心形眼",
+          "cp": "1f60d",
+          "file": "face/1f60d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 26751,
+          "sha1": "176d0e03f466b28c2b376e40edcfac6719658df8"
+        },
+        {
+          "key": "face-1f60e",
+          "name": "墨镜",
+          "cp": "1f60e",
+          "file": "face/1f60e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 22869,
+          "sha1": "ee8a3296957d3ca21952bfb32998c38e2e24ef05"
+        },
+        {
+          "key": "face-1f929",
+          "name": "星星眼",
+          "cp": "1f929",
+          "file": "face/1f929.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 26280,
+          "sha1": "73a467869eb56d517caf165584e2a91b6def6dc9"
+        },
+        {
+          "key": "face-1f970",
+          "name": "爱心脸",
+          "cp": "1f970",
+          "file": "face/1f970.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 40751,
+          "sha1": "35f7c1cfed15b0015c8265880446190008e5eacb"
+        },
+        {
+          "key": "face-1f60b",
+          "name": "馋",
+          "cp": "1f60b",
+          "file": "face/1f60b.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 25519,
+          "sha1": "de336e85012dcdd6c5b42068ca65dd3b9a9d812a"
+        },
+        {
+          "key": "face-1f61c",
+          "name": "眨眼吐舌",
+          "cp": "1f61c",
+          "file": "face/1f61c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 24317,
+          "sha1": "a8a9ef6c85bf2527d34eb681aa37ef7af073e6d8"
+        },
+        {
+          "key": "face-1f92a",
+          "name": "搞怪",
+          "cp": "1f92a",
+          "file": "face/1f92a.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 25512,
+          "sha1": "7c670083c4ded764c10b436b90d61dee81346736"
+        },
+        {
+          "key": "face-1f973",
+          "name": "派对脸",
+          "cp": "1f973",
+          "file": "face/1f973.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 39820,
+          "sha1": "fece7687c7926d4f25d058e8abc76dc34c4396d4"
+        },
+        {
+          "key": "face-1f60f",
+          "name": "得意",
+          "cp": "1f60f",
+          "file": "face/1f60f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 29987,
+          "sha1": "549dfd397c87db421fcf6285f3ff45cbb37851f2"
+        },
+        {
+          "key": "face-1f612",
+          "name": "不爽",
+          "cp": "1f612",
+          "file": "face/1f612.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 30379,
+          "sha1": "db1eac129b0e6c07a616050c99cc47e438d5b9ed"
+        },
+        {
+          "key": "face-1f644",
+          "name": "无语",
+          "cp": "1f644",
+          "file": "face/1f644.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 29749,
+          "sha1": "186ebec7962309728427c67fcd4ece1ffd2eea11"
+        },
+        {
+          "key": "face-1f614",
+          "name": "失落",
+          "cp": "1f614",
+          "file": "face/1f614.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 29038,
+          "sha1": "7cd458b480b6838c2b83bad9225e67af3c022ce3"
+        },
+        {
+          "key": "face-1f62d",
+          "name": "大哭",
+          "cp": "1f62d",
+          "file": "face/1f62d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 31052,
+          "sha1": "6213cb82c843f79ed4c81dc7233a4351785a8e83"
+        },
+        {
+          "key": "face-1f621",
+          "name": "生气",
+          "cp": "1f621",
+          "file": "face/1f621.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 43020,
+          "sha1": "f39b34bb3350f129e4c61b26254f648ed8b05247"
+        },
+        {
+          "key": "face-1f631",
+          "name": "惊恐",
+          "cp": "1f631",
+          "file": "face/1f631.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 37618,
+          "sha1": "4f84b32bbab4118d3a1f48b7e7bdc7dacfd19b71"
+        },
+        {
+          "key": "face-1f914",
+          "name": "思考",
+          "cp": "1f914",
+          "file": "face/1f914.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 31267,
+          "sha1": "8babf7db0771ac7e3ac9f60f8af34f74dea7ee9f"
+        },
+        {
+          "key": "face-1f634",
+          "name": "睡觉",
+          "cp": "1f634",
+          "file": "face/1f634.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 30691,
+          "sha1": "2f34c99d2a63159261f20e27eb9521f8e54b3495"
+        },
+        {
+          "key": "face-1f971",
+          "name": "打哈欠",
+          "cp": "1f971",
+          "file": "face/1f971.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 34292,
+          "sha1": "23706c1ce7e97c7215dc4a535ed94f7be2092417"
+        },
+        {
+          "key": "face-1f92f",
+          "name": "爆炸头",
+          "cp": "1f92f",
+          "file": "face/1f92f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 32874,
+          "sha1": "135f13b3ed7a4f3de757eb663c4d560e8e0caef7"
+        },
+        {
+          "key": "face-1f480",
+          "name": "骷髅",
+          "cp": "1f480",
+          "file": "face/1f480.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 13695,
+          "sha1": "1dddeb6f251da7abd7f334dbd86acc316b37640c"
+        }
+      ]
+    },
+    {
+      "key": "hand",
+      "name": "手势",
+      "items": [
+        {
+          "key": "hand-1f44d",
+          "name": "点赞",
+          "cp": "1f44d",
+          "file": "hand/1f44d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7956,
+          "sha1": "d9266c4df617df54f7d41ef0611e4dca009cfaac"
+        },
+        {
+          "key": "hand-1f44e",
+          "name": "踩",
+          "cp": "1f44e",
+          "file": "hand/1f44e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7926,
+          "sha1": "8543c81a62066c18014b403e7b7c85d49dda7f5e"
+        },
+        {
+          "key": "hand-1f44f",
+          "name": "鼓掌",
+          "cp": "1f44f",
+          "file": "hand/1f44f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 9743,
+          "sha1": "a196a068cbd92b2243f3f6d12366e2c8b7631cb8"
+        },
+        {
+          "key": "hand-1f64c",
+          "name": "举手欢呼",
+          "cp": "1f64c",
+          "file": "hand/1f64c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8872,
+          "sha1": "c6a4d48a0ac75e11e056859d9d54dbb929da25f5"
+        },
+        {
+          "key": "hand-1f450",
+          "name": "张开双手",
+          "cp": "1f450",
+          "file": "hand/1f450.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 9503,
+          "sha1": "960f962ced0ae3a5b17966dd4c71cd440638b0e0"
+        },
+        {
+          "key": "hand-270c",
+          "name": "剪刀手",
+          "cp": "270c",
+          "file": "hand/270c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 9324,
+          "sha1": "181339123d46714543d761b16668d3c5a9b3bfb7"
+        },
+        {
+          "key": "hand-1f918",
+          "name": "摇滚手势",
+          "cp": "1f918",
+          "file": "hand/1f918.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8971,
+          "sha1": "21b1460bbde947d02d6c4c2e094126fe5d1c90fb"
+        },
+        {
+          "key": "hand-1f91d",
+          "name": "握手",
+          "cp": "1f91d",
+          "file": "hand/1f91d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8778,
+          "sha1": "f8768691681781632e7419df92b3a8636bcccd71"
+        },
+        {
+          "key": "hand-1f4aa",
+          "name": "加油",
+          "cp": "1f4aa",
+          "file": "hand/1f4aa.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7613,
+          "sha1": "f6048b77ec93c004f3c21339f9375c8c1e257f15"
+        },
+        {
+          "key": "hand-1f919",
+          "name": "打电话",
+          "cp": "1f919",
+          "file": "hand/1f919.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5635,
+          "sha1": "e21b3510cb33dcf2cec2b046871ff2a13afc9a46"
+        },
+        {
+          "key": "hand-1f446",
+          "name": "向上指",
+          "cp": "1f446",
+          "file": "hand/1f446.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5395,
+          "sha1": "044b99f69aaf237513c93da2f3f0da9f31749631"
+        },
+        {
+          "key": "hand-1f447",
+          "name": "向下指",
+          "cp": "1f447",
+          "file": "hand/1f447.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5379,
+          "sha1": "6ba05eeb78e965065352b9357b40a69d991c489c"
+        },
+        {
+          "key": "hand-1f448",
+          "name": "向左指",
+          "cp": "1f448",
+          "file": "hand/1f448.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4779,
+          "sha1": "13d280c6402959b79df26b7231e70ff5e0c861f7"
+        },
+        {
+          "key": "hand-1f449",
+          "name": "向右指",
+          "cp": "1f449",
+          "file": "hand/1f449.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4765,
+          "sha1": "a51b43ddc27084f057aae833e8e77f340112405c"
+        },
+        {
+          "key": "hand-1f64f",
+          "name": "双手合十",
+          "cp": "1f64f",
+          "file": "hand/1f64f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8070,
+          "sha1": "8f5ef52a3f34abf81e06f41cf1ae7811a9189374"
+        },
+        {
+          "key": "hand-1f440",
+          "name": "双眼",
+          "cp": "1f440",
+          "file": "hand/1f440.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7964,
+          "sha1": "b3cff01f9bc2d7d5638c50afeca2f445177942bd"
+        }
+      ]
+    },
+    {
+      "key": "heart",
+      "name": "心形",
+      "items": [
+        {
+          "key": "heart-2764",
+          "name": "红心",
+          "cp": "2764",
+          "file": "heart/2764.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5226,
+          "sha1": "c4f5515890437149a2d02d1340363bd1e79a5906"
+        },
+        {
+          "key": "heart-1f494",
+          "name": "心碎",
+          "cp": "1f494",
+          "file": "heart/1f494.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6779,
+          "sha1": "46d496ba265878ca4a129ee22263045b05502801"
+        },
+        {
+          "key": "heart-1f495",
+          "name": "两颗心",
+          "cp": "1f495",
+          "file": "heart/1f495.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6836,
+          "sha1": "262ba94cae136e348a7320e57afeeb3facb6fe9b"
+        },
+        {
+          "key": "heart-1f496",
+          "name": "闪光心",
+          "cp": "1f496",
+          "file": "heart/1f496.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 14009,
+          "sha1": "c8acd6b9cc3635d897a6f0112861dc964d79d7ba"
+        },
+        {
+          "key": "heart-1f497",
+          "name": "渐长心",
+          "cp": "1f497",
+          "file": "heart/1f497.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 16447,
+          "sha1": "24b380a8cc9cf40c5fb51e75a191b6bf649a9c17"
+        },
+        {
+          "key": "heart-1f498",
+          "name": "一箭穿心",
+          "cp": "1f498",
+          "file": "heart/1f498.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7518,
+          "sha1": "4174c89804f6cb8432cec38e2aecab175fbc835a"
+        },
+        {
+          "key": "heart-1f49d",
+          "name": "礼物心",
+          "cp": "1f49d",
+          "file": "heart/1f49d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 13145,
+          "sha1": "cb2c00ce2f56e984ebbbf9257549a07e647259d8"
+        },
+        {
+          "key": "heart-1f49e",
+          "name": "环绕心",
+          "cp": "1f49e",
+          "file": "heart/1f49e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 20381,
+          "sha1": "b541380b529436e4bad7bd7fdfd6c8f6aecfc859"
+        },
+        {
+          "key": "heart-1f49f",
+          "name": "心形装饰",
+          "cp": "1f49f",
+          "file": "heart/1f49f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6634,
+          "sha1": "16ab6996e7225a3f95fc3954cfd48979745d6d27"
+        },
+        {
+          "key": "heart-1f5a4",
+          "name": "黑心",
+          "cp": "1f5a4",
+          "file": "heart/1f5a4.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5640,
+          "sha1": "5f7a8935307c8b34759a084d1807c158dfb78449"
+        },
+        {
+          "key": "heart-1f9e1",
+          "name": "橙心",
+          "cp": "1f9e1",
+          "file": "heart/1f9e1.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5673,
+          "sha1": "2dcc0d3728afef0ab5d8a821ccc608235a4cd34c"
+        },
+        {
+          "key": "heart-1f49a",
+          "name": "绿心",
+          "cp": "1f49a",
+          "file": "heart/1f49a.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5673,
+          "sha1": "a2ae9f256e4a01e8d8707cc813cad438f13629b7"
+        },
+        {
+          "key": "heart-1f499",
+          "name": "蓝心",
+          "cp": "1f499",
+          "file": "heart/1f499.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5653,
+          "sha1": "bd9d96b9899cd36866fd58f1c08e28248a484b74"
+        },
+        {
+          "key": "heart-1f49c",
+          "name": "紫心",
+          "cp": "1f49c",
+          "file": "heart/1f49c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5673,
+          "sha1": "1f5aa2f2d9b98a1bd422264d1f1ad1ada2cb406d"
+        },
+        {
+          "key": "heart-1f90d",
+          "name": "白心",
+          "cp": "1f90d",
+          "file": "heart/1f90d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5670,
+          "sha1": "25acd6f9e1caf6e190d9322e16e59df094de7287"
+        },
+        {
+          "key": "heart-1f90e",
+          "name": "棕心",
+          "cp": "1f90e",
+          "file": "heart/1f90e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5670,
+          "sha1": "a1f39288bbb8756f58760ddb5337da4b23441fff"
+        }
+      ]
+    },
+    {
+      "key": "spark",
+      "name": "闪亮",
+      "items": [
+        {
+          "key": "spark-2b50",
+          "name": "星星",
+          "cp": "2b50",
+          "file": "spark/2b50.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4079,
+          "sha1": "a4cc39113f00b6554161d6aaff9a23e03afac0cd"
+        },
+        {
+          "key": "spark-1f31f",
+          "name": "闪亮星",
+          "cp": "1f31f",
+          "file": "spark/1f31f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5857,
+          "sha1": "1cdbae09874a17321b6fd1c464ca33e751dd0a25"
+        },
+        {
+          "key": "spark-2728",
+          "name": "闪光",
+          "cp": "2728",
+          "file": "spark/2728.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6474,
+          "sha1": "a5b472ee860cee2e7c2eb325b26efe5892206a4b"
+        },
+        {
+          "key": "spark-1f4ab",
+          "name": "眩晕",
+          "cp": "1f4ab",
+          "file": "spark/1f4ab.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 16142,
+          "sha1": "e8fc3f2770584e0282cd891bb7d3e51e2a2f5b98"
+        },
+        {
+          "key": "spark-1f320",
+          "name": "流星",
+          "cp": "1f320",
+          "file": "spark/1f320.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 33719,
+          "sha1": "e9cef13858e2e09573a55e708d432c78947b79fb"
+        },
+        {
+          "key": "spark-1f308",
+          "name": "彩虹",
+          "cp": "1f308",
+          "file": "spark/1f308.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6240,
+          "sha1": "8b4ec26bf609c00b462854bd7ea944717dcc4c04"
+        },
+        {
+          "key": "spark-1f525",
+          "name": "火",
+          "cp": "1f525",
+          "file": "spark/1f525.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 28874,
+          "sha1": "dd9159f2a8a13cc1e55012ec669322bbaf83140f"
+        },
+        {
+          "key": "spark-26a1",
+          "name": "闪电",
+          "cp": "26a1",
+          "file": "spark/26a1.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5211,
+          "sha1": "bc76a05794d5385b98287d3bb51bea57b6d84e03"
+        },
+        {
+          "key": "spark-1f4a5",
+          "name": "碰撞",
+          "cp": "1f4a5",
+          "file": "spark/1f4a5.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 24898,
+          "sha1": "069c2316c2f01e23bf48a5c4e63204456ff2925d"
+        },
+        {
+          "key": "spark-1f4a2",
+          "name": "怒气",
+          "cp": "1f4a2",
+          "file": "spark/1f4a2.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5029,
+          "sha1": "83d4f4de5c4a71ebd5a38872cc3057165f697423"
+        },
+        {
+          "key": "spark-1f4a6",
+          "name": "汗滴",
+          "cp": "1f4a6",
+          "file": "spark/1f4a6.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5128,
+          "sha1": "e0e4c4c3d16440bcb0666ac018d22f4dec43c56b"
+        },
+        {
+          "key": "spark-1f4a8",
+          "name": "疾冲",
+          "cp": "1f4a8",
+          "file": "spark/1f4a8.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7398,
+          "sha1": "a00563473614adc28a4d21f16004501d1e6f353f"
+        },
+        {
+          "key": "spark-1f4a4",
+          "name": "昏睡",
+          "cp": "1f4a4",
+          "file": "spark/1f4a4.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 3442,
+          "sha1": "b6ea95c8598726ebbb0e2b015fd5cca3dcbec18c"
+        },
+        {
+          "key": "spark-1f4ac",
+          "name": "对话框",
+          "cp": "1f4ac",
+          "file": "spark/1f4ac.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5490,
+          "sha1": "40c519daf48a60f39e14f84763016203eaefe812"
+        },
+        {
+          "key": "spark-1f4ad",
+          "name": "思考泡泡",
+          "cp": "1f4ad",
+          "file": "spark/1f4ad.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5943,
+          "sha1": "ba7ae0c635d978b0e14a5fced78b9ac1426783d7"
+        },
+        {
+          "key": "spark-1f3b5",
+          "name": "音符",
+          "cp": "1f3b5",
+          "file": "spark/1f3b5.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 2363,
+          "sha1": "a5d2be29e998f88aff378750807c5355fce07444"
+        },
+        {
+          "key": "spark-1f3b6",
+          "name": "多音符",
+          "cp": "1f3b6",
+          "file": "spark/1f3b6.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4223,
+          "sha1": "abbc3031c519042bf5430d296a09be10411f2eed"
+        },
+        {
+          "key": "spark-1f4e2",
+          "name": "喇叭",
+          "cp": "1f4e2",
+          "file": "spark/1f4e2.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 15202,
+          "sha1": "b21578a80d4baf077b1d7b2ec693fb32f6eda16b"
+        },
+        {
+          "key": "spark-1f514",
+          "name": "铃铛",
+          "cp": "1f514",
+          "file": "spark/1f514.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7058,
+          "sha1": "f2b7136812d4cee9336e91028938c94c3c68c31b"
+        },
+        {
+          "key": "spark-1f3af",
+          "name": "靶心",
+          "cp": "1f3af",
+          "file": "spark/1f3af.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 13895,
+          "sha1": "e249b6c72cd02ff90125240823a10caacf58b8e0"
+        }
+      ]
+    },
+    {
+      "key": "party",
+      "name": "庆祝",
+      "items": [
+        {
+          "key": "party-1f389",
+          "name": "拉炮",
+          "cp": "1f389",
+          "file": "party/1f389.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 20833,
+          "sha1": "477adabcb3999759eda422235fbed25e706b881e"
+        },
+        {
+          "key": "party-1f38a",
+          "name": "彩球",
+          "cp": "1f38a",
+          "file": "party/1f38a.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 19205,
+          "sha1": "7f5b098ce19d79966ae03784500c33a371f5955a"
+        },
+        {
+          "key": "party-1f382",
+          "name": "生日蛋糕",
+          "cp": "1f382",
+          "file": "party/1f382.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 39381,
+          "sha1": "2c20576fa7d9adefb5b9840604ffabed9ee716e2"
+        },
+        {
+          "key": "party-1f381",
+          "name": "礼物盒",
+          "cp": "1f381",
+          "file": "party/1f381.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 13141,
+          "sha1": "d65085f02d4b073238a3a7c0cd5f260163a555e2"
+        },
+        {
+          "key": "party-1f388",
+          "name": "气球",
+          "cp": "1f388",
+          "file": "party/1f388.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 3648,
+          "sha1": "bd0fdf24d3de833d35011b5d92563add44b4e9c5"
+        },
+        {
+          "key": "party-1f386",
+          "name": "烟花",
+          "cp": "1f386",
+          "file": "party/1f386.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 91305,
+          "sha1": "1a995482287f2f881104032bb68d2c4be0a9b479"
+        },
+        {
+          "key": "party-1f387",
+          "name": "火花",
+          "cp": "1f387",
+          "file": "party/1f387.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 73158,
+          "sha1": "23145333782de0191ee4d3d1d5b1bb98c1bf81d2"
+        },
+        {
+          "key": "party-1f37e",
+          "name": "香槟",
+          "cp": "1f37e",
+          "file": "party/1f37e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 10124,
+          "sha1": "a19a5a38a06e39ec47599d4f2a8284b95280ba1e"
+        },
+        {
+          "key": "party-1f942",
+          "name": "碰杯",
+          "cp": "1f942",
+          "file": "party/1f942.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 25377,
+          "sha1": "4cf9994dc94edf14c5af285841d9360e9d305e28"
+        },
+        {
+          "key": "party-1f3c6",
+          "name": "奖杯",
+          "cp": "1f3c6",
+          "file": "party/1f3c6.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 10573,
+          "sha1": "8d63729db3e21b351e472cd0a85553dc90cd63cd"
+        },
+        {
+          "key": "party-1f947",
+          "name": "金牌",
+          "cp": "1f947",
+          "file": "party/1f947.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7018,
+          "sha1": "76eaa4766a4e7fa51d02f3ef089407f898e072bc"
+        },
+        {
+          "key": "party-1f3aa",
+          "name": "帐篷",
+          "cp": "1f3aa",
+          "file": "party/1f3aa.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 16433,
+          "sha1": "d00fa90f8cfacd278f58f08b99fb3eae2171c88c"
+        },
+        {
+          "key": "party-1f3ad",
+          "name": "面具",
+          "cp": "1f3ad",
+          "file": "party/1f3ad.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 14331,
+          "sha1": "4534e715a3c611d0bd055f3bcd3915a8ef48852f"
+        },
+        {
+          "key": "party-1f9e8",
+          "name": "鞭炮",
+          "cp": "1f9e8",
+          "file": "party/1f9e8.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 10976,
+          "sha1": "7693b00390a9dfa8afba13a1b96b401fbdc14b92"
+        }
+      ]
+    },
+    {
+      "key": "animal",
+      "name": "动物",
+      "items": [
+        {
+          "key": "animal-1f436",
+          "name": "小狗",
+          "cp": "1f436",
+          "file": "animal/1f436.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7878,
+          "sha1": "07d7a43f73f4dc7da8b53b845a8d24488c75ad53"
+        },
+        {
+          "key": "animal-1f431",
+          "name": "小猫",
+          "cp": "1f431",
+          "file": "animal/1f431.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7425,
+          "sha1": "b31f2affbad8a677d0ba756b5abb5fdafe87778d"
+        },
+        {
+          "key": "animal-1f42d",
+          "name": "老鼠",
+          "cp": "1f42d",
+          "file": "animal/1f42d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6966,
+          "sha1": "d5c505c51ed101d10463296c7ab2ff5286461bd2"
+        },
+        {
+          "key": "animal-1f430",
+          "name": "兔子",
+          "cp": "1f430",
+          "file": "animal/1f430.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8535,
+          "sha1": "99f6960e3b6bd4de59713871e8046f8f987eff94"
+        },
+        {
+          "key": "animal-1f43b",
+          "name": "熊",
+          "cp": "1f43b",
+          "file": "animal/1f43b.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5856,
+          "sha1": "3195e4fb6836f40eddd0716d0be9374f8b605374"
+        },
+        {
+          "key": "animal-1f43c",
+          "name": "熊猫",
+          "cp": "1f43c",
+          "file": "animal/1f43c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8463,
+          "sha1": "1f671dddcbfa457eb3300c458190d00acd58c70e"
+        },
+        {
+          "key": "animal-1f428",
+          "name": "考拉",
+          "cp": "1f428",
+          "file": "animal/1f428.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 17073,
+          "sha1": "f4f225f04f68726ee938cc1dc06ada0f5160638d"
+        },
+        {
+          "key": "animal-1f42f",
+          "name": "老虎",
+          "cp": "1f42f",
+          "file": "animal/1f42f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 11465,
+          "sha1": "e598eb3f2cf8b423be436a69c0d4ce32c9be5664"
+        },
+        {
+          "key": "animal-1f981",
+          "name": "狮子",
+          "cp": "1f981",
+          "file": "animal/1f981.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7744,
+          "sha1": "d80b9de05f1c1f7ee642228968c5b931c5094f3f"
+        },
+        {
+          "key": "animal-1f984",
+          "name": "独角兽",
+          "cp": "1f984",
+          "file": "animal/1f984.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 14804,
+          "sha1": "61550e1efcd0e2d5e2b1c6b4fc39644ba4b027fd"
+        },
+        {
+          "key": "animal-1f427",
+          "name": "企鹅",
+          "cp": "1f427",
+          "file": "animal/1f427.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 12524,
+          "sha1": "a5f5acbc996a79f2fe0aeecea93902b02cf880a0"
+        },
+        {
+          "key": "animal-1f426",
+          "name": "小鸟",
+          "cp": "1f426",
+          "file": "animal/1f426.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4410,
+          "sha1": "6b4552a1ec795f5f8d1fa01d42262226d65661c5"
+        },
+        {
+          "key": "animal-1f98b",
+          "name": "蝴蝶",
+          "cp": "1f98b",
+          "file": "animal/1f98b.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 37742,
+          "sha1": "acb6b98cf778e9c0fa5ed73d08486732575113ca"
+        },
+        {
+          "key": "animal-1f422",
+          "name": "乌龟",
+          "cp": "1f422",
+          "file": "animal/1f422.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7034,
+          "sha1": "c49d6f1b3d3a3075d5b336924918779f1f17b3e0"
+        },
+        {
+          "key": "animal-1f419",
+          "name": "章鱼",
+          "cp": "1f419",
+          "file": "animal/1f419.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 11947,
+          "sha1": "9d25727b78b6ed28d5244b599106a3f05c546719"
+        },
+        {
+          "key": "animal-1f420",
+          "name": "热带鱼",
+          "cp": "1f420",
+          "file": "animal/1f420.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 38664,
+          "sha1": "26affacc962ecc423db3d3086b6efc8fc21b04b6"
+        }
+      ]
+    },
+    {
+      "key": "food",
+      "name": "美食",
+      "items": [
+        {
+          "key": "food-1f355",
+          "name": "披萨",
+          "cp": "1f355",
+          "file": "food/1f355.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 9991,
+          "sha1": "d6ee57f1c8fb0057e1cdecfdec60efde2ed65a16"
+        },
+        {
+          "key": "food-1f354",
+          "name": "汉堡",
+          "cp": "1f354",
+          "file": "food/1f354.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 25066,
+          "sha1": "4676194baf2962428aee9b8cd174a313081cdf6f"
+        },
+        {
+          "key": "food-1f35f",
+          "name": "薯条",
+          "cp": "1f35f",
+          "file": "food/1f35f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 21503,
+          "sha1": "8717f5e7a7510df24119237cda8065dda5b2bad5"
+        },
+        {
+          "key": "food-1f32d",
+          "name": "热狗",
+          "cp": "1f32d",
+          "file": "food/1f32d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7298,
+          "sha1": "2019373032dbdabeeef069f10d0c6523e2104157"
+        },
+        {
+          "key": "food-1f366",
+          "name": "冰淇淋",
+          "cp": "1f366",
+          "file": "food/1f366.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6626,
+          "sha1": "f5392b9dee393c072fe4e7ed61761c834b85c21e"
+        },
+        {
+          "key": "food-1f369",
+          "name": "甜甜圈",
+          "cp": "1f369",
+          "file": "food/1f369.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 17253,
+          "sha1": "770082df1bd7075c6b8aeea1a025a32e3e26326b"
+        },
+        {
+          "key": "food-1f370",
+          "name": "蛋糕",
+          "cp": "1f370",
+          "file": "food/1f370.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8872,
+          "sha1": "99398b4ce16201a69ec39541330e9c68e7c7f3b9"
+        },
+        {
+          "key": "food-1f36b",
+          "name": "巧克力",
+          "cp": "1f36b",
+          "file": "food/1f36b.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7353,
+          "sha1": "464a749a471b8703d5e383ed3e03e004fb851a0d"
+        },
+        {
+          "key": "food-1f36a",
+          "name": "饼干",
+          "cp": "1f36a",
+          "file": "food/1f36a.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 33235,
+          "sha1": "c385d065a3e7ecb8157dd8209be2c3e9a8f71f81"
+        },
+        {
+          "key": "food-1f37f",
+          "name": "爆米花",
+          "cp": "1f37f",
+          "file": "food/1f37f.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 20637,
+          "sha1": "af09f06ce642755f36f140ca6e778256f7df30e9"
+        },
+        {
+          "key": "food-2615",
+          "name": "咖啡",
+          "cp": "2615",
+          "file": "food/2615.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 15387,
+          "sha1": "49446434621b31ec227d009777ca22231e271c05"
+        },
+        {
+          "key": "food-1f37a",
+          "name": "啤酒",
+          "cp": "1f37a",
+          "file": "food/1f37a.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 21318,
+          "sha1": "5af5e8f4cbacf61a7f4289c73f1144017e79f27c"
+        },
+        {
+          "key": "food-1f353",
+          "name": "草莓",
+          "cp": "1f353",
+          "file": "food/1f353.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8930,
+          "sha1": "209d699179640dd4f8211cb02593d730f5c3565d"
+        },
+        {
+          "key": "food-1f349",
+          "name": "西瓜",
+          "cp": "1f349",
+          "file": "food/1f349.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7678,
+          "sha1": "f3052469e9049bb6e95153a3608351b0839d2eb2"
+        },
+        {
+          "key": "food-1f34e",
+          "name": "苹果",
+          "cp": "1f34e",
+          "file": "food/1f34e.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 7102,
+          "sha1": "537f4c28143bcd15af3730412dd032764a92c2cb"
+        },
+        {
+          "key": "food-1f34c",
+          "name": "香蕉",
+          "cp": "1f34c",
+          "file": "food/1f34c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 10366,
+          "sha1": "5534867b2f9de4dbcc98510ba280447fa8fb805f"
+        }
+      ]
+    },
+    {
+      "key": "mark",
+      "name": "标记",
+      "items": [
+        {
+          "key": "mark-2705",
+          "name": "对勾",
+          "cp": "2705",
+          "file": "mark/2705.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4199,
+          "sha1": "f76f4dbe9d8931ae6a0db7a1bdfa3ff73d1a052d"
+        },
+        {
+          "key": "mark-274c",
+          "name": "叉号",
+          "cp": "274c",
+          "file": "mark/274c.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4426,
+          "sha1": "877a6e7b7f3c311b3a8f5b98aa124bc594d2d3e4"
+        },
+        {
+          "key": "mark-2757",
+          "name": "感叹号",
+          "cp": "2757",
+          "file": "mark/2757.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 3222,
+          "sha1": "28883c60a3bb6c65234676bfef80d193c688dfc8"
+        },
+        {
+          "key": "mark-2753",
+          "name": "问号",
+          "cp": "2753",
+          "file": "mark/2753.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4645,
+          "sha1": "0f596ee333eca962e614c54da627645286275518"
+        },
+        {
+          "key": "mark-2b55",
+          "name": "圆圈",
+          "cp": "2b55",
+          "file": "mark/2b55.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8028,
+          "sha1": "32978fc423f9c4b968ac3ffa0ff302b917312fa8"
+        },
+        {
+          "key": "mark-1f51d",
+          "name": "置顶",
+          "cp": "1f51d",
+          "file": "mark/1f51d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4149,
+          "sha1": "ddd16bbc82d619f53779a0502146943343e17920"
+        },
+        {
+          "key": "mark-1f195",
+          "name": "新",
+          "cp": "1f195",
+          "file": "mark/1f195.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4385,
+          "sha1": "ced92bd4fa417b4c9df1a08a44251d268ac82f50"
+        },
+        {
+          "key": "mark-1f4cd",
+          "name": "定位",
+          "cp": "1f4cd",
+          "file": "mark/1f4cd.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 3041,
+          "sha1": "f72c6f83d97fbd4b9942656aa831785dabc26a98"
+        },
+        {
+          "key": "mark-1f4cc",
+          "name": "图钉",
+          "cp": "1f4cc",
+          "file": "mark/1f4cc.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 9222,
+          "sha1": "5ed7961404c7293f40ba37b12b709b314238ef47"
+        },
+        {
+          "key": "mark-1f4c5",
+          "name": "日历",
+          "cp": "1f4c5",
+          "file": "mark/1f4c5.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4017,
+          "sha1": "d26550ec174922847f57fdb40876a87ceaccdb42"
+        },
+        {
+          "key": "mark-23f0",
+          "name": "闹钟",
+          "cp": "23f0",
+          "file": "mark/23f0.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 11462,
+          "sha1": "94add5f1954156e83db803445f69b50dbbfb79fa"
+        },
+        {
+          "key": "mark-23f3",
+          "name": "沙漏",
+          "cp": "23f3",
+          "file": "mark/23f3.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 12311,
+          "sha1": "37066c9dd41e54abe1a18df9e4a182c3f1c9b71f"
+        },
+        {
+          "key": "mark-1f512",
+          "name": "上锁",
+          "cp": "1f512",
+          "file": "mark/1f512.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 4802,
+          "sha1": "941470ae3ed4a96973fe2b072370600ff9cb6ee9"
+        },
+        {
+          "key": "mark-1f513",
+          "name": "解锁",
+          "cp": "1f513",
+          "file": "mark/1f513.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5261,
+          "sha1": "1bd7d168e5170db2fcaa7b5998b01e89077cad75"
+        },
+        {
+          "key": "mark-1f511",
+          "name": "钥匙",
+          "cp": "1f511",
+          "file": "mark/1f511.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 5952,
+          "sha1": "7a115eadf399a32c3da3e1bb3e04420a24d1d471"
+        },
+        {
+          "key": "mark-267b",
+          "name": "回收",
+          "cp": "267b",
+          "file": "mark/267b.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6695,
+          "sha1": "f5787bec9058d59a7ac77e92b1c2798d357b1c62"
+        },
+        {
+          "key": "mark-1f6a9",
+          "name": "三角旗",
+          "cp": "1f6a9",
+          "file": "mark/1f6a9.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 6665,
+          "sha1": "94711961e45b04b691d970750fa7e4eeae5b4678"
+        },
+        {
+          "key": "mark-1f3c1",
+          "name": "格子旗",
+          "cp": "1f3c1",
+          "file": "mark/1f3c1.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 16252,
+          "sha1": "61e33820f4cc149d4b6d47921f4632bb08034ed8"
+        },
+        {
+          "key": "mark-27a1",
+          "name": "右箭头",
+          "cp": "27a1",
+          "file": "mark/27a1.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 2947,
+          "sha1": "cfcb9fe43329563fbb473e6e7d7fa617a12aca30"
+        },
+        {
+          "key": "mark-261d",
+          "name": "食指向上",
+          "cp": "261d",
+          "file": "mark/261d.png",
+          "w": 512,
+          "h": 512,
+          "bytes": 8039,
+          "sha1": "4118ff41440c1fecf9e830c0bc4d3c05da127be3"
+        }
+      ]
+    }
+  ]
+}

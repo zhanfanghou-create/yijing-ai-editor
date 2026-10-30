@@ -4,7 +4,11 @@ copyright: (c) 2026 艺镜 AI 团队
 
 directories:
   buildResources: build
-  output: dist-win
+  # 为什么不是 dist-win：本机 dist-win/win-unpacked/resources/app.asar 长期被某个进程
+  # 独占（Device or resource busy，tasklist 查不到、rm -rf 也被拦），electron-builder
+  # 在"清空旧产物"这一步必定失败。换个目录名绕开这个死结，产物路径从此与
+  # "上一次有没有残留"无关 —— 这本来就是打包该有的性质。
+  output: dist-app
 
 asar: true
 compression: maximum
@@ -29,6 +33,11 @@ files:
   #    所以漏掉它开发模式一切正常，装出来的 exe 里一导出就崩（MODULE_NOT_FOUND）。
   - src/shared/**/*
   - dist-renderer/**/*
+  # 图标必须随包：窗口 icon 与托盘（通知区）都按 `../../build/icon.ico` 取它。
+  # 漏了不报错 —— 窗口照样开、exe 也照样有图标（那是 electron-builder 直接写进
+  # 资源的），只有**托盘是空白**、窗口图标缺失，而这种"只在打包后才出现"的差别
+  # 在开发模式下永远看不到。
+  - build/icon.ico
   - package.json
   - '!**/*.map'
   - '!**/node_modules/**/{test,__tests__,tests,example,examples,docs}/**'
@@ -53,6 +62,48 @@ extraResources:
     to: ffmpeg
     filter:
       - '**/*'
+  # 内置贴纸库（Noto Animated Emoji 静态 512 帧，Apache-2.0）。
+  # 走 extraResources 而不是 files：它是**数据**不是代码，140 个 PNG 塞进 asar 里
+  # 既拖慢启动解包，也让"素材坏了要替换"变成必须重新打包。
+  # ⚠️ 主进程侧按 `process.resourcesPath/stickers` 找它；开发模式那里没有，
+  #    会回退到 `appPath/resources/stickers`（见 main/stickers.js 的 stickerRootOf）。
+  - from: resources/stickers
+    to: stickers
+    filter:
+      - '**/*.png'
+      - 'catalog.json'
+      # Apache-2.0 要求随分发物保留声明。漏了它不影响功能，
+      # 但"素材是谁的"就查不到了 —— 而这类问题只在被追问时才发现。
+      - 'LICENSE.txt'
+
+  # 内置边框库（24 款，`tools/gen-borders.py` 程序生成，项目自有版权）。
+  # 同样走 extraResources：它是**数据**，且"加一款边框"不该要求重新打包 asar。
+  # ⚠️ 与贴纸同一个坑：主进程按 `process.resourcesPath/borders` 找，
+  #    开发模式那里没有、会回退到 `<main>/../../resources/borders`（见 main/materialPack.js）。
+  - from: resources/borders
+    to: borders
+    filter:
+      - '**/*.png'
+      - 'catalog.json'
+
+  # 人物特效的运行时（MediaPipe wasm 13.8MB + 模型 3.6MB，Apache-2.0）。
+  # ⚠️ 这两个文件**不入 git 仓库**，要先 `node tools/fetch-mediapipe.mjs`。
+  #    漏抓就打包的话，装出来的包里没有它们：开发模式一切正常（从 node_modules 读），
+  #    只在安装版里点「识别人脸」报"运行时缺失" —— 正是 facefx:runtime 要提前说清的那种。
+  - from: resources/mediapipe
+    to: mediapipe
+    filter:
+      - '*.wasm'
+      - '*.task'
+      - '*.js'
+      - 'LICENSE.txt'
+      - 'README.txt'
+
+  # 人物特效的两枚贴图（遮罩 / 描边），程序生成、入库。
+  - from: resources/facefx
+    to: facefx
+    filter:
+      - '**/*.png'
 
 extraMetadata:
   name: YiJingAIEditor

@@ -9,6 +9,7 @@ import {
   IconChevronDown,
   IconEye,
   IconEyeOff,
+  IconFitAll,
   IconFullscreen,
   IconLayers,
   IconLock,
@@ -35,6 +36,11 @@ import { pipAnchor } from '../pip.js'
 import { effectiveTransitions, filterDef, isNoopFilter } from '../looks.js'
 import { ClipAudioWave, ClipFilmstrip, ClipStill, ClipText, ClipWaveform, stripCount } from '../clipVisuals.jsx'
 import Splitter from './Splitter.jsx'
+/* 缩放上下限只有一份（keymap.js）：工具栏滑块、±按钮、Ctrl+滚轮、「适配全片」
+   若各写一个数，改下限时总有一处忘改，表现是「按钮能缩到 0.05、滑块停在 0.3」。 */
+import { ZOOM_MAX, ZOOM_MIN, clampZoom } from '../keymap.js'
+/* 适配全片的算术（量不到就返回 null）在 timelineNav.js，与 ↑/↓ 切点共用一份纯逻辑 */
+import { contentEnd, fitZoom } from '../timelineNav.js'
 /* 画面层级（自由层级）：菜单项可不可点与"上移/下移"的算术都在 shared/layers.js，
    与预览的排序、导出的 overlay 链是同一份 —— 这里不许再写一遍判断。 */
 import * as layersTable from '../../shared/layers.js'
@@ -59,6 +65,7 @@ export default function Timeline({
   canUndo,
   canRedo,
   onZoom,
+  fitTick,
   onSnap,
   onSeek,
   onSelect,
@@ -121,6 +128,16 @@ export default function Timeline({
   /* 复合片段：新建（吃多选集合）与解除。语义与坐标换算都在 shared/compound.js */
   onCreateCompound,
   onUngroupClip,
+  /* 组合（逻辑成组）：与复合片段是两件事，见 groups.js。菜单只负责派发 ——
+     "至少两段""已经在同一组"这些判断都在 App（那里才有 toast 与片段表）。 */
+  onCreateCombination,
+  onRemoveCombination,
+  /* 片段属性剪贴板（Ctrl+Alt+C / Ctrl+Alt+V）：剪贴板内容住在 App 的 ref 里，
+     这里只需要一个"有没有内容"的数字来决定「粘贴属性」可不可点 ——
+     空剪贴板点了没反应是这类菜单最恼人的地方（用户会以为粘贴坏了）。 */
+  onCopyAttrs,
+  onPasteAttrs,
+  attrClipboardCount = 0,
   /* 时间区域：`{ start, end }`（end 可为 null = 只标了入点）。真源在 App，
      这里只负责画、以及把手势换算成秒（算术全在 shared/region.js）。 */
   region = null,
@@ -531,7 +548,8 @@ export default function Timeline({
    * 这条与 `openMenu` 里"保留集合"的判断是同一个口径 —— 两处写不一样会出现
    * "右键之后高亮还在、合成出来却只有一段"。
    */
-  const compoundIds = (() => {    if (!menu || !menu.clip) return []
+  const compoundIds = (() => {
+    if (!menu || !menu.clip) return []
     const picked = Array.isArray(selection?.clipIds) ? selection.clipIds.filter(Boolean) : []
     if (picked.length > 1 && picked.includes(menu.clip.id)) return picked
     return [menu.clip.id]
@@ -572,16 +590,64 @@ export default function Timeline({
   useEffect(() => {
     const lane = laneRef.current
     if (!lane || !onZoom) return undefined
-    const onWheelZoom = (event) => {
+    const onWheel = (event) => {
+      /**
+       * Alt + 滚轮 = 横向移动。剪辑台上「手不离滚轮逛时间线」的通用手势，
+       * 长片里比拖底部滚动条快得多。
+       *
+       * 必须排在 Ctrl 分支**之前**：两个修饰键都按住时以横移为准 ——
+       * 缩放与横移同时发生，用户会分不清自己刚才动了哪一样。
+       */
+      if (event.altKey) {
+        event.preventDefault()
+        // deltaMode：0 像素 / 1 行 / 2 页。只按像素算，行模式（部分鼠标驱动）会慢到像卡住
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? lane.clientWidth : 1
+        lane.scrollLeft += (event.deltaY || event.deltaX) * unit
+        return
+      }
       if (!event.ctrlKey && !event.metaKey) return
       event.preventDefault()
       // 步长随当前缩放变：已经放得很大时一小格也要走得远一点，否则手感黏
-      const step = zoom >= 2 ? 0.4 : zoom >= 1 ? 0.2 : 0.1
+      const step = zoom >= 2 ? 0.4 : zoom >= 1 ? 0.2 : zoom >= 0.5 ? 0.1 : 0.02
       onZoom(zoom + (event.deltaY < 0 ? step : -step))
     }
-    lane.addEventListener('wheel', onWheelZoom, { passive: false })
-    return () => lane.removeEventListener('wheel', onWheelZoom)
+    lane.addEventListener('wheel', onWheel, { passive: false })
+    return () => lane.removeEventListener('wheel', onWheel)
   }, [onZoom, zoom])
+
+  /* ----------------------- Shift+Z 适配全片 ----------------------- */
+
+  /**
+   * 由 App 的 `zoomFit` 递增 `fitTick` 触发（工具栏那颗按钮走同一条路）。
+   * **在这里量视口宽度**，因为只有这个滚动容器知道自己的 clientWidth；
+   * 缩到多少由 `fitZoom` 算（量不到就返回 null，保持原状）。
+   *
+   * ⚠️ effect 的依赖表故意只放 `fitTick`：`onZoom` 是 App 里的内联箭头函数
+   * （每次渲染都是新引用），把它写进依赖表会让这个 effect 每次渲染都重算一次适配 ——
+   * 用户刚放大就被压回去。
+   */
+  const applyFit = () => {
+    const lane = laneRef.current
+    if (!lane) return
+    /**
+     * 按**内容末点**适配，不按 `duration`。
+     *
+     * `duration` 是 `timelineDuration`（`max(30, 内容末点) + 10`）：它给刻度留的余量
+     * 是为了让用户能往右拖一段、给后面留位置。拿它当分母的话，一条 15 秒的片子会按
+     * 40 秒去缩 —— 内容只占屏幕 1/3，用户按完「适配全片」会以为功能没生效。
+     */
+    const next = fitZoom(contentEnd(clips), lane.clientWidth, BASE_DPS, { min: ZOOM_MIN, max: ZOOM_MAX })
+    if (next === null) return
+    onZoom(next)
+    // 适配的意图是「看全片」，所以视口跟着回到最左，而不是停在中段
+    lane.scrollTo({ left: 0 })
+  }
+
+  useEffect(() => {
+    if (!fitTick) return
+    applyFit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitTick])
 
   /* ---------------------------- 右键菜单 ---------------------------- */
 
@@ -857,20 +923,33 @@ export default function Timeline({
 
         <span className="wb-sep" />
 
-        <button type="button" onClick={() => onZoom(Math.max(0.3, Number((zoom - 0.1).toFixed(2))))} title="缩小（Ctrl+-）">
+        <button type="button" onClick={() => onZoom(clampZoom(Number((zoom - 0.1).toFixed(2))))} title="缩小（Ctrl+-）">
           <IconZoomOut size={14} />
         </button>
         <input
           type="range"
-          min={0.3}
-          max={4}
-          step={0.1}
+          min={ZOOM_MIN}
+          max={ZOOM_MAX}
+          /* step 必须足够细：range 的 value 会被浏览器**吸附到 step 网格**上，
+             0.05 的网格会把「适配全片」算出来的 1.872 显示成 1.85，
+             于是"滑块上的数"和"内容实际宽度"差出十几个像素 —— 这种偏差
+             在界面上看不出来，只有拿尺子量才现形。 */
+          step={0.01}
           value={zoom}
           onChange={(event) => onZoom(Number(event.target.value))}
           aria-label="时间线缩放"
+          data-tl-zoom
         />
-        <button type="button" onClick={() => onZoom(Math.min(4, Number((zoom + 0.1).toFixed(2))))} title="放大（Ctrl+=，或按住 Ctrl 滚轮）">
+        <button type="button" onClick={() => onZoom(clampZoom(Number((zoom + 0.1).toFixed(2))))} title="放大（Ctrl+=，或按住 Ctrl 滚轮）">
           <IconZoomIn size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => applyFit()}
+          title="适配全片（Shift+Z）：把整条时间线缩到刚好装满可视宽度"
+          data-tl="fit"
+        >
+          <IconFitAll size={14} />
         </button>
         <button
           type="button"
@@ -1293,7 +1372,9 @@ export default function Timeline({
             />
           ) : null}
 
-          <div className="playhead" style={{ left: playhead * dps }} />
+          {/* data-playhead 是给 E2E 读的（秒）。判据读消费端：不读 state，
+              读"播放头那根线现在插在哪一秒" —— 那才是用户看到的 */}
+          <div className="playhead" style={{ left: playhead * dps }} data-playhead={Number(playhead).toFixed(3)} />
 
           {!clips.length ? (
             <div className="wb-tlempty">
@@ -1392,6 +1473,40 @@ export default function Timeline({
               }}
             >
               解除复合片段
+            </button>
+          ) : null}
+          {/* 组合（逻辑成组）：与上面「复合片段」是**两件事**，所以文案里必须说清区别 ——
+              组合只是"一起选中 / 一起动"，几段仍各占各的位置、渲染完全不变；
+              复合才收成一个片段。两对键位也成对区分：Alt+G 组合、Ctrl+G 复合。 */}
+          <button
+            type="button"
+            data-ctx="combination"
+            disabled={multiCount < 2}
+            title={
+              multiCount > 1
+                ? `把选中的 ${multiCount} 段绑成一组：点其中一段会整组选中，拖动和删除也按整组结算（位置、时长都不变）`
+                : '组合至少要选两段（Ctrl + 点选可多选）'
+            }
+            onClick={() => {
+              if (onCreateCombination) onCreateCombination()
+              setMenu(null)
+            }}
+          >
+            {multiCount > 1 ? `新建组合（${multiCount} 段）` : '新建组合（先多选两段）'}
+            <kbd>Alt+G</kbd>
+          </button>
+          {menu.clip.group ? (
+            <button
+              type="button"
+              data-ctx="uncombination"
+              title="解除这几段之间的绑定（位置、时长、渲染都不受影响）"
+              onClick={() => {
+                if (onRemoveCombination) onRemoveCombination()
+                setMenu(null)
+              }}
+            >
+              取消组合
+              <kbd>Alt+Shift+G</kbd>
             </button>
           ) : null}
           {/* 多机位：把选中的几段**画面**摆成同一时刻的多路角度。
@@ -1493,6 +1608,38 @@ export default function Timeline({
             }}
           >
             下移一层
+          </button>
+          {/* 属性复制 / 粘贴：搬的是"长相"（调色、特效、位置、音量、字幕样式），
+              不搬素材也不搬时间线占位 —— 白名单与"源上没有的要摘掉"都在 clipProps.js。
+              粘贴项在剪贴板为空时**禁用**并说明原因，而不是点了没反应。 */}
+          <button
+            type="button"
+            data-ctx="copy-attrs"
+            title="复制这一段的外观属性（调色 / 特效 / 位置 / 音量 / 字幕样式），不含素材与时间位置"
+            onClick={() => {
+              if (onCopyAttrs) onCopyAttrs()
+              setMenu(null)
+            }}
+          >
+            复制属性
+            <kbd>Ctrl+Alt+C</kbd>
+          </button>
+          <button
+            type="button"
+            data-ctx="paste-attrs"
+            disabled={!attrClipboardCount}
+            title={
+              attrClipboardCount
+                ? '把刚才复制的属性套到这一段（素材与时间位置不变）'
+                : '还没有复制过属性：先在某一段上「复制属性」'
+            }
+            onClick={() => {
+              if (onPasteAttrs) onPasteAttrs()
+              setMenu(null)
+            }}
+          >
+            粘贴属性
+            <kbd>Ctrl+Alt+V</kbd>
           </button>
           {/* 替换片段：换**源**、不动位置 —— 会弹系统文件选择框，
               锁定的轨道不能换（换了等于绕过了锁）。 */}

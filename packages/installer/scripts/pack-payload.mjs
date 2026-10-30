@@ -3,7 +3,7 @@
  * 把「已构建的桌面客户端产物目录」压缩为 payload/app.7z，供安装器释放。
  *
  * 用法：
- *   node scripts/pack-payload.mjs                       # 默认读 ../desktop/dist-win/win-unpacked
+ *   node scripts/pack-payload.mjs                       # 默认读 ../desktop/dist-app/win-unpacked
  *   node scripts/pack-payload.mjs <win-unpacked 目录>    # 显式指定
  *   node scripts/pack-payload.mjs --keep                # 保留旧压缩包（默认覆盖）
  *
@@ -24,7 +24,7 @@ const args = process.argv.slice(2)
 const sourceArg = args.find((a) => !a.startsWith('--'))
 const source = sourceArg
   ? path.resolve(sourceArg)
-  : path.resolve(installerRoot, '..', 'desktop', 'dist-win', 'win-unpacked')
+  : path.resolve(installerRoot, '..', 'desktop', 'dist-app', 'win-unpacked')
 
 function fail(msg) {
   console.error(`[pack-payload] ${msg}`)

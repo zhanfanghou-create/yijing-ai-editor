@@ -6,7 +6,7 @@
  * 但只要没人看 stderr，界面照旧弹「导出成功」。这里把断言钉在产物上：
  * 时长、分辨率、有没有音轨、文件多大。
  *
- * 断言总数恒为 34：没装 ffprobe 时，依赖它的 6 条逐条记 SKIP（而不是少跑 6 条），
+ * 断言总数恒为 40：没装 ffprobe 时，依赖它的 9 条逐条记 SKIP（而不是少跑 9 条），
  * 这样 verify.mjs 里钉死的数字才有意义 —— 掉下来只可能是有人删了断言。
  *
  * 用法：node tools/render-e2e.mjs
@@ -207,7 +207,16 @@ const REST_LABELS = [
   '倍速：成片第 0.75 秒取的是源第 1.5 秒的画面（画面真的在快进）',
   '倍速：成片末尾取到的是源最末一段（整段源素材都被走完）',
   '倍速：原速片段不受影响（回归）',
-  '倍速：带音轨的片段走 atempo 链路不报错'
+  '倍速：带音轨的片段走 atempo 链路不报错',
+  /* 封面三条：位置放第 5 秒（蓝）而不是第 0 秒（红）——若抽帧根本没读时间点、
+     或 -ss 放错位置落到首个关键帧，抽到的都会是红的那一帧，一眼分辨。 */
+  '封面图随导出生成（开了开关就真的多一张图）',
+  '封面尺寸与成片一致（640x360）',
+  '封面取的是指定那一帧（第 5 秒 ⇒ 蓝色，不是第 0 秒的红色）',
+  /* NTSC 两条：容器里写下的 avg_frame_rate 必须是 30000/1001。
+     这条只能靠 ffprobe 读回来，看参数拼得对不对是证不了自己的。 */
+  '29.97fps 的成片能渲染出来',
+  '29.97fps 落到容器里是 30000/1001（不是 2997/100，也不是被四舍五入成 30）'
 ]
 
 async function main() {
@@ -280,7 +289,9 @@ async function main() {
   const result = await render.render({
     clips,
     outPath: out,
-    options: { width: 640, height: 360, fps: 25, quality: 80 },
+    /* 封面也挂在这一轮上（不另起一次渲染）：成片是本例现成的 8 秒片，
+       第 5 秒落在蓝色片段里，与第 0 秒的红色天然可分。 */
+    options: { width: 640, height: 360, fps: 25, quality: 80, cover: { enabled: true, at: 5 } },
     onProgress: (r) => {
       progressCalls += 1
       lastRatio = r
@@ -320,11 +331,70 @@ async function main() {
       check('产物有音轨（视频原声 + 独立音频混流）', Boolean(audio))
     }
     check('文件体积合理（>60KB 说明真有画面内容）', size > 60000, `${(size / 1024).toFixed(1)} KB`)
+
+    /* ------------------------------ 封面图 ------------------------------ */
+    const coverPath = result.coverPath || ''
+    const coverExists = Boolean(coverPath) && fs.existsSync(coverPath)
+    const coverOk = coverExists && fs.statSync(coverPath).size > 1024
+    check(
+      '封面图随导出生成（开了开关就真的多一张图）',
+      coverOk,
+      coverExists ? `${fs.statSync(coverPath).size} 字节` : String(result.coverError || '没回传路径')
+    )
+    if (!coverOk) {
+      skipped('封面尺寸与成片一致（640x360）', '封面没生成')
+      skipped('封面取的是指定那一帧（第 5 秒 ⇒ 蓝色，不是第 0 秒的红色）', '封面没生成')
+    } else {
+      if (!ffprobe) {
+        skipped('封面尺寸与成片一致（640x360）', '未找到 ffprobe')
+      } else {
+        const coverProbe = await ffprobeJson(ffprobe, ['-show_entries', 'stream=width,height', '-of', 'json', coverPath])
+        const cv = ((coverProbe && coverProbe.streams) || [])[0]
+        check('封面尺寸与成片一致（640x360）', Boolean(cv) && cv.width === 640 && cv.height === 360, cv ? `${cv.width}x${cv.height}` : '解析不出')
+      }
+      /* 取封面正中那一块的颜色：第 5 秒是蓝色片段。判据不写死具体通道值，
+         只要求"明显偏蓝、不偏红" —— yuv 往返后的蓝实测约 rgb(0,0,254)，
+         而第 0 秒的红约 rgb(254,0,0)，两者在 b/r 上完全分离。 */
+      const cc = await blockColor(ffmpeg, coverPath, 300, 160, work)
+      check(
+        '封面取的是指定那一帧（第 5 秒 ⇒ 蓝色，不是第 0 秒的红色）',
+        Array.isArray(cc) && cc[2] > 120 && cc[0] < 100,
+        cc ? `rgb(${cc.join(',')}) · at=${result.coverAt}` : '取不到像素'
+      )
+    }
   }
 
   // 空时间线必须被挡住，而不是产出一个 0 秒的坏文件
   const blank = await render.render({ clips: [], outPath: path.join(work, 'blank.mp4'), options: {} })
   check('空时间线被拒绝', blank.ok === false && blank.reason === 'empty', JSON.stringify(blank).slice(0, 120))
+
+  /* ------------------------ NTSC 帧率：真渲一遍再读回来 ------------------------
+   * 为什么只能这样验：帧率这一层错了画面**完全正常**。
+   *   · 面板写 29.97、主进程 `Math.round` 成 30 ⇒ 成片是 30fps，看不出任何异常；
+   *   · 29.97 原样拼进 `fps=` 滤镜 ⇒ 容器里存 2997/100，能播、能剪，
+   *     但广播 QC 与 NLE 二次导入会判"帧率不规范"要求重转。
+   * 唯一能分辨的是 ffprobe 读回来的 `avg_frame_rate`，所以判据落在它上面。 */
+  const ntscOut = path.join(work, 'ntsc.mp4')
+  const ntsc = await render.render({
+    clips: [{ id: 'n1', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 2, offset: 0 }],
+    outPath: ntscOut,
+    options: { width: 320, height: 240, fps: 29.97, quality: 80 }
+  })
+  check('29.97fps 的成片能渲染出来', ntsc.ok === true, ntsc.ok ? '' : String(ntsc.error).slice(0, 200))
+  if (!ntsc.ok) {
+    skipped('29.97fps 落到容器里是 30000/1001（不是 2997/100，也不是被四舍五入成 30）', '渲染没成功')
+  } else if (!ffprobe) {
+    skipped('29.97fps 落到容器里是 30000/1001（不是 2997/100，也不是被四舍五入成 30）', '未找到 ffprobe')
+  } else {
+    const ntscProbe = await ffprobeJson(ffprobe, ['-show_entries', 'stream=avg_frame_rate,r_frame_rate', '-of', 'json', ntscOut])
+    const v = ((ntscProbe && ntscProbe.streams) || []).find((item) => item.avg_frame_rate)
+    const avg = String((v && v.avg_frame_rate) || '')
+    check(
+      '29.97fps 落到容器里是 30000/1001（不是 2997/100，也不是被四舍五入成 30）',
+      avg === '30000/1001',
+      avg ? `avg_frame_rate=${avg}` : '解析不出帧率'
+    )
+  }
 
   // 片段无入点时 offset=2 必须真的从第 2 秒开切（切 1 秒）
   const cutOut = path.join(work, 'cut.mp4')
@@ -365,6 +435,375 @@ async function main() {
     const d = await readDuration(ffprobe, fxOut)
     if (Number.isNaN(d)) skipped('特效产物时长 4 秒', '未找到可用的 ffprobe')
     else check('特效产物时长 4 秒（2+2，特效不改变时长）', Math.abs(d - 4) < 0.35, `实测 ${d.toFixed(3)}s`)
+  }
+
+  /* ---------------------------- 曲线进成片 ---------------------------- */
+  /**
+   * 曲线必须真的作用到成片上。
+   *
+   * 判据取**像素**：同一段纯红素材渲两遍，一遍不带曲线、一遍带"压高光"曲线
+   * （0.5 → 0.02、1 → 0.4），然后比同一小块区域的红通道。
+   * ⚠️ 端点必须动：只压中间调的话，纯红素材的红通道本来就是 255，1→1 原样保留，
+   *    成片一点不变（第一次写这条就踩了：实测 255 → 255，报出来像"曲线没生效"，
+   *    其实是判据选错了素材位置）。所以曲线要连高光一起压。
+   * 为什么不用"命令串里有没有 curves=" —— 拼接上了但坐标写错（比如把 0..255
+   * 当成 0..1 传给 ffmpeg），命令照样"有 curves="，画面却完全不变或整段发灰。
+   * 预览侧有没有生效由 inspector 闸门读 feFuncR 的 tableValues 证，两条合起来才闭环。
+   */
+  const curvesPlainOut = path.join(work, 'curve-plain.mp4')
+  const curvesCrushOut = path.join(work, 'curve-crush.mp4')
+  const curvesClip = { id: 'cv1', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0 }
+  const plainRender = await render.render({
+    clips: [curvesClip],
+    outPath: curvesPlainOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  const crushRender = await render.render({
+    clips: [{ ...curvesClip, curves: { rgb: [{ x: 0, y: 0 }, { x: 0.5, y: 0.02 }, { x: 1, y: 0.4 }] } }],
+    outPath: curvesCrushOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  if (!plainRender.ok || !crushRender.ok) {
+    check('曲线随导出真实生效（压高光曲线的成片红通道明显变低）', false,
+      `渲染失败：${String((plainRender.ok ? crushRender : plainRender).error).slice(0, 200)}`)
+  } else {
+    const plainPx = await blockColor(ffmpeg, curvesPlainOut, 160, 120, work, 0)
+    const crushPx = await blockColor(ffmpeg, curvesCrushOut, 160, 120, work, 0)
+    if (!plainPx || !crushPx) skipped('曲线随导出真实生效（压高光曲线的成片红通道明显变低）', '取像素失败')
+    else {
+      check(
+        '曲线随导出真实生效（压高光曲线的成片红通道明显变低）',
+        plainPx[0] - crushPx[0] >= 30,
+        `红通道 ${plainPx[0]} → ${crushPx[0]}（rgb ${plainPx.join(',')} → ${crushPx.join(',')}）`
+      )
+    }
+  }
+
+  /* ---------------------------- 一级色轮进成片 ---------------------------- */
+  /**
+   * 色轮必须真的作用到成片上，而且**方向要对**。
+   *
+   * 判据取像素：同一段纯红素材渲两遍，一遍不带色轮、一遍把阴影轮推到左下（蓝紫）。
+   * 纯红的 B 通道原本是 0，只有真的挂上了那张表才会被抬起；
+   * 同时 G 通道必须**不动**（推蓝时绿分量是负的，钳在 0）—— 只看"B 变大了"是不够的：
+   * 整体提亮一档也会让 B 变大，但那样 G 也会跟着变大，方向就接反了。
+   *
+   * 为什么不去查命令串里有没有 `lutrgb=`：拼上去了但 `val/255` 写成 `val`
+   * （或三路表达式串了同一个通道）时，命令照旧"有 lutrgb="，画面却整片死白或发青。
+   * 预览侧由 inspector 闸门读 feFuncB/feFuncR 的 tableValues 证，两条合起来才闭环。
+   */
+  const wheelsPlainOut = path.join(work, 'wheel-plain.mp4')
+  const wheelsBlueOut = path.join(work, 'wheel-blue.mp4')
+  const wheelsClip = { id: 'wh1', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0 }
+  const wheelPlainRender = await render.render({
+    clips: [wheelsClip],
+    outPath: wheelsPlainOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  const wheelBlueRender = await render.render({
+    clips: [{ ...wheelsClip, wheels: { shadow: { x: -0.5, y: -0.52 } } }],
+    outPath: wheelsBlueOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  const wheelsName = '色轮随导出真实生效（阴影推蓝：成片 B 抬起来、G 不动，方向没接反）'
+  if (!wheelPlainRender.ok || !wheelBlueRender.ok) {
+    check(wheelsName, false,
+      `渲染失败：${String((wheelPlainRender.ok ? wheelBlueRender : wheelPlainRender).error).slice(0, 200)}`)
+  } else {
+    const basePx = await blockColor(ffmpeg, wheelsPlainOut, 160, 120, work, 0)
+    const bluePx = await blockColor(ffmpeg, wheelsBlueOut, 160, 120, work, 0)
+    if (!basePx || !bluePx) skipped(wheelsName, '取像素失败')
+    else {
+      check(
+        wheelsName,
+        bluePx[2] - basePx[2] >= 20 && bluePx[1] - basePx[1] <= 12,
+        `rgb ${basePx.join(',')} → ${bluePx.join(',')}（B +${bluePx[2] - basePx[2]}、G +${bluePx[1] - basePx[1]}）`
+      )
+    }
+  }
+
+  /* ------------------------ 分区 HSL 进成片 ------------------------ */
+  /**
+   * 分区 HSL 走 **3D LUT**：预览是 WebGL 的 3D 纹理，导出是 ffmpeg 的 `lut3d` + `.cube`，
+   * 两侧共用 shared/hslBands.js 的同一份烘焙。这里验导出那半边**真的改了像素**。
+   *
+   * 判据一（纯红素材，只把红带的色相推 +30°）：G 必须明显抬起，而 B 基本不动。
+   *   ⚠️ 只判"像素变了"不够 —— 整体提亮会让 R/G/B 一起涨，那也能让 G 变大。
+   *   色相旋转的特征是 **G 涨、B 不涨**（纯红转 30° 落在橙区）。
+   * 判据二（纯灰素材，同一组参数）：三个通道**一律不动**。这一条才是"分区"二字的证据：
+   *   权重是色相的函数，灰色饱和度≈0 必须被门控掉。少了它，一个"全局加绿"的实现
+   *   在判据一上照样绿。
+   *
+   * ⚠️ 不查命令串里有没有 `lut3d=`：`.cube` 的行序写反时命令一字不差，
+   *   红色会被当成蓝色读（实测 red → (0,0,253)）。行序由 hsl-selftest 单独钉住。
+   */
+  const grayFile = path.join(work, 'gray.mp4')
+  const grayMade = await run(ffmpeg, ['-hide_banner', '-y', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=#808080:s=320x240:r=25', '-t', '1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', grayFile])
+  const hslBands = { red: { h: 1, s: 0, l: 0 } }
+  const hslRedOut = path.join(work, 'hsl-red.mp4')
+  const hslRedBaseOut = path.join(work, 'hsl-red-base.mp4')
+  const hslBaseClip = { id: 'hs1', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0 }
+  const hslBaseRender = await render.render({
+    clips: [hslBaseClip],
+    outPath: hslRedBaseOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  const hslRedRender = await render.render({
+    clips: [{ ...hslBaseClip, hsl: hslBands }],
+    outPath: hslRedOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80 }
+  })
+  const hslName = '分区 HSL 随导出真实生效（红带色相 +30°：成片 G 明显抬起、B 不动）'
+  if (!hslBaseRender.ok || !hslRedRender.ok) {
+    check(hslName, false,
+      `渲染失败：${String((hslBaseRender.ok ? hslRedRender : hslBaseRender).error).slice(0, 300)}`)
+  } else {
+    const baseRedPx = await blockColor(ffmpeg, hslRedBaseOut, 160, 120, work, 0)
+    const hslRedPx = await blockColor(ffmpeg, hslRedOut, 160, 120, work, 0)
+    if (!baseRedPx || !hslRedPx) skipped(hslName, '取像素失败')
+    else {
+      check(
+        hslName,
+        hslRedPx[1] - baseRedPx[1] >= 40 && hslRedPx[2] - baseRedPx[2] <= 20,
+        `rgb ${baseRedPx.join(',')} → ${hslRedPx.join(',')}（G +${hslRedPx[1] - baseRedPx[1]}、B +${hslRedPx[2] - baseRedPx[2]}）`
+      )
+    }
+  }
+
+  const hslGrayName = '分区 HSL 只动该动的颜色（纯灰素材套同一组参数，三通道一律不变）'
+  if (grayMade.code !== 0) skipped(hslGrayName, '灰色素材没造出来')
+  else {
+    const hslGrayBaseOut = path.join(work, 'hsl-gray-base.mp4')
+    const hslGrayOut = path.join(work, 'hsl-gray.mp4')
+    const grayClip = { id: 'hs2', track: 'video', kind: 'video', path: grayFile, url: '', start: 0, duration: 1, offset: 0 }
+    const grayBase = await render.render({
+      clips: [grayClip],
+      outPath: hslGrayBaseOut,
+      options: { width: 320, height: 240, fps: 25, quality: 80 }
+    })
+    const grayHsl = await render.render({
+      clips: [{ ...grayClip, hsl: hslBands }],
+      outPath: hslGrayOut,
+      options: { width: 320, height: 240, fps: 25, quality: 80 }
+    })
+    if (!grayBase.ok || !grayHsl.ok) {
+      check(hslGrayName, false, `渲染失败：${String((grayBase.ok ? grayHsl : grayBase).error).slice(0, 200)}`)
+    } else {
+      const gBase = await blockColor(ffmpeg, hslGrayBaseOut, 160, 120, work, 0)
+      const gHsl = await blockColor(ffmpeg, hslGrayOut, 160, 120, work, 0)
+      if (!gBase || !gHsl) skipped(hslGrayName, '取像素失败')
+      else {
+        const delta = Math.max(...[0, 1, 2].map((i) => Math.abs(gHsl[i] - gBase[i])))
+        check(hslGrayName, delta <= 6, `rgb ${gBase.join(',')} → ${gHsl.join(',')}（最大偏移 ${delta}）`)
+      }
+    }
+  }
+
+  /* ------------------------ 边框（片段属性 PNG）进成片 ------------------------ */
+  /**
+   * 判据必须**两条一起**判，缺一条都会放过真缺陷：
+   *   · 四边变成白框 → 证明边框真的叠上去了（这条只判"多了一层"，不够）；
+   *   · 中心仍是原画面 → 证明边框图的**窗口是透明的**。
+   * 第二条是这条链上最容易死的地方：链里一旦落到 `format=yuv420p`，
+   * PNG 的 alpha 被整体丢弃、透明窗口填黑 —— 于是"加了白框"变成"画面中间一块黑板"，
+   * 退出码 0、不报任何错。另一种死法是窗口没透明（画糊了 / 忘了挖洞），
+   * 表现是整幅变白。两种都由第二条挡住。
+   *
+   * 坐标（640×360、`br-basic-white`：inset 34、厚 46，1080 空间）：
+   *   竖直方向 34/1080×360 ≈ 11px 起、46/1080×360 ≈ 15px 宽 → x≈11..26 是白框；
+   *   取 (12,180) 落在白框上，取 (320,180) 落在窗口中心。
+   */
+  const borderFile = path.join(ROOT, 'packages', 'desktop', 'resources', 'borders', 'basic', 'br-basic-white.png')
+  const borderAssertEdge = '边框进成片：白框压在画面四边（不是只有预览有）'
+  const borderAssertWindow = '边框窗口透明：中心仍是原画面（alpha 没被 format 吃掉）'
+  if (!fs.existsSync(borderFile)) {
+    skipped(borderAssertEdge, '内置边框文件不存在（先跑 py tools/gen-borders.py）')
+    skipped(borderAssertWindow, '内置边框文件不存在（先跑 py tools/gen-borders.py）')
+  } else {
+    const bdOut = path.join(work, 'border.mp4')
+    const bdRender = await render.render({
+      clips: [
+        { id: 'bd0', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0, border: 'br-basic-white' }
+      ],
+      outPath: bdOut,
+      options: { width: 640, height: 360, fps: 25, quality: 80 }
+    })
+    if (!bdRender.ok) {
+      check(borderAssertEdge, false, `渲染失败：${String(bdRender.error).slice(0, 300)}`)
+      check(borderAssertWindow, false, `渲染失败：${String(bdRender.error).slice(0, 300)}`)
+    } else {
+      const bdEdge = await blockColor(ffmpeg, bdOut, 12, 180, work, 0.3)
+      const bdMid = await blockColor(ffmpeg, bdOut, 320, 180, work, 0.3)
+      if (!bdEdge || !bdMid) {
+        skipped(borderAssertEdge, '取像素失败')
+        skipped(borderAssertWindow, '取像素失败')
+      } else {
+        check(
+          borderAssertEdge,
+          bdEdge[0] > 200 && bdEdge[1] > 200 && bdEdge[2] > 200,
+          `左边框处 rgb(${bdEdge.join(',')})（应为白 255,255,255）`
+        )
+        /* 源片是纯红：中心必须还是红的。变白 = 边框整幅盖死；变黑 = alpha 被丢、填了黑 */
+        check(
+          borderAssertWindow,
+          bdMid[0] > 150 && bdMid[1] < 90 && bdMid[2] < 90,
+          `窗口中心 rgb(${bdMid.join(',')})（应仍为红，不能变白或变黑）`
+        )
+      }
+    }
+  }
+
+  /* ------------------------ 贴纸（叠加轨 PNG）进成片 ------------------------ */
+  /**
+   * 判据必须落在**透明区**上，只判"画面上多了个东西"是不够的。
+   *
+   * ffmpeg 链里一旦是 `format=yuv420p`，alpha 会被整体丢弃、透明区填黑 ——
+   * 退出码 0、一行错都不报。此时：
+   *   · 贴纸中心是黄色（笑脸）—— 一个"白底/黑底方块"也能满足；
+   *   · **贴纸方框的角上必须还是红色**（背景透出来）—— 这条才证明 alpha 活着。
+   * 所以两条一起判，缺一条都会放过"贴纸变成不透明方块"这个缺陷。
+   *
+   * 坐标按 shared/pip.json 推（640×360、右下角、宽 30%）：
+   *   w = 640×0.30 = 192；m = 640×0.03 = 19.2
+   *   x = 19.2 + 1×(640−38.4) − 192 = 428；y 同理 = 148
+   * 于是方框是 [428,620]×[148,340]，中心 (524,244)，左上角内侧 (434,154)。
+   */
+  const stickerFile = path.join(ROOT, 'packages', 'desktop', 'resources', 'stickers', 'face', '1f600.png')
+  const stickerAssert = '贴纸进成片：叠上去了、且透明区透出背景（不是白底/黑底方块）'
+  if (!fs.existsSync(stickerFile)) {
+    skipped(stickerAssert, '内置贴纸文件不存在（先跑 node tools/fetch-stickers.mjs）')
+  } else {
+    const stOut = path.join(work, 'sticker.mp4')
+    const stRender = await render.render({
+      clips: [
+        { id: 'sk0', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0 },
+        {
+          id: 'sk1',
+          track: 'overlay',
+          kind: 'image',
+          path: stickerFile,
+          url: '',
+          start: 0,
+          duration: 1,
+          offset: 0,
+          pip: { anchor: 'right-bottom', size: 30 },
+          opacity: 100
+        }
+      ],
+      outPath: stOut,
+      options: { width: 640, height: 360, fps: 25, quality: 80 }
+    })
+    if (!stRender.ok) {
+      check(stickerAssert, false, `渲染失败：${String(stRender.error).slice(0, 300)}`)
+    } else {
+      const stCenter = await blockColor(ffmpeg, stOut, 524, 244, work, 0.2)
+      const stCorner = await blockColor(ffmpeg, stOut, 434, 154, work, 0.2)
+      const stOutside = await blockColor(ffmpeg, stOut, 60, 60, work, 0.2)
+      if (!stCenter || !stCorner || !stOutside) {
+        skipped(stickerAssert, '取像素失败')
+      } else {
+        /* 笑脸是黄的：R/G 都高；透明角仍是背景红：R 高而 G/B 低 */
+        const pasted = stCenter[0] > 140 && stCenter[1] > 140
+        const seeThrough = stCorner[0] > 150 && stCorner[1] < 90 && stCorner[2] < 90
+        check(
+          stickerAssert,
+          pasted && seeThrough,
+          `贴纸中心 ${stCenter.join(',')}（应偏黄）/ 方框角上 ${stCorner.join(',')}（应仍为红）/ 画外 ${stOutside.join(',')}`
+        )
+      }
+    }
+  }
+
+  /* ------------------------ 导出编码格式进成片 ------------------------ */
+  /**
+   * 编码格式（10bit / ProRes 4444）必须真的落进产物的**流参数**里。
+   *
+   * 这类错的特征是「成片照旧生成、时长画面全对，只是不是选的那个规格」：
+   *   · 面板选了 10bit，encodeArgs 仍 `-pix_fmt yuv420p` ⇒ 8 位文件，一句错都不报；
+   *   · 选了 ProRes 4444，容器却是 mp4（或编码器回落成 h264）⇒
+   *     要么封装失败、要么生成一个"无损、没有 alpha"的普通成片。
+   * 所以判据只认 ffprobe 读回来的 `codec_name / profile / pix_fmt` ——
+   * 参数拼得对不对是**证不了自己**的（拼错了命令串里一样有那一项）。
+   * 纯逻辑那层（表自洽、回落不跨族）由 export-codec-selftest 证。
+   */
+  const tenBitOut = path.join(work, 'codec-10bit.mp4')
+  const tenBit = await render.render({
+    clips: [{ id: 'cb1', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0 }],
+    outPath: tenBitOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80, codec: 'h265-10', encoder: 'libx265' }
+  })
+  check('H.265 10bit 能真编出来', tenBit.ok === true, tenBit.ok ? '' : String(tenBit.error).slice(0, 300))
+  const tenBitInfo = tenBit.ok
+    ? await ffprobeJson(ffprobe, ['-show_entries', 'stream=codec_name,profile,pix_fmt', '-select_streams', 'v:0', '-of', 'json', tenBitOut])
+    : null
+  const tenBitStream = tenBitInfo && Array.isArray(tenBitInfo.streams) ? tenBitInfo.streams[0] || {} : null
+  const tenBitName = '10bit 成片的编码是 hevc_main10（不是静默回落的 8 位 h264）'
+  if (!tenBit.ok) skipped(tenBitName, '10bit 导出没成功')
+  else if (!tenBitStream) skipped(tenBitName, '未找到可用的 ffprobe')
+  else {
+    check(tenBitName,
+      /hevc/i.test(String(tenBitStream.codec_name)) && /10/.test(String(tenBitStream.profile || '')),
+      `${tenBitStream.codec_name} / ${tenBitStream.profile} / ${tenBitStream.pix_fmt}`)
+  }
+  const tenBitPixName = '10bit 成片的像素格式是 yuv420p10le（真的 10 位，不是 8 位）'
+  if (!tenBit.ok) skipped(tenBitPixName, '10bit 导出没成功')
+  else if (!tenBitStream) skipped(tenBitPixName, '未找到可用的 ffprobe')
+  else check(tenBitPixName, String(tenBitStream.pix_fmt) === 'yuv420p10le', String(tenBitStream.pix_fmt))
+
+  /**
+   * ProRes 4444：容器必须是 MOV、编码必须是 prores 4444、像素格式必须带 alpha。
+   * 顺带验 alpha **真的保留了**：片段不透明度 50% ⇒ 整幅 alpha≈128。
+   * 这一步是整条功能的意义所在 —— 没有了它，"导出带透明通道的素材给后期"是假的。
+   */
+  const proresOut = path.join(work, 'codec-prores.mov')
+  const prores = await render.render({
+    clips: [{ id: 'cb2', track: 'video', kind: 'video', path: clipA, url: '', start: 0, duration: 1, offset: 0, opacity: 50 }],
+    outPath: proresOut,
+    options: { width: 320, height: 240, fps: 25, quality: 80, codec: 'prores-4444', encoder: 'prores_ks' }
+  })
+  check('ProRes 4444 能真编进 MOV（容器与编码器配套）', prores.ok === true,
+    prores.ok ? '' : String(prores.error).slice(0, 300))
+  const proresInfo = prores.ok
+    ? await ffprobeJson(ffprobe, ['-show_entries', 'stream=codec_name,profile,pix_fmt', '-select_streams', 'v:0', '-of', 'json', proresOut])
+    : null
+  const proresStream = proresInfo && Array.isArray(proresInfo.streams) ? proresInfo.streams[0] || {} : null
+  /* 4444 的像素格式是 **12 位**：ffmpeg 的 prores_ks 对 4444 一律写 12 位，
+     显式传 10le 也照样得 12le（本机实测）。判据照产物写，不照我们的期望写。 */
+  const proresName = 'ProRes 成片是 4444 profile + yuva444p12le（带 alpha 的那一档）'
+  if (!prores.ok) skipped(proresName, 'ProRes 导出没成功')
+  else if (!proresStream) skipped(proresName, '未找到可用的 ffprobe')
+  else {
+    check(proresName,
+      /prores/i.test(String(proresStream.codec_name)) &&
+        /4444/.test(String(proresStream.profile || '')) &&
+        String(proresStream.pix_fmt) === 'yuva444p12le',
+      `${proresStream.codec_name} / ${proresStream.profile} / ${proresStream.pix_fmt}`)
+  }
+
+  const proresAlphaName = 'ProRes 4444 的 alpha 真的留下来了（半透明片段的成片 alpha≈128，不是被压黑）'
+  if (!prores.ok) skipped(proresAlphaName, 'ProRes 导出没成功')
+  else {
+    /* 直接读 rgba 的第四个字节：压黑那一步会把 alpha 写成 255（不透明），
+       而我们要的正是"不压黑"。读 rgb 是看不出区别的（两者画面都偏暗）。 */
+    const alphaFile = path.join(work, 'alpha.raw')
+    const alphaRun = await run(ffmpeg, [
+      '-v', 'error', '-y', '-i', proresOut,
+      '-vf', 'crop=8:8:160:120', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', alphaFile
+    ])
+    let alpha = null
+    if (alphaRun.code === 0) {
+      try {
+        const buf = fs.readFileSync(alphaFile)
+        if (buf.length >= 4) alpha = buf[3]
+      } catch {
+        alpha = null
+      }
+    }
+    if (alpha === null) skipped(proresAlphaName, '读 alpha 失败')
+    /* 容差 40：ProRes 的 alpha 也是 10 位压出来的，且着色/缩放会带一点舍入 */
+    else check(proresAlphaName, Math.abs(alpha - 128) <= 40, `alpha=${alpha}（50% 不透明度期望 ≈128）`)
   }
 
   /* -------------------------- 背景进成片 -------------------------- */

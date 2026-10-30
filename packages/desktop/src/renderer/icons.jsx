@@ -63,8 +63,10 @@ export {
 export {
   IconArrowRight,
   IconSparkle,
+  IconPlugin,
   IconExternal,
   IconGift,
+  IconSticker,
   IconPanel,
   IconChat,
   IconDownloadCircle,
@@ -84,6 +86,7 @@ export {
   IconStar,
   IconFlag,
   IconRatio,
+  IconFitAll,
   IconCrown,
   IconHeadset,
   IconTalkingPhoto,

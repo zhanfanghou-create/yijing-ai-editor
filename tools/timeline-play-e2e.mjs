@@ -368,16 +368,38 @@ async function main() {
 
     const before = Number(await sourceTimeOf(page))
     await page.locator('.wb-transport-btns button.play').click()
-    await sleep(500)
-    const mid = Number(await sourceTimeOf(page))
-    await sleep(700)
+
+    /* ⚠️ 不用「固定等 500ms 再量一次」：那等于假设机器在这 500ms 里一定能解出 0.2 秒画面。
+       整机被别的构建/闸门拖慢时，这 500ms 里播放头可能只走了 0.15 秒 ⇒ 功能完全正常却报红。
+       2026-10-28 全量验证里实测到一次（同一套件单独复跑 17/17 全过），所以换成**轮询到达**：
+       给一段预算、每 100ms 采一次，采到目标增量就算过，同时记下全部采样点。
+       这比固定等待更强 —— 第二个目标追不上时，"跳一下就停"照样被抓。 */
+    const waitAdvance = async (from, delta, budgetMs) => {
+      const started = Date.now()
+      const samples = []
+      while (Date.now() - started < budgetMs) {
+        await sleep(100)
+        const now = Number(await sourceTimeOf(page))
+        samples.push(now)
+        if (now > from + delta) return { ok: true, samples, ms: Date.now() - started }
+      }
+      return { ok: false, samples, ms: Date.now() - started }
+    }
+
+    const first = await waitAdvance(before, 0.2, 3000)
+    const firstLast = first.samples.length ? first.samples[first.samples.length - 1] : NaN
+    /* 还在播 ⇒ 再要一段增量。只推进一次就停（跳一下就停）会在这里超时 */
+    const second = first.ok ? await waitAdvance(firstLast, 0.1, 3000) : { ok: false, samples: [], ms: 0 }
+    const secondLast = second.samples.length ? second.samples[second.samples.length - 1] : NaN
     await page.locator('.wb-transport-btns button.play').click()
     await sleep(200)
     const after = Number(await sourceTimeOf(page))
+    /* 采样序列必须单调不减：播放中倒退 = 回绕或接了别的素材，两者都是真缺陷 */
+    const rising = first.samples.every((v, i) => i === 0 || v >= first.samples[i - 1])
     check(
-      '真按播放键 ~1.2s → 预览的源时间连续推进（不是只画一帧，也不是跳一下就停）',
-      mid > before + 0.2 && after > mid,
-      `${before.toFixed(3)} → ${mid.toFixed(3)} → ${after.toFixed(3)}`
+      '真按播放键 → 预览的源时间连续推进（不是只画一帧，也不是跳一下就停）',
+      first.ok && second.ok && rising,
+      `${before.toFixed(3)} →(+${first.ms}ms) ${firstLast.toFixed(3)} →(+${second.ms}ms) ${secondLast.toFixed(3)}，暂停后 ${after.toFixed(3)}`
     )
 
     const realErrors = pageErrors.filter((text) => !/Failed to load resource|net::ERR|403|401/i.test(text))

@@ -61,6 +61,14 @@ export const IconSparkle = make(
   </>
 )
 
+export const IconPlugin = make(
+  <>
+    <rect x="3" y="3" width="8" height="8" rx="2" />
+    <rect x="13" y="13" width="8" height="8" rx="2" />
+    <path d="M13 7h4a2 2 0 0 1 2 2v4M11 17H7a2 2 0 0 1-2-2v-4" />
+  </>
+)
+
 export const IconMusic = make(
   <>
     <path d="M9 18V6l10-2v12" />
@@ -183,6 +191,22 @@ export const IconGift = make(
     <path d="M4.7 10.35h14.6v10.2a1 1 0 0 1-1 1H5.7a1 1 0 0 1-1-1z" />
     <path d="M12 5.75v15.8" />
     <path d="M12 5.75C10.9 2.85 8.5 2.45 7.7 3.45c-.9 1.1.4 2.3 4.3 2.3zM12 5.75c1.1-2.9 3.5-3.3 4.3-2.3.9 1.1-.4 2.3-4.3 2.3z" />
+  </>
+)
+
+/**
+ * 贴纸：一张**右下角掀起**的方纸 + 笑脸。
+ *
+ * 为什么不画成「笑脸」单形：顶栏「文字」用的是 IconText（T 字），「字幕」是 IconCaption，
+ * 再放一个纯笑脸会被读成表情按钮而不是「贴纸」这类元素。掀起一角是贴纸的通用语汇，
+ * 配上笑脸才同时说清"是什么"和"里面有什么"。
+ */
+export const IconSticker = make(
+  <>
+    <path d="M4.2 8.6a4.4 4.4 0 0 1 4.4-4.4h6.8a4.4 4.4 0 0 1 4.4 4.4v4.8c0 .5-.2 1-.6 1.4l-4.4 4.4c-.4.4-.9.6-1.4.6H8.6a4.4 4.4 0 0 1-4.4-4.4z" />
+    <path d="M13.4 19.1v-3.5a1.6 1.6 0 0 1 1.6-1.6h3.5" />
+    <path d="M9.7 10.6h.01M14.3 10.6h.01" />
+    <path d="M9.4 13.5c.7.9 1.6 1.4 2.6 1.4s1.9-.5 2.6-1.4" />
   </>
 )
 
@@ -433,6 +457,17 @@ export const IconRatio = make(
 export const IconFullscreen = make(
   <>
     <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+  </>
+)
+
+/**
+ * 适配全片：四个**向内收**的折角（= 把整条内容装进这个框）。
+ * 与 IconFullscreen（向外张）方向相反 —— 两者都是"四角"，靠内外区分语义：
+ * 一个是把窗口铺满，一个是把内容收进视口。混用会让人以为按钮是"全屏时间线"。
+ */
+export const IconFitAll = make(
+  <>
+    <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
   </>
 )
 

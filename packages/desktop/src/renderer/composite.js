@@ -320,9 +320,33 @@ function describeLayer(clip, assets, t, options = {}) {
     /* 「调整 / 美颜」—— 原样带过去，换算在 shared/adjust.js 里，两侧共用 */
     adjust: clip.adjust || null,
     beauty: clip.beauty || null,
+    /* 「曲线」（RGB 三通道）—— 同样原样带过去：预览把它编成 SVG 的 feComponentTransfer，
+       导出把它编成 ffmpeg 的 curves 串，查找表来自同一份 shared/curves.js。 */
+    /* 一级色轮：预览的 SVG 查找表与导出的 lutrgb 表达式同源（shared/wheels.js） */
+    wheels: clip.wheels || null,
+    curves: clip.curves || null,
+    /* 分区 HSL（八色带）：预览靠它烘 3D 纹理上传给 WebGL，导出写 .cube 交给 lut3d。
+       ⚠️ 漏了这一行不会报错 —— 面板照旧写回片段、滑杆照旧能动、脏点照旧亮，
+          只有画面一像素不变（导出反而是对的）。所以要靠 E2E 读画面上那层 GPU 画布。 */
+    hsl: clip.hsl || null,
     /* 「效果」—— 圆角 / 蒙版 / 抠像 / 混合 / 变形 / 描边 / 阴影。
        原样带过去，换算全在 shared/effects.js，两侧共用（见那份文件的说明）。 */
     effects: clip.effects || null,
+    /* 边框（内置边框库的一个 key，如 `br-basic-gold`）。
+       ⚠️ 与 `effects` 分开一个字段，理由不是"偷懒"：边框要的是**一张图**，
+          effects 那一整套是纯数值换算（圆角/蒙版/抠像…），把图塞进去会让
+          `isNeutralEffects` / 关键帧 / 面板脏点全部要跟着重算一遍。
+       预览把 key 换成 `yjai-media://` 地址画在片段自己的画框上（Stage.jsx），
+       导出让 render.js 把同一张 PNG 叠到片段画面上 —— 两侧读同一个 key。 */
+    border: clip.border || '',
+    /* 人物特效（套哪一款 + 强度）与它的「人脸框序列」。
+       ⚠️ 这两行漏掉的症状极具欺骗性：面板正常显示"已识别 N 个人脸位置"、
+          效果卡能点能高亮，但**预览一像素都不变**（导出反而是对的）——
+          因为 Stage 读的是 `composite.main`，而这里是那份投影的白名单。
+          同一件事要在三处同时接：本文件（投影）、Stage.jsx（预览）、
+          SidePanels.jsx（导出载荷）。 */
+    face: clip.face || null,
+    faceTrack: Array.isArray(clip.faceTrack) ? clip.faceTrack : null,
     /* 倍速。预览靠它设 playbackRate；**源时间的换算不在这里** ——
        那件事由 sourceTimeAt 负责（它内部乘了倍速），两者必须同时成立：
        只设 playbackRate 会让"画面起始点"错，只乘 sourceTime 会让"推进速度"错。 */

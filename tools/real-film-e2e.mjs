@@ -109,8 +109,18 @@ function findFilm() {
  * ⚠️ 候选里补 'ffprobe.exe'：Windows 上没有扩展名的裸名解析不到 PATH 上的可执行文件。
  */
 function findFfprobe() {
+  /* ffprobe 与 ffmpeg 一向同目录发行 ⇒ 谁给了 ffmpeg 的路径，就顺着它旁边找 ffprobe。
+   * 为什么补这一条（2026-10-28 实测）：本机把 FFMPEG_PATH 指到
+   * `D:\ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe`（该目录不在 PATH 上），
+   * 于是 ffmpeg 找得到、ffprobe 找不到 ——「与 ffprobe 一致」那 3 条整组 SKIP。
+   * 表现和"本机没装 ffprobe"一模一样，但那条断言其实能验，只是闸门没顺着路径找。
+   * 同一个目录里就躺着 ffprobe.exe，没有理由让它跳过。 */
+  const siblingOf = (file) => (file ? path.join(path.dirname(file), 'ffprobe.exe') : null)
   const candidates = [
     process.env.FFPROBE_PATH,
+    path.join(ROOT, 'resources', 'ffmpeg', 'ffprobe.exe'),
+    siblingOf(process.env.YIJAI_FFMPEG),
+    siblingOf(process.env.FFMPEG_PATH),
     path.join(ROOT, 'node_modules', 'ffmpeg-static', 'ffprobe.exe'),
     'ffprobe.exe',
     'ffprobe'

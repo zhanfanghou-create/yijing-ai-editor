@@ -553,6 +553,159 @@ function main() {
     )
   }
 
+  /* ---------- 10. 封面图：面板开 → options 带 → 主进程认 → 从成片抽 ---------- */
+  /**
+   * 封面是**附加产物**，所以它的失效比成片本身更隐蔽：成片好好地导出来了，
+   * 用户只是没拿到那张图，而导出流程一路报成功。四段接力缺任何一段都是这个症状：
+   *   ① 面板上开关画了、但 `options.cover` 没带 ⇒ 主进程根本不知道要抽；
+   *   ② `options` 没被 IPC 转发 ⇒ 同上（这一层以前坑过 backdrop）；
+   *   ③ render.js 不认 `options.cover` / 不调 shared/cover.js ⇒ 换算各写一份，
+   *      "面板显示第 3 秒、抽到第 3.03 秒"；
+   *   ④ 抽帧放在 `runRender` **之前** ⇒ 读的是上一轮的旧成片（或压根不存在）。
+   *      这一类最阴：第一次导出会失败并报错，第二次却"成功"抽到上一版的画面。
+   */
+  if (!/cover:\s*coverOn\s*\?/.test(panelsSrc)) {
+    fail('导出面板没有把封面开关发出去（options.cover）—— 勾了「导出封面图」也不会生成任何文件')
+  }
+  if (!/payload\.options/.test(mainSrc)) {
+    fail('render:start 没有把 options 透传给 renderTimeline —— options 里的封面到不了渲染器')
+  }
+  if (!/shared[\\/]cover\.js/.test(renderSrc)) {
+    fail(
+      'main/render.js 没有引用 shared/cover.js —— 夹取 / 帧对齐会与面板各写一份',
+      '两侧各写一份 ⇒ 面板写第 3 秒、抽到第 3.03 秒，逐帧核对时像是错了一帧'
+    )
+  }
+  if (!/await writeCover\s*\(/.test(renderSrc)) {
+    fail('main/render.js 里没有调用 writeCover —— 封面开关开了也不会有图')
+  } else {
+    const renderAt = renderSrc.indexOf('await runRender(')
+    const coverAt = renderSrc.indexOf('await writeCover(')
+    if (renderAt > 0 && coverAt > 0 && coverAt < renderAt) {
+      fail(
+        '抽封面写在 runRender 之前 —— 读到的是上一轮的旧成片（第二次导出才会"成功"抽到上一版画面）',
+        '成片是抽帧的输入，必须等它渲完'
+      )
+    }
+  }
+  if (!/coverTimeAt\(/.test(panelsSrc) || !/playhead/.test(panelsSrc)) {
+    fail('导出面板没有用播放头算封面时间点 —— 封面会永远抽在第 0 帧')
+  }
+  /* 渲染层 import 了 shared/cover.js ⇒ 必须同时在 vite 的 commonjs 白名单里，
+     否则拿到的是一个空对象：`coverTimeAt` 是 undefined，面板渲染时直接抛错（工作台白屏），
+     或者算出 NaN 传下去，抽帧悄悄从 0 秒开始。构建与静态扫描都看不见这一条。
+     用纯字符串包含判断（不写正则）：白名单里写的是 `cover\.js`（带转义），
+     正则要匹配它得叠四层反斜杠，那种判据自己就会写错，而写错的判据永远是绿的。 */
+  let viteSrc = ''
+  try {
+    viteSrc = read(path.join(root, 'packages', 'desktop', 'vite.config.mjs'))
+  } catch {
+    /* 读不到就当作"白名单缺失"处理（下面 fail 的那一条），不要在这里抛错 ——
+       抛错会走 exit 3（"没查成"），而实情是"查了、而且不对"。 */
+    viteSrc = ''
+  }
+  if (!viteSrc.includes('cover\\.js') || !viteSrc.includes('commonjsOptions')) {
+    fail(
+      'packages/desktop/vite.config.mjs 的 commonjsOptions.include 里没有 cover.js',
+      '渲染层 import 到的是空对象 ⇒ coverTimeAt 是 undefined，导出面板白屏或算出 NaN'
+    )
+  }
+
+  /* ------------------------------------------------------------------
+   * 帧率：必须是**档位**，而且两侧读同一份表
+   * ------------------------------------------------------------------
+   * 以前是个 `min=24 max=60 step=6` 的滑杆，只能落到 24/30/36/42/48/54/60：
+   *   ① 25 与 50（PAL / 国内电视台 / 大量商用素材）选不出来 ⇒ 只能导 30 再转一次，必掉帧；
+   *   ② 29.97 / 59.94（NTSC 母版）同样选不出来；
+   *   ③ 36 / 42 / 48 是不存在的交付规格。
+   * 这三条都不会报错，只会在交付时被人退回来，所以必须机械钉住。
+   */
+  if (!/data-export-fps/.test(panelsSrc) || !/EXPORT_RATE\.RATES\.map\(/.test(panelsSrc)) {
+    fail(
+      '导出面板的帧率不是从 shared/exportRate.js 的档位表生成的（缺 data-export-fps 或 RATES.map）',
+      '自造一份档位表 ⇒ 面板能选 29.97、主进程却按 30 渲，成片看起来完全正常'
+    )
+  }
+  /* 反向：帧率重新变回滑杆。滑杆本身不是错，错的是"连续量"这个形态 ——
+     step=6 的滑杆永远落不到 25 / 29.97。 */
+  if (/label="帧率"[\s\S]{0,120}?min=\{24\}/.test(panelsSrc)) {
+    fail('导出面板的帧率又变回滑杆了（min=24 step=6）', '滑杆落不到 25 / 50 / 29.97 / 59.94 这几个真实交付规格')
+  }
+  if (!/shared[\\/]exportRate\.js/.test(renderSrc)) {
+    fail(
+      'main/render.js 没有引用 shared/exportRate.js',
+      '帧率换算会与面板各写一份 ⇒ 面板写 29.97、主进程按 30 渲，或把 29.97 原样拼进滤镜（2997/100）'
+    )
+  }
+  if (!viteSrc.includes('exportRate\\.js')) {
+    fail(
+      'packages/desktop/vite.config.mjs 的 commonjsOptions.include 里没有 exportRate.js',
+      '渲染层 import 到的是空对象 ⇒ RATES 是 undefined，导出面板渲染时直接抛错（右栏白屏）'
+    )
+  }
+
+  /* ------------------------------------------------------------------
+   * 导出编码格式（容器 / 色深 / Alpha）五段接力
+   * ------------------------------------------------------------------
+   * 这一整条都是"成片照旧生成、时长画面全对，只是不是选的那个规格"：
+   *   ① 面板没发 `options.codec` ⇒ 选了 ProRes 4444，主进程仍按 H.264 的 MP4 编；
+   *   ② render.js 没有 shared/exportCodec.js ⇒ 像素格式各写一份，10bit 变 8 位；
+   *   ③ encodeArgs 里写死 `'yuv420p'` ⇒ 传了 10bit 格式也还是 8 位（参数在、没生效）；
+   *   ④ 压黑那步没排除"要留 alpha"的格式 ⇒ ProRes 4444 的 alpha 被整体写成 1，
+   *      那个格式就白选了（"导出带透明通道的素材"变成一句空话）；
+   *   ⑤ 保存对话框 / 落地路径的扩展名不跟着格式走 ⇒ 封装时 ffmpeg 才拒绝，
+   *      报的是 `Could not find tag for codec prores in stream #0`，没人能联想到"后缀错了"。
+   */
+  if (!panelsSrc.includes('codec: codecInfo.key')) {
+    fail(
+      '导出面板没有把编码格式发出去（options.codec）—— 面板上选了 ProRes / 10bit，成片仍是 H.264 的 MP4'
+    )
+  }
+  if (!/shared[\\/]exportCodec\.js/.test(renderSrc)) {
+    fail(
+      'main/render.js 没有引用 shared/exportCodec.js —— 容器 / 色深 / Alpha 会与面板各写一份'
+    )
+  }
+  /* encodeArgs 的函数体里不许再出现写死的位深像素格式：
+     参数表在那儿摆着，函数里另写一份就等于"选什么都没用"。 */
+  const encodeAt = renderSrc.indexOf('function encodeArgs')
+  if (encodeAt < 0) {
+    fail('main/render.js 里找不到 encodeArgs —— 这道契约查不下去了')
+  } else {
+    const encodeBody = renderSrc.slice(encodeAt, encodeAt + 2600)
+    if (/'yuv420p'|'nv12'|"yuv420p"/.test(encodeBody)) {
+      fail(
+        'encodeArgs 里写死了 8 位像素格式（yuv420p / nv12）—— 选了 10bit 也还是 8 位',
+        '像素格式必须走 exportCodec.pixelFormatFor（硬件编码器 10bit 要 p010le，软编是 yuv420p10le）'
+      )
+    }
+    if (!/pixelFormatFor\(/.test(encodeBody)) {
+      fail('encodeArgs 没有用 exportCodec.pixelFormatFor 取像素格式')
+    }
+  }
+  if (/needAlpha && !withBackdrop && finalDuration/.test(renderSrc) && !/!keepAlpha/.test(renderSrc)) {
+    fail(
+      '压黑那一步没有排除"要留 Alpha"的编码格式 —— ProRes 4444 导出的 alpha 会被整体写成 1',
+      '要的是"抠掉的部分到后期里还是透明的"，压黑正好把这件事抹掉'
+    )
+  }
+  if (!/exportCodec\.audioArgs\(/.test(renderSrc)) {
+    fail(
+      '音频参数没走 exportCodec.audioArgs —— MOV 里塞 AAC、或 MP4 里塞 PCM 都不会报错，只是有的播放器没声音'
+    )
+  }
+  if (!/exportCodec\.matchExtension\(/.test(mainSrc)) {
+    fail(
+      'render:start 没有按编码格式纠正输出扩展名 —— 选 ProRes 而路径还是 .mp4 时，ffmpeg 在封装那步才失败'
+    )
+  }
+  if (!viteSrc.includes('exportCodec\\.js')) {
+    fail(
+      'packages/desktop/vite.config.mjs 的 commonjsOptions.include 里没有 exportCodec.js',
+      '渲染层 import 到的是空对象 ⇒ CODECS 是 undefined，导出面板一渲染就抛错（右栏白屏）'
+    )
+  }
+
   for (const n of notes) console.log(`  · ${n}`)
   if (problems.length) {
     console.error('')

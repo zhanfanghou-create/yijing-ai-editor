@@ -477,11 +477,14 @@ try {
   await resize()
   await page.waitForTimeout(1200)
 
-  /* 防空转：八个功能标签都得在（素材 / 音频 / 文字 / 特效 / 转场 / 字幕 / 滤镜 / 调节）。
-     数字人页、贴纸页与在线素材页随那一版的功能一起删掉了，这里是新的基线；
-     「调节」是 2026-10-22 补的真功能（写 clip.adjust，与右栏「调整」页同源）。 */
+  /* 防空转：十二个功能标签都得在（素材 / 音频 / 文字 / 贴纸 / 特效 / 转场 / 字幕 /
+     滤镜 / 调节 / 模板 / 智能包装 / 插件）。数字人页与在线素材页随那一版的功能一起删掉了，
+     这里是新的基线；「调节」2026-10-22 补、「模板」与「智能包装」2026-10-30 补、
+     「插件」2026-10-31 补。
+     ⚠️ 这个数只用来"防空转"（标签没渲染出来时下面的量卡全都会变成 0 而照样通过），
+        真正的基线在 check-workbench-tree / check-templates / check-packaging / check-plugins 里。 */
   const tabCount = await page.$$eval('.wb-tab', (els) => els.length)
-  check('防空转 · 工作台有八个功能标签', tabCount === 8, `实测 ${tabCount} 个`)
+  check('防空转 · 工作台有十二个功能标签', tabCount === 12, `实测 ${tabCount} 个`)
 
   /**
    * 静态契约：「视频增强」的**前后对比白线**只许挂在 `.enh-grid.is-enhance` 下。

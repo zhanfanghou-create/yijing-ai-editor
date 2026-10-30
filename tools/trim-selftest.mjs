@@ -373,6 +373,170 @@ check(
 )
 check('目标片段不存在时返回空数组（不抛错）', trim.linkMovePatches(LINK_CLIPS, '不存在', 3, true).length === 0)
 
+/* ------------------------------------------- J. 组合成员并入同一段钳位算术 */
+
+/**
+ * 组合（Alt+G）与联动（同源音画）是两种绑定来源，但"拖一条带走一组"必须是**同一段**
+ * 钳位算术。分开写必然会在"往左拖到 0"那一刻算出两个不同的位移，表现是组员静默错位。
+ * 这一组钉的就是"两路来源并进同一个参与集合，只钳一次"。
+ */
+const GRP_CLIPS = [
+  { id: 'g1', assetId: 'A', start: 5, duration: 2, group: 'G' },
+  { id: 'g2', assetId: 'B', start: 6, duration: 2, group: 'G' },
+  { id: 'x1', assetId: 'C', start: 9, duration: 2 }
+]
+
+const grp = trim.linkMovePatches(GRP_CLIPS, 'g1', 8, true, ['g2'])
+check(
+  '组合：拖组员向右 3 秒，另一个组员同步 +3',
+  grp.length === 2 && grp.find((x) => x.id === 'g2')?.start === 9,
+  JSON.stringify(grp)
+)
+check(
+  '组合：组内间距守恒（g1 与 g2 的相对位置不变）',
+  (() => {
+    const a = grp.find((x) => x.id === 'g1')
+    const b = grp.find((x) => x.id === 'g2')
+    return near(b.start - a.start, 1)
+  })(),
+  JSON.stringify(grp)
+)
+
+const grpLeft = trim.linkMovePatches(GRP_CLIPS, 'g1', -10, true, ['g2'])
+check(
+  '组合：往左拖爆时整组被夹住，最早那一段落到 0（不是只夹被拖的）',
+  grpLeft.find((x) => x.id === 'g1')?.start === 0 &&
+    grpLeft.find((x) => x.id === 'g2')?.start === 1,
+  JSON.stringify(grpLeft)
+)
+
+const grpUnlinked = trim.linkMovePatches(GRP_CLIPS, 'g1', 7, false, ['g2'])
+check(
+  '组合不受联动开关影响（Ctrl+L 只管同源音画，不该把组合一起拆掉）',
+  grpUnlinked.length === 2 && grpUnlinked.find((x) => x.id === 'g2')?.start === 8,
+  JSON.stringify(grpUnlinked)
+)
+
+const grpPlain = trim.linkMovePatches(GRP_CLIPS, 'x1', 12, true)
+check(
+  '不在组合里也没有同源伙伴时，只动自己（extraIds 为空不能凭空带人）',
+  grpPlain.length === 1 && grpPlain[0].id === 'x1' && grpPlain[0].start === 12,
+  JSON.stringify(grpPlain)
+)
+
+check(
+  'extraIds 里出现被拖片段自己时不会重复返回',
+  trim.linkMovePatches(GRP_CLIPS, 'g1', 6, true, ['g1', 'g2']).length === 2,
+  JSON.stringify(trim.linkMovePatches(GRP_CLIPS, 'g1', 6, true, ['g1', 'g2']))
+)
+
+/* -------------------------------------------------- K. 批量分割（cutAllAt） */
+
+const CUT_CLIPS = [
+  { id: 'c1', track: 'video', start: 0, duration: 10, offset: 0 },
+  { id: 'c2', track: 'audio', start: 5, duration: 10, offset: 2 },
+  { id: 'c3', track: 'video', start: 10, duration: 4, offset: 0 },
+  { id: 'c4', track: 'overlay', start: 0, duration: 20, offset: 0 }
+]
+let cutSeq = 0
+const makeCutId = () => `cut_${(cutSeq += 1)}`
+const cut = trim.cutAllAt(CUT_CLIPS, 6, { lockedTracks: [], nextId: makeCutId })
+check(
+  '批量分割：跨过播放头的 3 段被切开（起点 10 的那段不切）',
+  cut.cuts.length === 3,
+  JSON.stringify(cut.cuts)
+)
+check(
+  '批量分割：片段总数 4 → 7（每切一段 +1）',
+  cut.clips.length === 7,
+  String(cut.clips.length)
+)
+check(
+  '批量分割：左半段结束点 = 播放头',
+  (() => {
+    const left = cut.clips.find((x) => x.id === 'c1')
+    return near(left.start, 0) && near(left.duration, 6)
+  })(),
+  JSON.stringify(cut.clips.find((x) => x.id === 'c1'))
+)
+check(
+  '批量分割：右半段起点 = 播放头，且入点按时间线差值累加',
+  (() => {
+    const right = cut.clips.find((x) => x.id === cut.cuts.find((c) => c.id === 'c2').rightId)
+    return near(right.start, 6) && near(right.offset, 3)
+  })(),
+  JSON.stringify(cut.clips.find((x) => x.id === cut.cuts.find((c) => c.id === 'c2').rightId))
+)
+check(
+  '批量分割：右半段入点必须乘倍速（2 倍速切 1 秒，源里要走 2 秒）',
+  (() => {
+    const once = trim.cutAllAt(
+      [{ id: 's1', track: 'video', start: 0, duration: 6, offset: 0, speed: 2 }],
+      1.5,
+      { nextId: makeCutId }
+    )
+    const right = once.clips.find((x) => x.id === once.cuts[0].rightId)
+    return near(right.offset, 3, 1e-6)
+  })()
+)
+check(
+  '批量分割：总时长不变（切一刀不增减内容）',
+  (() => {
+    const span = (list) => list.reduce((max, x) => Math.max(max, x.start + x.duration), 0)
+    return near(span(cut.clips), span(CUT_CLIPS))
+  })()
+)
+check(
+  '批量分割：锁定轨上的片段被跳过且计数',
+  (() => {
+    const locked = trim.cutAllAt(CUT_CLIPS, 6, { lockedTracks: ['audio'], nextId: makeCutId })
+    return locked.cuts.length === 2 && locked.skipped.locked === 1
+  })()
+)
+check(
+  '批量分割：复合片段被跳过（切开会让两半各带一份同一批子片段）',
+  (() => {
+    /* 夹具必须是**真实形状**：makeCompound 产出的片段带 `kind: 'compound'`，
+       判定走 shared/compound.js 的 isCompound。早先这条夹具只写了 `compound.children`
+       而漏了 kind，恰好让"自己臆造一个更松的条件"也能通过 —— 收紧判据时它才红。 */
+    const comp = trim.cutAllAt(
+      [{ id: 'p1', track: 'video', start: 0, duration: 8, kind: 'compound', compound: { children: [{ id: 'a' }] } }],
+      4,
+      { nextId: makeCutId }
+    )
+    return comp.cuts.length === 0 && comp.skipped.compound === 1
+  })()
+)
+check(
+  '批量分割：两侧不足最短时长时跳过（不切出抓不回来的碎段）',
+  (() => {
+    const thin = trim.cutAllAt([{ id: 't1', track: 'video', start: 0, duration: 1, offset: 0 }], 0.1, {
+      nextId: makeCutId
+    })
+    return thin.cuts.length === 0 && thin.skipped.tooShort === 1
+  })()
+)
+check(
+  '批量分割：播放头正好落在片段边界上时不切（0 秒的碎片没有意义）',
+  trim.cutAllAt(CUT_CLIPS, 10, { nextId: makeCutId }).cuts.every((c) => c.id !== 'c3')
+)
+check('批量分割：播放头非数字时原样返回、不抛', trim.cutAllAt(CUT_CLIPS, NaN, { nextId: makeCutId }).clips.length === 4)
+check(
+  '批量分割：缺 nextId 直接抛（不许静默返回空结果）',
+  (() => {
+    try {
+      trim.cutAllAt(CUT_CLIPS, 6, {})
+      return false
+    } catch (error) {
+      return error instanceof TypeError
+    }
+  })()
+)
+check(
+  '批量分割：每次切出来的 id 互不相同',
+  new Set(cut.cuts.map((c) => c.rightId)).size === cut.cuts.length
+)
+
 /* ------------------------------------------------------------------ 汇总 */
 
 const passed = results.filter((r) => r.ok).length

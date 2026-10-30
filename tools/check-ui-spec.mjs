@@ -21,11 +21,16 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const CSS = path.join(ROOT, 'packages/desktop/src/renderer/workbench.css')
-const STYLES = path.join(ROOT, 'packages/desktop/src/renderer/styles.css')
+const RENDERER = path.join(ROOT, 'packages/desktop/src/renderer')
+const CSS = path.join(RENDERER, 'workbench.css')
+const STYLES = path.join(RENDERER, 'styles.css')
+/* 首页那份也必须扫：它是"字号散在档外"最集中的地方（9/15/18 一度都在这里），
+   只扫工作台那一份就会留下一大片没人管的量表外字号。 */
+const HOME = path.join(RENDERER, 'home.css')
 const read = (file) => fs.readFileSync(file, 'utf8')
 const css = read(CSS)
 const styles = read(STYLES)
+const home = read(HOME)
 
 let pass = 0
 let fail = 0
@@ -64,22 +69,102 @@ function lastDecl(source, selector, prop) {
 
 console.log('· 设计令牌（量表唯一）')
 const TOKENS = [
-  '--fs-11', '--fs-12', '--fs-13', '--fs-15',
+  '--fs-10', '--fs-11', '--fs-12', '--fs-13', '--fs-14', '--fs-16', '--fs-20',
   '--ctl-sm', '--ctl-md', '--ctl-lg',
-  '--r-sm', '--r-md', '--r-lg',
+  '--r-sm', '--r-lg',
   '--gap-1', '--gap-2', '--gap-3', '--gap-4',
   '--state-hover', '--state-active', '--state-ring'
 ]
 const missing = TOKENS.filter((name) => !new RegExp(`${name}\\s*:`).test(css))
-check('规格令牌全部定义在 :root（字号 4 档 / 控件高 3 档 / 圆角 3 档 / 间距 4 档 / 状态层 3 个）',
+check('规格令牌全部定义在 :root（字号 7 档 / 控件高 3 档 / 圆角 2 档 / 间距 4 档 / 状态层 3 个）',
   missing.length === 0, missing.length ? `缺 ${missing.join(', ')}` : `${TOKENS.length} 个`)
+
+/**
+ * ⚠️ 已删除的令牌必须真的消失。
+ *
+ * 只查"新令牌在不在"是不够的：`--fs-15` / `--r-md` 留着不删，下次有人写
+ * `var(--fs-15)` 一样能通过 —— 而 15px 恰好是参考量表里**不存在**的那一档
+ * （它就是我们自己造出来、"看着不像一个软件"的元凶之一）。
+ */
+const STALE_TOKENS = ['--fs-15', '--r-md']
+const stale = STALE_TOKENS.filter((name) => new RegExp(`${name}\\s*:`).test(css))
+check('已废弃的令牌（15px 字号档 / 6px 圆角档）不许重新出现在 :root',
+  stale.length === 0, stale.length ? `仍定义 ${stale.join(', ')}` : '两个都清掉了')
+
+/**
+ * 字号不许出现档外值。
+ *
+ * 这是这道闸门存在的**初衷**：口径不统一不是审美问题，是"看着不像一个软件"。
+ * 上一轮普查里 9 / 15 / 18 三个档外值散在 17 处（首页卡片标题 18、弹窗标题 15、
+ * 各类角标 9）—— 构建全绿、静态扫描全绿，只有人盯着看才发现整屏的字重节奏是乱的。
+ *
+ * 唯一白名单是首页主标语 28px：它是按**实测墨高**（单字宽 26 / 墨高 28 / 行距 32）
+ * 定的展示性大字，不是控件文本；参考那边也不让它走 LVFont 量表。
+ */
+const SCALE = new Set(['10px', '11px', '12px', '13px', '14px', '16px', '20px'])
+const SCALE_EXEMPT = new Set(['28px'])
+/**
+ * 扫之前必须**去掉注释**：注释里写着 `border-radius: inherit` 这种"讲道理用的示例"
+ * （见 styles.css 里 innerShadow 那段），不去掉会被当成真声明收进错误列表 ——
+ * 那是一条永远修不掉的假红，而假红会训练人无脑忽略整道闸门。
+ */
+const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '')
+const offScale = []
+for (const [file, raw] of [
+  ['workbench.css', css],
+  ['styles.css', styles],
+  ['home.css', home]
+]) {
+  const source = stripComments(raw)
+  for (const m of source.matchAll(/font-size:\s*([^;}]+)/g)) {
+    const value = m[1].trim()
+    if (value.startsWith('var(')) continue
+    if (value === 'inherit' || value === '0') continue
+    if (SCALE.has(value) || SCALE_EXEMPT.has(value)) continue
+    offScale.push(`${file}: ${value}`)
+  }
+}
+check('三份 CSS 没有档外字号（10/11/12/13/14/16/20，唯一豁免首页主标语 28px）',
+  offScale.length === 0, offScale.length ? offScale.join('、') : '全部在档上')
+
+/**
+ * 圆角同样只许两档（4 / 8），加三类**按定义**的例外：
+ *   · 1px / 2px —— 分隔线与小标签，参考也是这么用的；
+ *   · 50% —— 正圆（头像、色点），与圆角档位无关；
+ *   · >= 99px —— 胶囊（= 高度的一半）。写成像素是为了不受高度变化影响。
+ * 上一轮普查里 3/5/6/7/9/10/11/12/14/15/16/21/30 十三个值并存，
+ * 同一个"卡片"在这屏圆 6、那屏圆 12 —— 这就是"看着不像一个软件"的第二个来源。
+ */
+const RADIUS_OK = new Set(['0', '1px', '2px', '4px', '8px', '50%', '50', 'inherit'])
+const offRadius = []
+for (const [file, raw] of [
+  ['workbench.css', css],
+  ['styles.css', styles],
+  ['home.css', home]
+]) {
+  const source = stripComments(raw)
+  for (const m of source.matchAll(/border-radius:\s*([^;}]+)/g)) {
+    /* 四角简写（`8px 8px 0 0`）逐项校验；百分比与 calc 一律放行（形态由内容决定） */
+    const parts = m[1].trim().split(/\s+/)
+    for (const part of parts) {
+      if (part.startsWith('var(') || part.startsWith('calc(') || part.endsWith('%')) continue
+      if (RADIUS_OK.has(part)) continue
+      const px = Number.parseFloat(part)
+      if (Number.isFinite(px) && px >= 99) continue // 胶囊
+      offRadius.push(`${file}: ${m[1].trim()}`)
+      break
+    }
+  }
+}
+check('三份 CSS 圆角只有 4/8 两档（1px 分隔线 / 2px 小标签 / 胶囊除外）',
+  offRadius.length === 0, offRadius.length ? offRadius.slice(0, 8).join('、') : '全部在档上')
 
 console.log('· 令牌要**被消费**（定义了没人用 = 量表还是散的）')
 const consumed = (name) => (css.match(new RegExp(`var\\(${name}\\)`, 'g')) || []).length
 const consumedTotal = TOKENS.reduce((sum, name) => sum + consumed(name), 0)
 check('令牌至少被引用 8 处（否则只是写了一份说明书）', consumedTotal >= 8, `${consumedTotal} 处`)
 check('功能标签消费量表（圆角/字号都不再写死）',
-  lastDecl(css, '.wb-tab', 'border-radius') === 'var(--r-md)' &&
+  lastDecl(css, '.wb-tab', 'border-radius') === 'var(--r-lg)' &&
   lastDecl(css, '.wb-tab', 'font-size') === 'var(--fs-12)',
   `圆角=${lastDecl(css, '.wb-tab', 'border-radius')} 字号=${lastDecl(css, '.wb-tab', 'font-size')}`)
 check('主按钮消费量表（圆角/字号）',

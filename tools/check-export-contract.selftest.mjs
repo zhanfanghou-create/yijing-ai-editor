@@ -36,11 +36,19 @@ const record = (label, ok, detail = '') => {
 
 /** 三个源文件的「完整契约」版本。刻意写小，只要结构像，判据就能套上 */
 const PANELS = `
+import { coverTimeAt } from '../../shared/cover.js'
+import * as EXPORT_RATE from '../../shared/exportRate.js'
 export default function SidePanels() {
+  const fps = EXPORT_RATE.readRate('29.97').fps
+  const fpsOptions = EXPORT_RATE.RATES.map((item) => item.id)
+  const resOptions = EXPORT_RATE.RESOLUTIONS.map((item) => item.id)
+  const fpsSelect = <select data-export-fps="1" value={fps} />
   const startRender = async () => {
+    const coverOn = true
+    const coverAt = coverTimeAt(playhead, 8, 25)
     const result = await bridge.render.start({
       outPath: target,
-      options: { width: 1920, height: 1080 },
+      options: { width: 1920, height: 1080, fps, codec: codecInfo.key, cover: coverOn ? { enabled: true, at: coverAt } : null },
       backdrop: backdrop || '',
       clips: clips.map((clip) => ({
         id: clip.id,
@@ -73,6 +81,13 @@ export default function SidePanels() {
 const RENDER = `
 const speed = require('../shared/speed.js')
 const effects = require('../shared/effects.js')
+const coverTable = require('../shared/cover.js')
+const exportRate = require('../shared/exportRate.js')
+const exportCodec = require('../shared/exportCodec.js')
+function encodeArgs(options, crf) {
+  const pixFmt = exportCodec.pixelFormatFor(options && options.codec, options && options.encoder)
+  return ['-c:v', 'libx264', '-pix_fmt', pixFmt]
+}
 function buildPlan({ clips, streamInfo, outPath, options, assumeVideoAudio = true, backdrop = '' }) {
   const list = clips.filter((clip) => clip.duration > 0.01)
   const videoClips = list.filter((clip) => clip.track !== 'audio' && clip.track !== 'text' && clip.track !== 'overlay')
@@ -106,8 +121,10 @@ function buildPlan({ clips, streamInfo, outPath, options, assumeVideoAudio = tru
   if (withBackdrop) {
     filters.push('[bgv]' + videoLabel + 'overlay=0:0:format=auto[vfin]')
   }
-  /* 带 alpha 又没背景时压到黑底：否则编码器直接丢掉 alpha，透明只存在于滤镜图里 */
-  if (needAlpha && !withBackdrop) {
+  /* 带 alpha 又没背景时压到黑底：否则编码器直接丢掉 alpha，透明只存在于滤镜图里。
+     但「要留 Alpha 的编码格式」（ProRes 4444）不能压 —— 压了 alpha 恒为 1。 */
+  const keepAlpha = exportCodec.acceptsAlpha(options && options.codec)
+  if (needAlpha && !withBackdrop && !keepAlpha && finalDuration > 0.05) {
     filters.push('color=c=black:s=1920x1080[blkbg]')
     filters.push('[blkbg]' + videoLabel + 'overlay=0:0:format=auto[vflat]')
   }
@@ -118,7 +135,10 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
   const stageBackdrop = backdropToLocal(backdrop)
   const effectMasks = await prepareEffectMasks(bin, clips, options)
   const plan = buildPlan({ clips, streamInfo, outPath, options, assumeVideoAudio: true, backdrop: stageBackdrop })
-  return plan
+  const audio = exportCodec.audioArgs(options && options.codec)
+  const result = await runRender(bin, plan.args)
+  const coverResult = await writeCover({ bin, outPath, cover: options.cover })
+  return { ...plan, coverPath: coverResult.path }
 }
 `
 
@@ -132,6 +152,7 @@ ipcMain.handle('render:start', async (event, payload) => {
     clips: (payload && payload.clips) || [],
     outPath,
     options: (payload && payload.options) || {},
+    outPath: exportCodec.matchExtension(outPath, payload && payload.options && payload.options.codec),
     backdrop: (payload && payload.backdrop) || '',
     signal: controller.signal
   })
@@ -155,6 +176,18 @@ export default function Stage({ asset, pip = null, backdrop = null }) {
 }
 `
 
+/* vite 的 commonjs 白名单。渲染层 import 的每个 shared/*.js 都必须在里面，
+   否则拿到的是空对象（面板白屏或算出 NaN），而构建与静态扫描都不报。 */
+const VITE = `
+export default defineConfig({
+  build: {
+    commonjsOptions: {
+      include: [/node_modules/, /shared[\\\\/]cover\\.js$/, /shared[\\\\/]exportRate\\.js$/, /shared[\\\\/]exportCodec\\.js$/]
+    }
+  }
+})
+`
+
 const mkRoot = (panels = PANELS, render = RENDER, main = MAIN, opts = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yjai-xc-'))
   const dirs = [
@@ -174,6 +207,7 @@ const mkRoot = (panels = PANELS, render = RENDER, main = MAIN, opts = {}) => {
   if (!opts.omitStage) {
     fs.writeFileSync(path.join(dirs[0], 'Stage.jsx'), opts.stage || STAGE)
   }
+  fs.writeFileSync(path.join(root, 'packages', 'desktop', 'vite.config.mjs'), opts.vite || VITE)
   return root
 }
 
@@ -358,7 +392,98 @@ try {
     if (!onPoint) failures += 1
   }
 
-  /* 17. 源文件缺失 → 退出码 2（"没查成"不能混进"查出问题"） */
+  /* 18. 面板漏发 options.cover → 必须红（勾了「导出封面图」也不会生成任何文件） */
+  {
+    const root = mkRoot(PANELS.replace(', cover: coverOn ? { enabled: true, at: coverAt } : null', ''))
+    const r = run(root)
+    expect('no-cover-field：退出码 1', r.status, 1)
+    const onPoint = /options\.cover/.test(r.out)
+    record('no-cover-field：报错点名 options.cover', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 19. 抽封面写在 runRender 之前 → 必须红（读到的会是上一轮的旧成片） */
+  {
+    const reversed = RENDER.replace(
+      '  const result = await runRender(bin, plan.args)\n  const coverResult = await writeCover({ bin, outPath, cover: options.cover })',
+      '  const coverResult = await writeCover({ bin, outPath, cover: options.cover })\n  const result = await runRender(bin, plan.args)'
+    )
+    const root = mkRoot(PANELS, reversed)
+    const r = run(root)
+    expect('cover-before-render：退出码 1', r.status, 1)
+    const onPoint = /runRender 之前/.test(r.out)
+    record('cover-before-render：报错点名「runRender 之前」', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 20. 帧率又变回滑杆 → 必须红（滑杆落不到 25 / 50 / 29.97 / 59.94） */
+  {
+    const slid = PANELS.replace(
+      'const fpsSelect = <select data-export-fps="1" value={fps} />',
+      'const fpsSelect = <Slider label="帧率" min={24} max={60} step={6} value={fps} onChange={setFps} />'
+    )
+    const root = mkRoot(slid)
+    const r = run(root)
+    expect('fps-slider：退出码 1', r.status, 1)
+    const onPoint = /滑杆/.test(r.out)
+    record('fps-slider：报错点名「滑杆」', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 21. 主进程不引用 exportRate → 必须红（帧率换算会与面板各写一份） */
+  {
+    const root = mkRoot(PANELS, RENDER.replace("const exportRate = require('../shared/exportRate.js')", ''))
+    const r = run(root)
+    expect('no-exportRate-in-render：退出码 1', r.status, 1)
+    const onPoint = /exportRate\.js/.test(r.out)
+    record('no-exportRate-in-render：报错点名 exportRate.js', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 22. vite 白名单漏 exportRate → 必须红（渲染层拿到空对象，右栏白屏）
+     ⚠️ 夹具的改法：把 `exportRate` 改个名字，等价于"白名单里没有这一条"，
+        但不用跟模板字符串里的反斜杠转义较劲 —— 那层转义写错一次，
+        这条反例就会"照样通过"，而它恰恰是用来证明检查器不是空转的。 */
+  {
+    const root = mkRoot(PANELS, RENDER, MAIN, { vite: VITE.replace('exportRate', 'exportRateX') })
+    const r = run(root)
+    expect('vite-missing-exportRate：退出码 1', r.status, 1)
+    const onPoint = /exportRate\.js/.test(r.out)
+    record('vite-missing-exportRate：报错点名 exportRate.js', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 23. encodeArgs 写死 8 位像素格式 → 必须红（选了 10bit 也还是 8 位） */
+  {
+    const root = mkRoot(PANELS, RENDER.replace("'-pix_fmt', pixFmt]", "'-pix_fmt', 'yuv420p']"))
+    const r = run(root)
+    expect('codec-hardcoded：退出码 1', r.status, 1)
+    const onPoint = /yuv420p/.test(r.out) && /pixelFormatFor|位像素格式|10bit/.test(r.out)
+    record('codec-hardcoded：报错点名写死的 yuv420p（不是泛泛一句）', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 24. 面板不发编码格式 → 必须红（选了 ProRes，成片还是 H.264 的 MP4） */
+  {
+    const root = mkRoot(PANELS.replace(' codec: codecInfo.key,', ''))
+    const r = run(root)
+    expect('no-codec-in-panels：退出码 1', r.status, 1)
+    const onPoint = /options\.codec/.test(r.out)
+    record('no-codec-in-panels：报错点名 options.codec', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 25. 压黑那步不排除「要留 Alpha 的格式」→ 必须红（ProRes 4444 白选） */
+  {
+    const root = mkRoot(PANELS, RENDER.replace('!keepAlpha && ', ''))
+    const r = run(root)
+    expect('alpha-flattened：退出码 1', r.status, 1)
+    const onPoint = /Alpha/.test(r.out) && /keepAlpha|压黑/.test(r.out)
+    record('alpha-flattened：报错点名压黑 / Alpha', onPoint)
+    if (!onPoint) failures += 1
+  }
+
+  /* 23. 源文件缺失 → 退出码 2（"没查成"不能混进"查出问题"） */
   {
     const root = mkRoot(PANELS, RENDER, MAIN, { omitPanels: true })
     const r = run(root)

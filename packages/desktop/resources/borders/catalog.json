@@ -1,0 +1,356 @@
+{
+  "source": "self",
+  "license": "own",
+  "origin": "程序生成（tools/gen-borders.py），无第三方素材",
+  "size": 1080,
+  "groups": [
+    {
+      "key": "basic",
+      "name": "基础",
+      "items": [
+        {
+          "key": "br-basic-white",
+          "name": "白框",
+          "file": "basic/br-basic-white.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 8349,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-basic-black",
+          "name": "黑框",
+          "file": "basic/br-basic-black.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 6723,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-basic-gold",
+          "name": "金边",
+          "file": "basic/br-basic-gold.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 17321,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-basic-round",
+          "name": "粗圆角",
+          "file": "basic/br-basic-round.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 14286,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "key": "retro",
+      "name": "复古",
+      "items": [
+        {
+          "key": "br-retro-film",
+          "name": "胶片",
+          "file": "retro/br-retro-film.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 9454,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-retro-polaroid",
+          "name": "拍立得",
+          "file": "retro/br-retro-polaroid.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 6933,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-retro-old",
+          "name": "旧照片",
+          "file": "retro/br-retro-old.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 62902,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-retro-scratch",
+          "name": "划痕",
+          "file": "retro/br-retro-scratch.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 32888,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "key": "minimal",
+      "name": "简约",
+      "items": [
+        {
+          "key": "br-min-line",
+          "name": "细线",
+          "file": "minimal/br-min-line.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 6944,
+          "alpha": [
+            0,
+            235,
+            0
+          ]
+        },
+        {
+          "key": "br-min-double",
+          "name": "双线",
+          "file": "minimal/br-min-double.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 7038,
+          "alpha": [
+            0,
+            248,
+            0
+          ]
+        },
+        {
+          "key": "br-min-corner",
+          "name": "角标",
+          "file": "minimal/br-min-corner.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 6460,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-min-dots",
+          "name": "圆点",
+          "file": "minimal/br-min-dots.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 18530,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "key": "festival",
+      "name": "节日",
+      "items": [
+        {
+          "key": "br-fest-xmas",
+          "name": "圣诞",
+          "file": "festival/br-fest-xmas.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 58261,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-fest-cny",
+          "name": "新春",
+          "file": "festival/br-fest-cny.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 11558,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-fest-confetti",
+          "name": "彩屑",
+          "file": "festival/br-fest-confetti.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 121545,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-fest-ice",
+          "name": "冰雪",
+          "file": "festival/br-fest-ice.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 22106,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "key": "texture",
+      "name": "纹理",
+      "items": [
+        {
+          "key": "br-tex-wood",
+          "name": "木纹",
+          "file": "texture/br-tex-wood.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 233810,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-tex-marble",
+          "name": "大理石",
+          "file": "texture/br-tex-marble.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 115934,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-tex-metal",
+          "name": "金属",
+          "file": "texture/br-tex-metal.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 64827,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-tex-fabric",
+          "name": "布纹",
+          "file": "texture/br-tex-fabric.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 27985,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "key": "creative",
+      "name": "创意",
+      "items": [
+        {
+          "key": "br-crea-neon",
+          "name": "霓虹",
+          "file": "creative/br-crea-neon.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 83408,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-crea-torn",
+          "name": "撕纸",
+          "file": "creative/br-crea-torn.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 175098,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "key": "br-crea-water",
+          "name": "水彩",
+          "file": "creative/br-crea-water.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 618884,
+          "alpha": [
+            0,
+            248,
+            0
+          ]
+        },
+        {
+          "key": "br-crea-star",
+          "name": "星光",
+          "file": "creative/br-crea-star.png",
+          "w": 1080,
+          "h": 1080,
+          "bytes": 49569,
+          "alpha": [
+            0,
+            255,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

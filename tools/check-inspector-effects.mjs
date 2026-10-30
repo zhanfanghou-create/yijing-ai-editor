@@ -60,9 +60,13 @@ const CLIPS = [
   {
     id: 'ifx_v',
     track: 'video',
-    assetId: 'ifx_a1',
+    assetId: 'ifx_a3',
     name: '画面片段',
-    kind: 'text',
+    /* ⚠️ 这一段必须是**真图**（kind=image + 真 url）：分区 HSL 的预览是叠在
+       画面元素上的一层 WebGL canvas，而占位卡（kind=text）根本没有画面元素可叠 ——
+       用占位卡当夹具时，HSL 那几条断言会"通过"，实际上一个像素都没验到。
+       PX_PNG 是 1×1，只用来让 `<img>` 真的 load 起来（尺寸由 CSS 拉满画框）。 */
+    kind: 'image',
     text: '画面',
     start: 0,
     duration: 6,
@@ -123,8 +127,15 @@ const ASSETS = [
  *  + 效果换算同源 10 条（effects.js：圆角/斜切/抠像/蒙版/混合/描边/阴影/关键帧/中性/xor 一致性）
  *  + 真机 22 条（原 11 中「四页签」已改成"整排页签 = 信息 + 画面/音频/变速/调整" 1
  *    + 效果面板 8
- *    + 右栏排版 3：「信息」横排且与「画面」同行 / 字幕片段[信息][字幕] / 点「字幕」真的换屏） */
-const TOTAL_ASSERTIONS = 44
+ *    + 右栏排版 3：「信息」横排且与「画面」同行 / 字幕片段[信息][字幕] / 点「字幕」真的换屏）
+ *
+ *  2026-10-28 曲线 +4（真机）：编辑器在「调整」页且默认归直 / 拖中点后画面层 computed
+ *  filter 引用 url(#yjai-curve-) / 生效的表恰 256 项且中点 > 0.6、首末仍是 0 与 1 /
+ *  点「归直」定义被撤掉。44 → 48。
+ *  2026-10-28 一级色轮 +6（真机）：四枚色环且默认在圆心 / 拖阴影环后手柄 x、y 都变负 /
+ *  画面层 computed filter 引用 url(#yjai-wheel-) / 蓝表首项抬起且红表首项被压住（方向没接反）/
+ *  拉中间调亮度后绿表中点抬高、两端不动 / 点「全部复位」定义被撤掉。48 → 54。 */
+const TOTAL_ASSERTIONS = 60
 
 /* --------------------------------------------------------- 输出与收尾 */
 
@@ -139,7 +150,15 @@ function check(name, ok, detail = '') {
 }
 
 function summary() {
-  const pass = TOTAL_ASSERTIONS - failures
+  /* ⚠️ 不能写 `pass = TOTAL_ASSERTIONS - failures`：那等于"少跑几条也照样满绿"。
+     原来就是这么写的 —— 一条断言压根没执行时，它既不计失败、又算作通过。
+     现在按**实际执行数**算，并把"少跑了"本身记成失败。 */
+  const missing = TOTAL_ASSERTIONS - emitted
+  if (missing > 0) {
+    failures += missing
+    console.log(`  [FAIL] 断言数不符：应收 ${TOTAL_ASSERTIONS} 项，实际执行 ${emitted} 项（少 ${missing} 项）`)
+  }
+  const pass = Math.max(0, emitted - (failures - Math.max(0, missing)))
   console.log(`\n=== 结果：通过 ${pass} 项 / 失败 ${failures} 项 ===`)
   console.log(`INSPECTOR_FX_STATS total=${TOTAL_ASSERTIONS} pass=${pass} fail=${failures}`)
   if (!failures && !aborted) console.log('INSPECTOR_FX_OK')
@@ -649,6 +668,341 @@ async function main() {
       '拖「色温」· 蓝增益 < 红增益（暖色是红升蓝降，不是整体提亮）',
       Number(matrixWarm.split(' ')[12]) < Number(matrixWarm.split(' ')[0]),
       `r=${matrixWarm.split(' ')[0]} b=${matrixWarm.split(' ')[12]}`
+    )
+
+    console.log('\n-- 三·补、曲线真的改预览 --\n')
+
+    /* 曲线是「逐像素重映射」，判据必须落在**真正生效的那张表**上：
+       读 SVG 定义里 feFuncR 的 tableValues（浏览器就是拿它算每个像素的新值），
+       以及画面层 computed filter 里有没有引用它。
+       只读面板上的折线形状是不够的 —— 折线画得再漂亮，没挂到层上等于没生效。 */
+    const curveIdle = await page.evaluate(() => {
+      const editor = document.querySelector('[data-ccurve-editor]')
+      return {
+        exists: Boolean(editor),
+        neutral: editor ? editor.getAttribute('data-ccurve-neutral') : '',
+        defs: document.querySelectorAll('[id^="yjai-curve-"]').length
+      }
+    })
+    check(
+      '「调整」页里有曲线编辑器，且默认是归直状态（不挂恒等滤镜）',
+      curveIdle.exists && curveIdle.neutral === '1' && curveIdle.defs === 0,
+      `编辑器=${curveIdle.exists} 中性=${curveIdle.neutral || '-'} 定义数=${curveIdle.defs}`
+    )
+
+    /* 一次手势完成「加一个中点 + 把它往上拖」：在正中按下 → 拖到四分之一高度处。
+       按下那一下会插一个 0.5/0.5 的点，随后的 move 拖的是同一个点（dragIndex 已置位）。
+       ⚠️ 必须先 scrollIntoViewIfNeeded：曲线是「调整」页里最后一节，
+          在 1032 高的窗口里默认落在可视区外 —— 直接拿 boundingBox 画坐标，
+          mouse 会点在窗口外（那里是时间线），结果是"顺手改了另一个片段的选中状态"，
+          报出来却是"曲线拖了没反应"。 */
+    const surfaceEl = page.locator('[data-ccurve-surface]')
+    await surfaceEl.scrollIntoViewIfNeeded()
+    await sleep(200)
+    const surface = await surfaceEl.boundingBox()
+    let dragAfterDown = '(未按下)'
+    if (!surface || surface.width < 20 || surface.height < 20) {
+      check('曲线画布可定位（否则下面三条无从谈起）', false, JSON.stringify(surface))
+    } else {
+      const cx = surface.x + surface.width * 0.5
+      const cy = surface.y + surface.height * 0.5
+      await page.mouse.move(cx, cy)
+      await page.mouse.down()
+      /* 按下与移动之间留一拍：拖拽监听是在 pointerdown 之后那次渲染里才订阅上的，
+         同一 tick 内连发 move 会全部落空（表现是"点下去加了点、拖了没动"）。 */
+      await sleep(150)
+      /* 诊断用：按下之后拖拽态必须是这个点 —— 空串说明组件被重挂过（状态丢了），
+         或者 onPointerDown 提前 return 了。两种失败的修法完全不同。 */
+      dragAfterDown = await page.evaluate(() => {
+        return `拖拽态=${document.querySelector('[data-ccurve-editor]')?.getAttribute('data-ccurve-drag') ?? '(无)'}`
+
+      })
+      await page.mouse.move(cx, surface.y + surface.height * 0.25, { steps: 6 })
+      await sleep(150)
+      await page.mouse.up()
+      await sleep(400)
+    }
+
+    const dragState = await page.evaluate(() => ({
+      drag: document.querySelector('[data-ccurve-editor]')?.getAttribute('data-ccurve-drag') ?? '(无属性)',
+      neutral: document.querySelector('[data-ccurve-editor]')?.getAttribute('data-ccurve-neutral') || '',
+      cys: Array.from(document.querySelectorAll('[data-ccurve-point]')).map((c) => Number(c.getAttribute('cy')).toFixed(1)).join('/'),
+      points: document.querySelectorAll('[data-ccurve-point]').length
+    }))
+
+    const curveLive = await page.evaluate(() => {
+      const fn = document.querySelector('[id^="yjai-curve-"] feFuncR')
+      const table = fn ? String(fn.getAttribute('tableValues') || '') : ''
+      const items = table ? table.trim().split(/\s+/) : []
+      const el = document.querySelector('.canvas-layer')
+      const filter = el ? getComputedStyle(el).filter || '' : ''
+      return {
+        filter,
+        count: items.length,
+        mid: items.length ? Number(items[Math.round((items.length - 1) / 2)]) : -1,
+        first: items.length ? Number(items[0]) : -1,
+        last: items.length ? Number(items[items.length - 1]) : -1
+      }
+    })
+    check(
+      '拖曲线中点 · 画面层的 computed filter 真的引用了一条曲线定义',
+      /url\("#?yjai-curve-/.test(curveLive.filter) || curveLive.filter.includes('yjai-curve'),
+      curveLive.filter.slice(0, 70) || '(空)'
+    )
+    check(
+      '拖曲线中点 · 生效的表是 256 项、中点被抬到 0.6 以上（真的是提亮曲线）',
+      curveLive.count === 256 && curveLive.mid > 0.6,
+      `${curveLive.count} 项，中点 ${curveLive.mid}；控制点 ${dragState.points} 个 cy=${dragState.cys}、${dragAfterDown}`
+    )
+    check(
+      '拖曲线中点 · 首末两项仍是 0 与 1（端点没被顺手改掉）',
+      Math.abs(curveLive.first) < 0.01 && Math.abs(curveLive.last - 1) < 0.01,
+      `首 ${curveLive.first} 末 ${curveLive.last}`
+    )
+
+    await page.locator('[data-ccurve-reset]').first().click({ timeout: 8000 })
+    await sleep(350)
+    const curveReset = await page.evaluate(() => ({
+      defs: document.querySelectorAll('[id^="yjai-curve-"]').length,
+      neutral: document.querySelector('[data-ccurve-editor]')?.getAttribute('data-ccurve-neutral') || '',
+      filter: (() => {
+        const el = document.querySelector('.canvas-layer')
+        return el ? getComputedStyle(el).filter || '' : ''
+      })()
+    }))
+    check(
+      '点「归直」· 曲线定义被撤掉（不留恒等滤镜，避免多一次 8bit 往返）',
+      curveReset.defs === 0 && curveReset.neutral === '1' && !curveReset.filter.includes('yjai-curve'),
+      `定义数=${curveReset.defs} 中性=${curveReset.neutral || '-'}`
+    )
+
+    console.log('\n-- 三·补二、一级色轮真的改预览 --\n')
+
+    /* 色轮与曲线同一个机制（256 项表 + feComponentTransfer），但**判据不同**：
+       曲线看形状（中点抬高），色轮要看**方向** —— 把阴影轮推到左下（蓝）之后，
+       蓝通道的黑位必须抬起来、红通道必须被压住。只看"表变了"是不够的：
+       方向接反（红蓝互换）时表照样变了，画面却是暖的。 */
+    const wheelIdle = await page.evaluate(() => {
+      const editor = document.querySelector('[data-wheel-editor]')
+      return {
+        exists: Boolean(editor),
+        neutral: editor ? editor.getAttribute('data-wheel-neutral') : '',
+        wheels: document.querySelectorAll('[data-wheel-slot]').length,
+        defs: document.querySelectorAll('[id^="yjai-wheel-"]').length
+      }
+    })
+    check(
+      '「调整」页里有四枚色环，且默认全在圆心（不挂恒等滤镜）',
+      wheelIdle.exists && wheelIdle.neutral === '1' && wheelIdle.wheels === 4 && wheelIdle.defs === 0,
+      `编辑器=${wheelIdle.exists} 色环=${wheelIdle.wheels} 中性=${wheelIdle.neutral || '-'} 定义数=${wheelIdle.defs}`
+    )
+
+    const shadowSlot = page.locator('[data-wheel-slot="shadow"]')
+    await shadowSlot.scrollIntoViewIfNeeded()
+    await sleep(200)
+    const shadowBox = await shadowSlot.boundingBox()
+    if (!shadowBox || shadowBox.width < 20) {
+      check('阴影色环可定位（否则下面三条无从谈起）', false, JSON.stringify(shadowBox))
+    } else {
+      /* 点「左下」四分之一点：x = -0.5、y = -0.5 ⇒ 色相 225°，是蓝紫方向 */
+      await page.mouse.move(shadowBox.x + shadowBox.width * 0.25, shadowBox.y + shadowBox.height * 0.75)
+      await page.mouse.down()
+      await sleep(120)
+      await page.mouse.move(shadowBox.x + shadowBox.width * 0.25, shadowBox.y + shadowBox.height * 0.76, { steps: 4 })
+      await page.mouse.up()
+      await sleep(400)
+    }
+
+    const wheelLive = await page.evaluate(() => {
+      const fnOf = (ch) => document.querySelector(`[id^="yjai-wheel-"] feFunc${ch}`)
+      const tableOf = (ch) => {
+        const fn = fnOf(ch)
+        const raw = fn ? String(fn.getAttribute('tableValues') || '').trim() : ''
+        return raw ? raw.split(/\s+/) : []
+      }
+      const pos = (() => {
+        const slot = document.querySelector('[data-wheel-slot="shadow"]')
+        return slot ? `${slot.getAttribute('data-wheel-x')}/${slot.getAttribute('data-wheel-y')}` : '(无)'
+      })()
+      const el = document.querySelector('.canvas-layer')
+      return {
+        pos,
+        drag: document.querySelector('[data-wheel-editor]')?.getAttribute('data-wheel-drag') ?? '(无)',
+        filter: el ? getComputedStyle(el).filter || '' : '',
+        r: tableOf('R'),
+        b: tableOf('B')
+      }
+    })
+    check(
+      '拖阴影色环 · 手柄真的挪到了左下（x/y 都变成负的）',
+      /^-/.test(wheelLive.pos.split('/')[0] || '') && /^-/.test(wheelLive.pos.split('/')[1] || '') && wheelLive.pos !== '(无)',
+      `手柄位置 x/y = ${wheelLive.pos}`
+    )
+    check(
+      '拖阴影色环 · 画面层的 computed filter 真的引用了一条色轮定义',
+      wheelLive.filter.includes('yjai-wheel'),
+      wheelLive.filter.slice(0, 70) || '(空)'
+    )
+    const bFirst = wheelLive.b.length ? Number(wheelLive.b[0]) : -1
+    const rFirst = wheelLive.r.length ? Number(wheelLive.r[0]) : -1
+    check(
+      '阴影推蓝 · 蓝通道黑位被抬起、红通道黑位被压住（方向没接反）',
+      wheelLive.b.length === 256 && bFirst > 0.05 && rFirst < 0.02,
+      `蓝表首项 ${bFirst}、红表首项 ${rFirst}（各 ${wheelLive.b.length} 项）`
+    )
+
+    /* 亮度滑杆与手柄必须作用在同一处：拉中间调的亮度，表中点要动，而两端不动。
+       ⚠️ 先复位再拉：阴影轮还推着蓝的时候，绿通道带着 lift（末端 0.93、中点被压低），
+          这一条会红在"两端不动"上 —— 那不是滑杆坏了，是判据没隔离变量。 */
+    await page.locator('[data-wheel-clear]').click({ timeout: 8000 })
+    await sleep(300)
+    const levelSet = await page.evaluate(() => {
+      const input = document.querySelector('[data-wheel-level="mid"]')
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, '85')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })
+    await sleep(400)
+    const midTable = await page.evaluate(() => {
+      const fn = document.querySelector('[id^="yjai-wheel-"] feFuncG')
+      const raw = fn ? String(fn.getAttribute('tableValues') || '').trim() : ''
+      const items = raw ? raw.split(/\s+/) : []
+      return {
+        count: items.length,
+        mid: items.length ? Number(items[Math.round((items.length - 1) / 2)]) : -1,
+        first: items.length ? Number(items[0]) : -1,
+        last: items.length ? Number(items[items.length - 1]) : -1
+      }
+    })
+    check(
+      '拉中间调亮度 · 绿通道的表中点被抬高、两端不动（真的是 gamma 而不是整体提亮）',
+      levelSet && midTable.count === 256 && midTable.mid > 0.6
+      && Math.abs(midTable.first) < 0.02 && Math.abs(midTable.last - 1) < 0.02,
+      `中点 ${midTable.mid}、两端 ${midTable.first}/${midTable.last}`
+    )
+
+    await page.locator('[data-wheel-clear]').click({ timeout: 8000 })
+    await sleep(350)
+    const wheelReset = await page.evaluate(() => ({
+      defs: document.querySelectorAll('[id^="yjai-wheel-"]').length,
+      neutral: document.querySelector('[data-wheel-editor]')?.getAttribute('data-wheel-neutral') || '',
+      filter: (() => {
+        const el = document.querySelector('.canvas-layer')
+        return el ? getComputedStyle(el).filter || '' : ''
+      })()
+    }))
+    check(
+      '点「全部复位」· 色轮定义被撤掉（不留恒等滤镜）',
+      wheelReset.defs === 0 && wheelReset.neutral === '1' && !wheelReset.filter.includes('yjai-wheel'),
+      `定义数=${wheelReset.defs} 中性=${wheelReset.neutral || '-'}`
+    )
+
+    console.log('\n-- 三·补三、分区 HSL 真的改预览 --\n')
+
+    /* 分区 HSL 与曲线/色轮**不是同一个机制**：那两套是逐通道一维表（SVG 滤镜），
+       这一套是 3D LUT —— `权重 = f(像素色相)` 用 feColorMatrix / feComponentTransfer
+       都表达不出来，所以预览另起一块 WebGL canvas 盖在画面上、导出写成 .cube。
+       判据因此也不同：这里不看 filter，看**画面上到底由谁来显示像素**。 */
+    const hslIdle = await page.evaluate(() => {
+      const editor = document.querySelector('[data-hsl-editor]')
+      return {
+        exists: Boolean(editor),
+        active: editor ? editor.getAttribute('data-hsl-active') : '',
+        bands: document.querySelectorAll('[data-hsl-band]').length,
+        dirty: document.querySelectorAll('[data-hsl-band] [data-hsl-dirty]').length,
+        canvases: document.querySelectorAll('[data-hsl-canvas]').length,
+        reset: document.querySelectorAll('[data-reset="hsl"]').length
+      }
+    })
+    check(
+      '「调节」页有分区 HSL 面板：八个色带、默认全中性（不建 WebGL 上下文、不出复位键）',
+      hslIdle.exists && hslIdle.bands === 8 && hslIdle.active === 'red'
+      && hslIdle.canvases === 0 && hslIdle.reset === 0,
+      `色带=${hslIdle.bands} 当前=${hslIdle.active || '-'} 脏点=${hslIdle.dirty} 画布=${hslIdle.canvases} 复位键=${hslIdle.reset}`
+    )
+
+    /* ⚠️ 按 `data-slider` 钩子找，不按标签文字找：八个色带的滑杆文字是
+       「红 · 饱和度」「橙 · 饱和度」……，`startsWith('红')` 在切过带之后会串到别的带上。
+       钩子里带带名（`hsl-s-red`），切带也不会错。 */
+    const hslSet = await page.evaluate(() => {
+      const input = document.querySelector('[data-slider="hsl-s-red"]')
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, '80')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })
+    await sleep(700)
+
+    const hslLive = await page.evaluate(() => {
+      const canvas = document.querySelector('[data-hsl-canvas]')
+      /* 画布与源画面是**同一个容器的兄弟节点**（Previews 的 fragment）：
+         从 canvas 往上找一层再取 img，才不会取到画中画那一层的图。 */
+      const host = canvas ? canvas.parentElement : null
+      const source = host ? host.querySelector('img, video') : null
+      const natural = source
+        ? (source.tagName === 'IMG' ? source.naturalWidth : source.videoWidth)
+        : -1
+      return {
+        canvases: document.querySelectorAll('[data-hsl-canvas]').length,
+        flag: canvas ? canvas.getAttribute('data-hsl-canvas') : '',
+        width: canvas ? canvas.width : -1,
+        height: canvas ? canvas.height : -1,
+        natural,
+        vis: source ? getComputedStyle(source).visibility : '-',
+        failNote: document.querySelectorAll('[data-hsl-fail]').length,
+        layerHook: document.querySelector('.canvas-layer')?.getAttribute('data-hsl') || '',
+        dirtyRed: Boolean(document.querySelector('[data-hsl-band="red"] [data-hsl-dirty]')),
+        reset: document.querySelectorAll('[data-reset="hsl"]').length,
+        /* 画面上有几张图、各自被藏没藏：断言失败时一眼看出"是 HSL 没接上"
+           还是"夹具根本不是一张图"（占位卡没有画面元素可叠）。 */
+        imgs: Array.from(document.querySelectorAll('.canvas-frame img')).map((el) => `${el.getAttribute('alt') || '(无名)'}:${getComputedStyle(el).visibility}:${el.naturalWidth}`)
+      }
+    })
+    check(
+      '拉红带饱和度 · 画面上真的叠出了一层 GPU 处理层',
+      hslSet && hslLive.canvases === 1 && hslLive.flag === '1',
+      `设置成功=${hslSet} 画布数=${hslLive.canvases} 标记=${hslLive.flag || '-'} 层钩子=${hslLive.layerHook || '-'}`
+    )
+    check(
+      '拉红带饱和度 · 原画面被藏起来（否则盖住的是没调过色的旧像素，看着"调了没变"）',
+      hslLive.vis === 'hidden',
+      `源画面 visibility=${hslLive.vis}`
+    )
+    /* 这一条挡的是「图片开了 HSL 直接黑屏」：canvas 的宽高只有在 uploadSource 里
+       才会被写成源尺寸；没上传过就是默认的 300×150。图片和视频两条路径都要能传上去
+       （图片曾经因为 <img> 上没有 ref 而完全传不进去）。 */
+    check(
+      'GPU 处理层真的按源尺寸上传过一帧（不是 300×150 的空画布）',
+      hslLive.width === hslLive.natural && hslLive.width > 0 && hslLive.height > 0,
+      `画布 ${hslLive.width}×${hslLive.height}，源 ${hslLive.natural}；失败提示 ${hslLive.failNote} 个；画面元素 ${hslLive.imgs.join(' / ') || '(无)'}`
+    )
+    check(
+      '被调过的色带亮了脏点、分节上出了复位键（24 个参数只看三根滑杆时，这条是唯一的记忆）',
+      hslLive.dirtyRed && hslLive.reset === 1,
+      `红带脏点=${hslLive.dirtyRed} 复位键=${hslLive.reset}`
+    )
+
+    await page.locator('[data-reset="hsl"]').first().click({ timeout: 8000 })
+    await sleep(450)
+    const hslReset = await page.evaluate(() => {
+      const canvases = document.querySelectorAll('[data-hsl-canvas]').length
+      const imgs = Array.from(document.querySelectorAll('.canvas-frame img, .canvas-frame video'))
+      return {
+        canvases,
+        reset: document.querySelectorAll('[data-reset="hsl"]').length,
+        dirty: document.querySelectorAll('[data-hsl-band] [data-hsl-dirty]').length,
+        allVisible: imgs.every((el) => getComputedStyle(el).visibility !== 'hidden')
+      }
+    })
+    check(
+      '点分节复位 · GPU 层被卸掉、画面回到原生元素（上下文不留着占显卡）',
+      hslReset.canvases === 0 && hslReset.reset === 0 && hslReset.dirty === 0 && hslReset.allVisible,
+      `画布=${hslReset.canvases} 复位键=${hslReset.reset} 脏点=${hslReset.dirty} 画面复原=${hslReset.allVisible}`
     )
 
     console.log('\n-- 四、美颜真的改预览 --\n')

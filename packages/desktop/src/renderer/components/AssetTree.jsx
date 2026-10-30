@@ -75,6 +75,40 @@ const TEXT_ART_CHILDREN = [
   { key: 'art-g7', label: '绿色', plain: true, panel: 'text-style', textStyle: 7 }
 ]
 
+/**
+ * 贴纸页的分组（顺序即面板里的显示顺序）。
+ *
+ * ⚠️ 这里的 `key` 必须与 `resources/stickers/catalog.json` 里的 group key 一一对应
+ *    —— 面板按它筛，对不上就是"点了分类、中栏空着"。两者都改过的可能性不高，
+ *    但**分叉时不会报错**，所以由 `tools/check-stickers.mjs` 把两边的 key 与中文名
+ *    逐条比对（静态表 ↔ 真清单）。
+ * ⚠️ 分组名是界面文案：写成"表情"而不是"笑脸"，因为这一组里同时有哭、怒、思考。
+ */
+const STICKER_GROUP_CHILDREN = [
+  { key: 'stk-g-face', label: '表情', plain: true, panel: 'sticker', sticker: 'face' },
+  { key: 'stk-g-hand', label: '手势', plain: true, panel: 'sticker', sticker: 'hand' },
+  { key: 'stk-g-heart', label: '心形', plain: true, panel: 'sticker', sticker: 'heart' },
+  { key: 'stk-g-spark', label: '闪亮', plain: true, panel: 'sticker', sticker: 'spark' },
+  { key: 'stk-g-party', label: '庆祝', plain: true, panel: 'sticker', sticker: 'party' },
+  { key: 'stk-g-animal', label: '动物', plain: true, panel: 'sticker', sticker: 'animal' },
+  { key: 'stk-g-food', label: '美食', plain: true, panel: 'sticker', sticker: 'food' },
+  { key: 'stk-g-mark', label: '标记', plain: true, panel: 'sticker', sticker: 'mark' }
+]
+
+/**
+ * 「模板」左栏的三组。
+ *
+ * ⚠️ `template` 字段是 shared/templates.json 里 group 的 key，**不是**中文名 ——
+ *    面板按 key 筛，写成中文名就是"点了分类、中栏空着"。
+ *    两边都是字面量，分叉时不会报错，所以由 tools/templates-selftest.mjs
+ *    比对「分组表 ↔ 真数据」，再由 tools/check-templates.mjs 核对左栏与数据一致。
+ */
+const TEMPLATE_GROUP_CHILDREN = [
+  { key: 'tpl-g-open', label: '开场', plain: true, panel: 'template', template: 'open' },
+  { key: 'tpl-g-end', label: '结尾', plain: true, panel: 'template', template: 'end' },
+  { key: 'tpl-g-pack', label: '字幕套', plain: true, panel: 'template', template: 'pack' }
+]
+
 /** 每个一级标签下的左栏树 */
 export const WB_TREE = {
   media: {
@@ -140,6 +174,19 @@ export const WB_TREE = {
         children: TEXT_ART_CHILDREN
       }
     ]
+  },
+  sticker: {
+    /* 内置贴纸库：八个分类，取自 `resources/stickers/catalog.json`（140 枚）。
+       没有「收藏」—— 收藏要有用户素材库，与滤镜/转场页同一处理（暂缺，不摆空入口）。 */
+    root: {
+      key: 'sticker-root',
+      label: '贴纸',
+      caret: true,
+      panel: 'sticker',
+      sticker: 'face',
+      children: STICKER_GROUP_CHILDREN
+    },
+    items: []
   },
   subtitle: {
     /* 字幕样式（自定义）+ 手写 / 新建字幕。所有字幕都是本机编辑的内容，
@@ -239,7 +286,17 @@ export const WB_TREE = {
         { key: 'ef-g6', label: '粒子', plain: true, panel: 'effect', material: 'effects:6' },
         { key: 'ef-g7', label: '动漫', plain: true, panel: 'effect', material: 'effects:7' },
         { key: 'ef-g8', label: '节日', plain: true, panel: 'effect', material: 'effects:8' },
-        { key: 'ef-g9', label: '爱心', plain: true, panel: 'effect', material: 'effects:9' }
+        { key: 'ef-g9', label: '爱心', plain: true, panel: 'effect', material: 'effects:9' },
+        /* 「边框」不是画面特效的又一个分类，而是**另一类素材**：
+           特效改的是画面像素（CSS 动画 / ffmpeg 滤镜），边框是往片段画框上
+           叠一张 PNG。所以它的 panel 与数据源都不同（走内置边框库）。
+           参考客户端的「边框」在素材中心里，同样是与特效并列的一项。 */
+        { key: 'ef-gb', label: '边框', plain: true, panel: 'border' },
+        /* 「人物特效」在参考里与「画面特效」并列（特效页的两个大类）。
+           本工程的左栏是单根结构（tree.root 只有一个），所以挂在"视频特效"
+           根下作为一项 —— 面板与数据源完全独立（panel: 'facefx'），
+           与上面那些 `material: 'effects:N'` 的分组不是一回事。 */
+        { key: 'ef-face', label: '人物特效', plain: true, panel: 'facefx' }
       ]
     },
     items: []
@@ -260,6 +317,60 @@ export const WB_TREE = {
         { key: 'ad-g2', label: '风景', plain: true, panel: 'adjust', material: 'adjust:2' },
         { key: 'ad-g3', label: '美食', plain: true, panel: 'adjust', material: 'adjust:3' },
         { key: 'ad-g4', label: '夜景', plain: true, panel: 'adjust', material: 'adjust:4' }
+      ]
+    },
+    items: []
+  },
+  template: {
+    /* 「模板」：左栏三组（开场 / 结尾 / 字幕套），中栏是卡片网格。
+       与贴纸不同的是 —— 它不是"往画面拖一个东西"，而是**一次往时间线加一串片段**，
+       所以这一页没有搜索框（12 款一屏看得完），也不需要素材文件。 */
+    root: {
+      key: 'template-root',
+      label: '模板',
+      caret: true,
+      panel: 'template',
+      template: 'open',
+      children: TEMPLATE_GROUP_CHILDREN
+    },
+    items: []
+  },
+  packaging: {
+    /* 「智能包装」：左栏两项 = 两种包装对象。
+       **不是**两组风格 —— 风格在面板里选，左栏是"包谁"：
+         口播包装 → 改文字轨（样式 / 关键句放大 / 配贴纸）；
+         画面包装 → 改主轨（统一边框 + 调色）。
+       两项共用 panel 'packaging'，靠 packMode 区分。 */
+    root: {
+      key: 'pack-root',
+      label: '智能包装',
+      caret: true,
+      panel: 'packaging',
+      packMode: 'line',
+      children: [
+        { key: 'pack-line', label: '口播包装', plain: true, panel: 'packaging', packMode: 'line' },
+        { key: 'pack-scene', label: '画面包装', plain: true, panel: 'packaging', packMode: 'scene' }
+      ]
+    },
+    items: []
+  },
+  plugin: {
+    /* 「插件」：本工程装的是**素材包**（自定义边框 / 贴纸），不是参考的 .ofx 原生特效。
+       左栏三项 = "看什么"，不是三个来源：
+         我的插件 → 全部列表（导入 / 启停 / 删除都在这里）；
+         我的边框 → 筛 kind=border 的；
+         我的贴纸 → 筛 kind=sticker 的。
+       后两项是给"我就想找自己的边框"这个动作准备的 —— 免得在插件列表里翻。 */
+    root: {
+      key: 'plugin-root',
+      label: '插件',
+      caret: true,
+      panel: 'plugin',
+      pluginTab: 'mine',
+      children: [
+        { key: 'plug-mine', label: '我的插件', plain: true, panel: 'plugin', pluginTab: 'mine' },
+        { key: 'plug-border', label: '我的边框', plain: true, panel: 'plugin', pluginTab: 'border' },
+        { key: 'plug-sticker', label: '我的贴纸', plain: true, panel: 'plugin', pluginTab: 'sticker' }
       ]
     },
     items: []

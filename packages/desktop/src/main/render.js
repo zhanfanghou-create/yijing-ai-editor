@@ -15,14 +15,61 @@ const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+/* 分区 HSL 的 .cube 文件名按内容哈希：同一组参数只落一次盘 */
+const { createHash } = require('node:crypto')
 const looks = require('./looks')
 const subtitles = require('./subtitles')
+/* 内置边框库（与主进程 index.js 共用 materialPack.js 的读取器）。
+   这里只用它把 `clip.border` 这个 key 换成磁盘上的 PNG。 */
+const borders = require('./borders')
+/* 人物特效：几何（框 / 插值 / sendcmd）用 shared 那一份，素材路径用 main/facefx.js */
+const facefx = require('../shared/facefx')
+const faceAssets = require('./facefx')
+
+/**
+ * 边框 key → 磁盘 PNG。
+ *
+ * ⚠️ 渲染层传过来的是 **key**（`br-basic-gold`），不是路径 —— 路径必须由主进程自己算。
+ *    两边各算一份的下场是"预览里有边框、成片里没有"：安装目录不一样就失效，
+ *    而导出流程一句错都不报（正是 check-export-contract 要挡的那类）。
+ * ⚠️ 清单进程内缓存一次：一条时间线上有几十段、每段都要查一次 catalog.json 的话，
+ *    导出会在开头卡住几秒，看起来像"点了导出没反应"。
+ * ⚠️ 查不到就返回空串 = 这一段没有边框。**不许**在这里编一个默认边框顶上。
+ */
+let borderIndex = null
+function borderFileOf(key) {
+  const want = String(key || '')
+  if (!want) return ''
+  if (!borderIndex) {
+    const map = new Map()
+    /* appPath 不传：`mainDir` 这一条在开发与打包两种情形下都成立（见 materialPack.js） */
+    const read = borders.readCatalog({ resourcesPath: process.resourcesPath, mainDir: __dirname })
+    for (const item of read.items) map.set(item.key, item.abs)
+    /* 空表不缓存：素材万一这会儿还没就绪，下一次导出还能再试一次 */
+    if (map.size) borderIndex = map
+    else return ''
+  }
+  return borderIndex.get(want) || ''
+}
 const PIP = require('../shared/pip.json')
 /* 倍速的真源：与渲染层**同一份**（各写一份就会有一边漏掉倍速，
    症状是"预览与成片速度不一致"，两边单独看都没错）。 */
 const speed = require('../shared/speed.js')
 /* 调节 / 美颜：与渲染层共用同一份（预览的 CSS 与这里的 ffmpeg 串从同一个数推出来） */
 const adjust = require('../shared/adjust.js')
+/**
+ * 导出封面（把某一帧导成封面图）。换算与 ffmpeg 参数都在 shared 那份里 ——
+ * 面板要显示"封面取第几帧"，两边必须同一套夹取/帧对齐，否则显示的时间与
+ * 抽出来的画面差一帧，只有人眼逐帧核对才发现。
+ */
+const coverTable = require('../shared/cover.js')
+/**
+ * 导出规格（帧率档 / 分辨率档）真源。
+ * ⚠️ 与渲染层导出面板读的是**同一份**：面板显示 29.97，主进程拼进 ffmpeg 的必须是
+ * `30000/1001`。两边各写一份的话，面板上写着 29.97、成片 timebase 却是 2997/100，
+ * 而画面看起来完全正常 —— 只有交付时被 QC 工具退回来才知道。
+ */
+const exportRate = require('../shared/exportRate.js')
 /**
  * 「效果」真源（圆角 / 蒙版 / 抠像 / 混合 / 变形 / 描边 / 阴影）。
  * ⚠️ 与渲染层 Stage.jsx 读的是**同一份**换算 —— 这里绝不允许再写一遍三角函数或颜色解析，
@@ -42,6 +89,12 @@ const audiofx = require('../shared/audio.js')
 /* 倒放：导出是 ffmpeg 的 reverse/areverse，预览是 sourceTimeAt 把局部秒翻过来 ——
    两侧实现完全不同，所以"局部时间怎么翻"只能有一份（在 shared/reverse.js 里）。 */
 const reverse = require('../shared/reverse.js')
+/* 分区 HSL：这一族**只能**用 3D LUT（`权重 = f(像素色相)` 用一维表与线性矩阵都表达不了）。
+   预览把同一份烘焙结果传成 WebGL 的 3D 纹理，导出写成 `.cube` 交给 ffmpeg 的 lut3d。
+   ⚠️ 两侧必须用**同一种插值**：ffmpeg 默认 tetrahedral，GPU 是 trilinear ——
+      对平滑函数只差 1 个色阶，但"只差一点"正是最难查的那类不一致，
+      所以下面固定写 `interp=trilinear`。 */
+const hslBands = require('../shared/hslBands.js')
 /* 复合片段：**在 render() 入口处展开**，之后整条链（探测 / 遮罩 / 拼图）都只看见普通片段。
    放在这里而不是放在调用方：导出面板、MCP 工具、草稿重渲都是调用方，
    各写一份展开逻辑 = 迟早有一处漏掉，症状是"成片里复合片段整段不见"。 */
@@ -53,6 +106,18 @@ const multicam = require('../shared/multicam.js')
 /* HDR：HLG/PQ 素材必须映射到 SDR 再进调色链，否则超出 100% 的亮部被裁成死白
    （尺寸/时长/帧率全都正常，只有颜色是错的 —— 见 shared/hdr.js 的说明） */
 const hdr = require('../shared/hdr.js')
+/* 曲线（RGB 三通道）：与预览侧共用同一份控制点 → 查找表换算。
+   导出只用 ffmpegCurves() 这一段字符串，插值与 ffmpeg 的 curves 是同一种自然样条
+   （tools/curves-selftest.mjs 拿真 ffmpeg 的 256 级输出逐项对过表，最大偏差 1）。
+   这里如果另写一份插值，症状会是「预览里是漂亮的 S 形、成片略平」—— 不报错、看不出来。 */
+const curvesTable = require('../shared/curves.js')
+/* 导出编码格式（容器 / 编码族 / 色深 / Alpha）：面板与这里同一份表，
+   见 shared/exportCodec.js 开头那几条 ffmpeg 硬事实。 */
+const exportCodec = require('../shared/exportCodec.js')
+/* 一级色轮：与预览侧的 SVG 查找表同一份 shared/wheels.js。
+   导出拼的是 `lutrgb=r='expr':…`（对 0..255 逐值求一次表达式），
+   与预览的 256 项表**逐值对应** —— tools/wheels-selftest.mjs 拿真 ffmpeg 对过表。 */
+const wheelsTable = require('../shared/wheels.js')
 /* 时间区域：只导出区间时在**片段层**把时间线裁到 [start, end) 并归零。
    与渲染层用的是同一份（shared/region.js）—— 各写一份的话，成片里切的位置
    会和预览差一点点，而且谁都不报错。 */
@@ -154,6 +219,40 @@ function bundledDir() {
   return root ? path.join(root, 'ffmpeg') : ''
 }
 
+/**
+ * 候选表 → 最终选中的那个可执行文件。抽成独立函数**只是为了能脱离本机环境自测**：
+ * 下面那两类错法在本机恰好都能跑通（ffmpeg 就装在 PATH 里或常见目录里），
+ * 只有在"ffmpeg 装在 `D:\ffmpeg-8.1.2-essentials_build\bin`、PATH 里没有"的机器上才现形，
+ * 而那时用户看到的是导出面板上一句「本机未安装 ffmpeg」。
+ *
+ * 两条铁律：
+ *   1. **磁盘上的绝对路径优先于裸命令**。裸命令排在前面会提前 `return`，
+ *      后面扫到的真实路径永远轮不到（"找得到却不认"）。
+ *   2. **裸命令必须在 PATH 里真解析出绝对路径才算数**。`spawn('ffmpeg')` 在 Windows
+ *      上不走 shell，PATH 里没有就是 ENOENT，表现成"装了但跑不起来"。
+ *
+ * @param {string[]} candidates 候选（可含引号、空串、重复）
+ * @param {object} deps 注入口，自测时替换成假的（默认走真实磁盘/PATH）
+ * @returns {{ bin: string, viaPath: boolean } | null}
+ */
+function chooseFfmpeg(candidates, { existsFile = exists, resolvePath = onPath } = {}) {
+  const list = (Array.isArray(candidates) ? candidates : [])
+    /* 注册表/环境变量里的路径常带引号，不去掉的话 exists() 必定为假 */
+    .map((item) => String(item || '').trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
+
+  for (const candidate of list) {
+    if (!path.isAbsolute(candidate) || !existsFile(candidate)) continue
+    return { bin: candidate, viaPath: false }
+  }
+  for (const candidate of list) {
+    if (path.isAbsolute(candidate)) continue
+    const resolved = resolvePath(candidate)
+    if (resolved && path.isAbsolute(resolved)) return { bin: resolved, viaPath: true }
+  }
+  return null
+}
+
 function findFfmpeg() {
   if (cached) return cached
   const candidates = []
@@ -161,7 +260,6 @@ function findFfmpeg() {
   if (process.env.FFMPEG_PATH) candidates.push(process.env.FFMPEG_PATH)
   const bundled = bundledDir()
   if (bundled) candidates.push(path.join(bundled, exeName('ffmpeg')))
-  candidates.push(exeName('ffmpeg'))
   for (const dir of COMMON_DIRS) candidates.push(path.join(dir, exeName('ffmpeg')))
   // 根目录下一层的 ffmpeg-* 目录（官方 essentials 包解压出来长这样）
   for (const root of SCAN_ROOTS) {
@@ -177,24 +275,18 @@ function findFfmpeg() {
       candidates.push(path.join(root, entry.name, exeName('ffmpeg')))
     }
   }
+  /* 裸命令放**最后**一个，只在磁盘上一个都没找到时才被 chooseFfmpeg 的第二轮用到 */
+  candidates.push(exeName('ffmpeg'))
 
-  for (const candidate of candidates) {
-    if (!candidate) continue
-    // 'ffmpeg' 这种裸命令不存在于磁盘，交给 spawn 走 PATH；但为了拿到它的目录
-    // 好去找同目录的 ffprobe，这里先在 PATH 里解析一次（解析不到也照样放行）。
-    const absolute = path.isAbsolute(candidate)
-    if (absolute && !exists(candidate)) continue
-    const resolved = absolute ? candidate : onPath(candidate)
-    const fromEnv =
-      candidate === process.env.YIJAI_FFMPEG || candidate === process.env.FFMPEG_PATH
-    cached = {
-      ffmpeg: candidate,
-      ffprobe: findProbe(resolved),
-      source: fromEnv ? 'env' : absolute ? (bundled && candidate.startsWith(bundled) ? 'bundled' : 'disk') : 'path'
-    }
-    return cached
+  const picked = chooseFfmpeg(candidates)
+  if (!picked) return null
+  const fromEnv = picked.bin === process.env.YIJAI_FFMPEG || picked.bin === process.env.FFMPEG_PATH
+  cached = {
+    ffmpeg: picked.bin,
+    ffprobe: findProbe(picked.bin),
+    source: picked.viaPath ? 'path' : fromEnv ? 'env' : bundled && picked.bin.startsWith(bundled) ? 'bundled' : 'disk'
   }
-  return null
+  return cached
 }
 
 function resetFfmpegCache() {
@@ -343,19 +435,77 @@ function round(value, digits = 3) {
 
 const clampNum = (value, min, max) => Math.min(max, Math.max(min, num(value)))
 
-/** 允许的编码器白名单。渲染层只从这几个里选，未知值一律回落 libx264（不报错，但会在 warnings 里说） */
-const ENCODER_KEYS = ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf']
+/**
+ * 允许的编码器白名单。渲染层只从这几个里选，未知值一律回落到**同编码族**的软件编码
+ * （不报错，但会在 warnings 里说）。
+ *
+ * ⚠️ 这一份与 `shared/exportCodec.js` 的 FAMILIES 必须一致：这里少一个键，
+ *    probe 就不会去查它，面板上那一项永远显示成"本机不支持"。
+ *    两边各自列一份是没法避免的（一个是探测范围，一个是产品语义），
+ *    所以 export-codec-selftest 里有一条专门比对这两份清单。
+ */
+const ENCODER_KEYS = ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'libx265', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'prores_ks']
+
+/** 编码器 → 「画质优先」时的私有质量参数。写错的键不会报错，只会静默用默认质量。 */
+const QUALITY_ARGS = {
+  libx264: (q) => ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(q)],
+  h264_nvenc: (q) => ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', String(q)],
+  h264_qsv: (q) => ['-c:v', 'h264_qsv', '-global_quality', String(q)],
+  h264_amf: (q) => ['-c:v', 'h264_amf', '-rc', 'cqp', '-qp_i', String(q), '-qp_p', String(q)],
+  libx265: (q) => ['-c:v', 'libx265', '-preset', 'medium', '-crf', String(q), '-x265-params', 'log-level=error'],
+  hevc_nvenc: (q) => ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', String(q)],
+  hevc_qsv: (q) => ['-c:v', 'hevc_qsv', '-global_quality', String(q)],
+  hevc_amf: (q) => ['-c:v', 'hevc_amf', '-rc', 'cqp', '-qp_i', String(q), '-qp_p', String(q)]
+}
+
+/** 编码器 → 「码率优先」（准 CBR）时的固定部分，其余由 -b:v/-maxrate/-bufsize 补 */
+const BITRATE_ARGS = {
+  libx264: ['-c:v', 'libx264', '-preset', 'veryfast'],
+  h264_nvenc: ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'cbr'],
+  h264_qsv: ['-c:v', 'h264_qsv'],
+  h264_amf: ['-c:v', 'h264_amf', '-rc', 'cbr'],
+  libx265: ['-c:v', 'libx265', '-preset', 'medium', '-x265-params', 'log-level=error'],
+  hevc_nvenc: ['-c:v', 'hevc_nvenc', '-preset', 'p4', '-rc', 'cbr'],
+  hevc_qsv: ['-c:v', 'hevc_qsv'],
+  hevc_amf: ['-c:v', 'hevc_amf', '-rc', 'cbr']
+}
 
 /**
  * 编码参数。
  *
- * @param {object} options { encoder, bitrateMode:'quality'|'bitrate', bitrate, preset }
+ * @param {object} options { codec, encoder, bitrateMode:'quality'|'bitrate', bitrate }
  * @param {number} crf     由画质档推算出来的质量值（16–34）
  * @returns {string[]} 直接拼进 ffmpeg 的参数片段
+ *
+ * ⚠️ 三件事**必须**从 shared/exportCodec.js 取，不能在这里写死：
+ *    ① 编码格式（决定容器、色深、要不要留 Alpha）；
+ *    ② 像素格式 —— 10bit 时软编是 `yuv420p10le`、硬件编码器只收 `p010le`；
+ *    ③ 编码器要落在**同一编码族**里，跨族回落会产出"面板写着 ProRes、实际是 H.264"的成片。
+ *    写死的后果都是成片照旧生成、时长画面都对，只是不是选的那个规格，一句错都不报。
  */
 function encodeArgs(options, crf) {
-  const wanted = String((options && options.encoder) || 'libx264')
-  const encoder = ENCODER_KEYS.includes(wanted) ? wanted : 'libx264'
+  const codec = exportCodec.readCodec(options && options.codec)
+  const encoder = exportCodec.pickEncoder(codec.key, options && options.encoder)
+  const pixFmt = exportCodec.pixelFormatFor(codec.key, encoder)
+  const quality = Math.round(num(crf, 23))
+
+  /**
+   * ProRes：质量由 profile 决定（422 HQ = 3、4444 = 4），**没有** crf 这回事。
+   * 面板上的码率/画质档对它不生效（UI 会禁用那组控件），这里也不拼 ——
+   * 拼上去 ffmpeg 会当作未知参数忽略，看上去像"调了没反应"。
+   */
+  if (codec.family === 'prores') {
+    return [
+      '-c:v', 'prores_ks',
+      '-profile:v', String(codec.profile),
+      '-pix_fmt', pixFmt,
+      /* 标明写入方：一些后期软件靠这个字段判断"这段 ProRes 是标准写入的" */
+      '-vendor', 'apl0'
+    ]
+  }
+
+  /* HEVC 进 MP4 显式打 hvc1 标签：默认的 hev1 会让 QuickTime / Safari 拒播 */
+  const tag = codec.family === 'hevc' ? ['-tag:v', 'hvc1'] : []
   const bitrateMode = options && options.bitrateMode === 'bitrate' ? 'bitrate' : 'quality'
   const kbps = Math.min(200000, Math.max(200, Math.round(num(options && options.bitrate, 8000))))
 
@@ -363,24 +513,17 @@ function encodeArgs(options, crf) {
     /* 准 CBR：目标码率 + maxrate = 目标 + bufsize = 2×目标。
        只给 -b:v 而不给 maxrate/bufsize 的话，编码器仍会在简单画面上大幅降码率，
        用户看到的"码率"与设置值差一倍以上。 */
-    const extra = ['-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`]
-    if (encoder === 'libx264') return ['-c:v', encoder, '-preset', 'veryfast', '-pix_fmt', 'yuv420p', ...extra]
-    if (encoder === 'h264_nvenc') return ['-c:v', encoder, '-preset', 'p4', '-rc', 'cbr', '-pix_fmt', 'yuv420p', ...extra]
-    if (encoder === 'h264_qsv') return ['-c:v', encoder, '-pix_fmt', 'nv12', ...extra]
-    return ['-c:v', encoder, '-rc', 'cbr', '-pix_fmt', 'yuv420p', ...extra]
+    const base = BITRATE_ARGS[encoder] || BITRATE_ARGS.libx264
+    return [
+      ...base,
+      '-pix_fmt', pixFmt,
+      ...tag,
+      '-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`
+    ]
   }
 
-  if (encoder === 'libx264') {
-    return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p']
-  }
-  if (encoder === 'h264_nvenc') {
-    /* nvenc 的画质档是 -cq（constant quality），必须显式 -rc vbr，否则 -cq 不生效 */
-    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr', '-cq', String(crf), '-pix_fmt', 'yuv420p']
-  }
-  if (encoder === 'h264_qsv') {
-    return ['-c:v', 'h264_qsv', '-global_quality', String(crf), '-pix_fmt', 'nv12']
-  }
-  return ['-c:v', 'h264_amf', '-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf), '-pix_fmt', 'yuv420p']
+  const base = (QUALITY_ARGS[encoder] || QUALITY_ARGS.libx264)(quality)
+  return [...base, '-pix_fmt', pixFmt, ...tag]
 }
 
 /**
@@ -400,6 +543,131 @@ function encodeArgs(options, crf) {
  *
  * @returns {string} 拼进滤镜链的片段（无位移无旋转时返回 ''）
  */
+/**
+ * 分区 HSL → ffmpeg 的 `lut3d` 参数（没有则返回 ''）。
+ *
+ * 三条必须写清的事实：
+ *   ① **为什么是文件**：`lut3d` 只吃 `.cube` 文件，没有内联写法。
+ *      所以这里把 33³ 的表（约 860KB）落到 `os.tmpdir()/yjai-lut/`。
+ *      文件名取内容哈希 ⇒ 同一组参数只写一次，调十次滑杆导出也只有一个文件。
+ *   ② **路径必须转义**：ffmpeg 的 filter 参数里 `:` 是选项分隔符，
+ *      Windows 的 `C://...` 会被切成两段，报错是"Option 'C' not found"，
+ *      完全指不到"路径没转义"。转义规则：统一成正斜杠 + 冒号前加反斜杠 + 整段套单引号。
+ *   ③ **插值必须钉成 trilinear**（见文件头的说明）。
+ *
+ * ⚠️ 写盘失败**抛错**，不返回 ''：静默跳过等于"导出的成片没调色"，
+ *    而用户手上没有任何线索说明为什么。导出失败至少是可见的。
+ */
+function hslFilterFor(bands) {
+  if (hslBands.isNeutral(bands)) return ''
+  const dir = path.join(os.tmpdir(), 'yjai-lut')
+  const text = hslBands.cubeText(bands, hslBands.LUT_SIZE)
+  const key = createHash('sha1').update(text).digest('hex').slice(0, 12)
+  const file = path.join(dir, `hsl-${key}.cube`)
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    if (!fs.existsSync(file)) fs.writeFileSync(file, text, 'utf8')
+  } catch (error) {
+    throw new Error(`分区 HSL 的查找表写不出来：${(error && error.message) || '未知原因'}`)
+  }
+  const escaped = file.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")
+  return `lut3d=file='${escaped}':interp=trilinear`
+}
+
+/**
+ * 人物特效 → 导出滤镜链。返回新的画面标签（没有特效时原样返回 `svb{tag}`）。
+ *
+ * 这一段的形状是被 ffmpeg 的限制**逼出来**的，改之前先读这三条：
+ *
+ * ① **不能靠 `crop` 跟着脸走**。crop 的 x/y 虽然带 `T` 标志（文档说可被
+ *    sendcmd 设置），但实测裁切窗口纹丝不动 —— 它只在 init 求值一次。
+ *    所以"局部处理"只能反着做：**整幅**处理一份，再用一块位置可动的遮罩
+ *    把处理结果贴回去。
+ * ② **遮罩的位置只能走 overlay**。overlay 的 x/y 是每帧求值的，只有它跟得住；
+ *    `scale` 的宽高同样改不了，所以遮罩尺寸取"整段里最大的脸"固定下来、
+ *    只动位置 —— 代价是人走近镜头时描边不会变粗，这一点不假装做到了。
+ * ③ **遮罩画布必须是透明的**（`color=c=black@0`）。用不透明的黑底叠遮罩，
+ *    `alphaextract` 取到的是"全 1"，于是整幅都被处理 —— 症状是"整张脸都糊了
+ *    连背景一起糊"，而且 ffmpeg 一句警告都没有。
+ *
+ * ⚠️ sendcmd 的 target 必须是**完整实例名**（`overlay@face<tag>`）。
+ *    写成 `face<tag>` 不会报错，命令被静静丢掉，成片里特效待在原地不动。
+ * ⚠️ sendcmd 的时间是**片段内**秒数：主链的 `setpts=PTS-STARTPTS` 把
+ *    片段开头归零了，用时间线时间会让特效整体偏移 clip.start 那么多。
+ */
+function appendFaceFx({ clip, tag, width, height, pixFmt, fpsArg, dur, round, filters, args, nextInput }) {
+  const source = `svb${tag}`
+  const face = clip && clip.face
+  const def = face ? facefx.fxOf(face.fx) : null
+  /* 跟踪数据与"套哪款效果"分开存：换效果不该重测一遍（检测要几秒），
+     而 `clip.face.track` 一旦两处都写，改一遍就会有两份对不上的真相。 */
+  const track = clip && Array.isArray(clip.faceTrack) ? clip.faceTrack : []
+  /* 少于两个点等于"没跟到脸"：这时候叠一层静止的特效只会让人以为坏了 */
+  if (!def || track.length < 2) return source
+
+  const strength = clampNum(face.strength, 0, 1)
+  const size = facefx.cropSizeOf(track, width, height)
+  const target = `overlay@face${tag}`
+  const cmd = facefx.buildSendcmd(track, { w: width, h: height, target, size: [size.w, size.h] })
+  if (!cmd) return source
+
+  /* 命令表落盘。文件名按内容哈希 ⇒ 同一段素材导出十次只写一个文件，
+     而内容一变就一定换文件（用固定名会被上一次的残留顶替，导出结果与
+     参数对不上，且完全看不出原因）。 */
+  const dir = path.join(os.tmpdir(), 'yjai-face')
+  const file = path.join(dir, `face-${createHash('sha1').update(cmd).digest('hex').slice(0, 12)}.txt`)
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    if (!fs.existsSync(file)) fs.writeFileSync(file, cmd, 'utf8')
+  } catch (error) {
+    throw new Error(`人物特效的跟踪数据写不出来：${(error && error.message) || '未知原因'}`)
+  }
+  const escaped = file.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")
+  const tail = `sendcmd=f='${escaped}'`
+  const out = `svf${tag}`
+  const assetDeps = { resourcesPath: process.resourcesPath, mainDir: __dirname }
+
+  /* 描边：整张 PNG 直接叠 + 跟随（不需要遮罩，因为图形本身带 alpha） */
+  if (def.kind === 'stamp') {
+    const png = faceAssets.faceAsset('frame-ellipse.png', assetDeps)
+    if (!png) return source
+    args.push('-loop', '1', '-t', round(dur), '-i', png)
+    const idx = nextInput()
+    filters.push(`[${idx}:v]scale=${size.w}:${size.h},setsar=1,fps=${fpsArg},format=rgba[fst${tag}]`)
+    filters.push(
+      `[${source}][fst${tag}]overlay@face${tag}=x=0:y=0:format=auto,format=${pixFmt}[${out}]`
+    )
+    /* sendcmd 挂在这条链的末端：命令按滤镜实例名寻址，与它在图里的位置无关 */
+    filters.push(`[${out}]${tail}[${out}2]`)
+    return `${out}2`
+  }
+
+  /* 局部处理：整幅做一份 → 用可移动的椭圆遮罩合回去 */
+  const maskPng = faceAssets.faceAsset('mask-ellipse.png', assetDeps)
+  if (!maskPng) return source
+
+  const proc =
+    def.filter === 'boxblur'
+      ? `boxblur=${def.radiusOf(track[0][3] * width, strength)}:2`
+      : `eq=brightness=${def.brightnessOf(strength)}`
+
+  args.push('-loop', '1', '-t', round(dur), '-i', maskPng)
+  const maskIdx = nextInput()
+
+  filters.push(`[${source}]split=2[fbs${tag}][fbb${tag}]`)
+  filters.push(`[fbb${tag}]${proc},format=rgba[fbp${tag}]`)
+  /* 透明画布 + 白椭圆 = 位置可动的 alpha 遮罩（见函数头 ③） */
+  filters.push(`color=c=black@0:s=${width}x${height}:r=${fpsArg},format=rgba[fmc${tag}]`)
+  filters.push(`[${maskIdx}:v]scale=${size.w}:${size.h},format=rgba[fms${tag}]`)
+  filters.push(`[fmc${tag}][fms${tag}]overlay@face${tag}=x=0:y=0:format=auto[fmv${tag}]`)
+  /* 遮罩边缘要软：硬边椭圆打码会像贴了一块橡皮膏 */
+  filters.push(`[fmv${tag}]alphaextract,boxblur=6:1[fma${tag}]`)
+  filters.push(`[fbp${tag}][fma${tag}]alphamerge[fbq${tag}]`)
+  filters.push(`[fbs${tag}][fbq${tag}]overlay=0:0:format=auto,format=${pixFmt}[${out}]`)
+  filters.push(`[${out}]${tail}[${out}2]`)
+  return `${out}2`
+}
+
 function poseFilter(clip, width, height, padColor) {
   const parts = []
   const px = clampNum(clip.posX, -adjust.POS_LIMIT, adjust.POS_LIMIT)
@@ -1036,7 +1304,11 @@ function buildPlan({
   const baseW = Math.max(2, Math.round(num(options.width, 1920) / 2) * 2)
   const baseH = Math.max(2, Math.round(num(options.height, 1080) / 2) * 2)
   const { width, height } = aspect.outputSizeFor(baseW, baseH, options.aspect)
-  const fps = Math.min(60, Math.max(12, Math.round(num(options.fps, 30))))
+  /* 帧率：交给 ffmpeg 的必须是**整数比**字符串。
+     ⚠️ 不能先 Math.round：29.97 会变成 30（NTSC 母版直接错档）；
+        也不能把 29.97 原样拼进滤镜：ffmpeg 会解析成 2997/100 这个非标准 timebase。
+        换算统一走 shared/exportRate.js（面板与这里读同一份）。 */
+  const fpsArg = exportRate.readRate(options.fps).arg
   const quality = Math.min(100, Math.max(10, Math.round(num(options.quality, 80))))
   const crf = Math.min(34, Math.max(16, Math.round(34 - (quality - 30) * 0.2)))
 
@@ -1137,19 +1409,41 @@ function buildPlan({
    */
   const backdropSource = backdropToLocal(backdrop)
   const withBackdrop = Boolean(backdropSource)
-  /** 需要 alpha 的两种情形：有背景（素材四周要透出背景）、或任一片段半透明 */
-  const needAlpha = withBackdrop || anyTransparent
+  /**
+   * 叠加轨里有图片 ⇒ 整条链必须带 alpha。
+   *
+   * ⚠️ 这一条是贴纸功能的地基，少了它**贴纸会变成白底方块**：ffmpeg 读 PNG 时
+   *    不知道它带不带透明（要 probe 才知道），而链上一旦写了 `format=yuv420p`，
+   *    alpha 就被整体丢弃、透明区填成黑。退出码 0、不报任何错，
+   *    只有把成片和预览并排看才发现"预览里贴纸边缘是干净的，成片里是个黑框"。
+   *    这里选择"宁可多一条 alpha 通道"——中间链带 alpha、最后一律转回输出格式，
+   *    代价可以忽略，而漏判的代价是贴纸根本不能用。
+   */
+  const imageOverlay = overlayClips.some((clip) => clip.kind === 'image')
+  /**
+   * 有边框的片段同样需要 alpha 通道。
+   * ⚠️ 与贴纸那一条同一个坑：边框 PNG 的"窗口"是透明的，链上一旦落到
+   *    `format=yuv420p`，透明区会被填成黑色 —— 于是"加了边框"的画面中间成了一块黑板。
+   *    退出码 0、不报错，只有像素能看出来。
+   */
+  /* ⚠️ 这里只能用 `videoClips` / `overlayClips`：`plan` 在下面几十行才声明，
+     直接引用会 TDZ（`Cannot access 'plan' before initialization`）——
+     而它在语法检查阶段完全不报，只有真跑一次才炸。 */
+  const hasBorder = videoClips.some((clip) => Boolean(clip && clip.border))
+    || overlayClips.some((clip) => Boolean(clip.border))
+  /** 需要 alpha 的四种情形：有背景、任一片段半透明、叠加轨上有图片、有边框 */
+  const needAlpha = withBackdrop || anyTransparent || imageOverlay || hasBorder
   const padColor = needAlpha ? 'black@0.0' : 'black'
   const pixFmt = needAlpha ? 'yuva420p' : 'yuv420p'
 
   /** 空档：用 lavfi 现造一段黑场 + 静音（有背景时黑场也透明，让背景透出来） */
   const pushGap = (gap, tag) => {
     if (gap <= 0.02) return
-    args.push('-f', 'lavfi', '-t', round(gap), '-i', `color=c=${padColor}:s=${width}x${height}:r=${fps}`)
+    args.push('-f', 'lavfi', '-t', round(gap), '-i', `color=c=${padColor}:s=${width}x${height}:r=${fpsArg}`)
     const vIdx = inputIndex++
     args.push('-f', 'lavfi', '-t', round(gap), '-i', 'anullsrc=r=48000:cl=stereo')
     const aIdx = inputIndex++
-    filters.push(`[${vIdx}:v]format=${pixFmt},setsar=1,fps=${fps}[gv${tag}]`)
+    filters.push(`[${vIdx}:v]format=${pixFmt},setsar=1,fps=${fpsArg}[gv${tag}]`)
     filters.push(`[${aIdx}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[ga${tag}]`)
     segments.push({ v: `[gv${tag}]`, a: `[ga${tag}]`, len: num(gap), transitionOut: null })
   }
@@ -1278,10 +1572,31 @@ function buildPlan({
      *    预览那侧的 transform 用的是同一个 1.02（见 shared/adjust.js 的 SMOOTH_COVER_SCALE），
      *    两边必须一致，否则"预览看不出边、成片一圈底色"。
      */
+    /* 分区 HSL：整条调色链的**第一道**。顺序不是随手排的 ——
+       预览里这一层是叠在画面元素上的 canvas，而调色 filter 挂在更外层的容器上，
+       所以预览的顺序必然是「HSL → 调节/曲线/色轮/调色」。导出必须逐字对应，
+       否则两侧各调各的，单独看都对、摆一起才现形。 */
+    const hslStr = hslFilterFor(clip.hsl)
+    const hslPart = hslStr ? `,${hslStr}` : ''
     const cover = adjust.coverScale(adjust.readBeauty(clip.beauty))
     const coverPart = cover > 1 ? `,scale=iw*${cover}:ih*${cover},crop=${width}:${height}` : ''
     const adjustStr = adjust.ffmpegFilterFor(clip.adjust, clip.beauty, round, width)
     const adjustPart = adjustStr ? `,${adjustStr}` : ''
+    /**
+     * 曲线（RGB 三通道）：排在「调节/美颜」之后、「调色（looks）」之前 ——
+     * 与预览侧 Stage.jsx 的装配顺序逐字一致（增益 → 磨皮 → 对比度饱和度 → 曲线 → 调色）。
+     * ⚠️ 顺序错了不会报错：曲线是逐像素重映射，调色是 3x3 矩阵，两者交换后
+     *    数学上不等价，但画面"看起来都阴阳怪气"，没人能一眼看出是顺序问题。
+     */
+    const curvesStr = curvesTable.ffmpegCurves(clip.curves)
+    const curvesPart = curvesStr ? `,curves=${curvesStr}` : ''
+    /**
+     * 一级色轮：排在曲线**之前** —— 与预览侧 effectFilterParts 的顺序逐字一致
+     * （色轮 → 曲线）。两者都是逐像素重映射，交换后数学上不等价，
+     * 而画面只是"阴阳怪气"，看不出来是顺序问题。
+     */
+    const wheelsStr = wheelsTable.ffmpegWheels(clip.wheels)
+    const wheelsPart = wheelsStr ? `,${wheelsStr}` : ''
     /**
      * 自由裁剪框：框外裁掉、框内铺满。
      * 排在「铺满画布」之后、缩放/位置之前 —— 语义就是"先成帧，再在帧里框一块，
@@ -1314,16 +1629,50 @@ function buildPlan({
        裁剪 → 镜像 → 斜切 → 缩放/位置/旋转。 */
     const shapePart = [mirrorStr, shearStr].filter(Boolean).map((item) => `,${item}`).join('')
     filters.push(
-      `${curveRef || `[${idx}:v]`}${curveRef ? '' : hdrPre}${seek}${scale},${cropBase}${stabilizePart}${denoisePart}${cropPart}${shapePart}${zoomPart}${posePart},${pad}${coverPart}${adjustPart}${gradePart}${fxPart},setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[svb${tag}]`
+      `${curveRef || `[${idx}:v]`}${curveRef ? '' : hdrPre}${seek}${scale},${cropBase}${stabilizePart}${denoisePart}${cropPart}${shapePart}${zoomPart}${posePart},${pad}${hslPart}${coverPart}${adjustPart}${wheelsPart}${curvesPart}${gradePart}${fxPart},setsar=1,fps=${fpsArg},format=${pixFmt}${alphaPart}[svb${tag}]`
     )
     /**
      * 效果链（抠像 → 圆角/蒙版 → 描边 → 阴影）接在"已经成帧"的 `[svb${tag}]` 之后。
      * 顺序与预览侧 Stage.jsx 的 effectFilterParts 同一口径 —— 两边各写一份顺序，
      * 迟早会出现"预览里描边在圆角外、成片里被圆角切掉一截"。
      */
+    /**
+     * 边框：在「已经成帧」的画面之上叠一张 PNG，并且**排在效果链之前**。
+     *
+     * 顺序不是随便挑的：效果链里第一步就是圆角/蒙版遮罩，边框先叠进去、再一起被遮罩切 ——
+     * 与预览完全同构（预览把边框画在 `.canvas-clipbox` 里，靠父级的
+     * `overflow:hidden` + `border-radius` 切齐）。要是把边框放到效果链之后，
+     * 圆角片段的成片里会保留四个直角边框角，预览却是圆的 —— 只有把两者摆一起才看得出来。
+     */
+    /* 人物特效排在边框**之前**：边框是画框，应该压在特效之上（与预览层级一致）。
+       顺序反了不会报错，只会出现"描边光晕盖住了画框"这种没人说得清的现象。 */
+    const faceLabel = appendFaceFx({
+      clip,
+      tag,
+      width,
+      height,
+      pixFmt,
+      fpsArg,
+      dur,
+      round,
+      filters,
+      args,
+      nextInput: () => inputIndex++
+    })
+
+    const borderPath = borderFileOf(clip.border)
+    const fxLabel = borderPath ? `svc${tag}` : faceLabel
+    if (borderPath) {
+      args.push('-loop', '1', '-t', round(dur), '-i', borderPath)
+      const brIdx = inputIndex++
+      filters.push(
+        `[${brIdx}:v]scale=${width}:${height},setsar=1,fps=${fpsArg},format=${pixFmt}[brd${tag}]`
+      )
+      filters.push(`[${faceLabel}][brd${tag}]overlay=0:0:format=auto[svc${tag}]`)
+    }
     const eff = effectsStages({
       tag: `s${tag}`,
-      label: `svb${tag}`,
+      label: fxLabel,
       clip,
       width,
       height,
@@ -1463,9 +1812,9 @@ function buildPlan({
     const bgIdx = inputIndex++
     filters.push(
       `[${bgIdx}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
-        `crop=${width}:${height},setsar=1,fps=${fps},format=yuv420p[bgv]`
+        `crop=${width}:${height},setsar=1,fps=${fpsArg},format=yuv420p[bgv]`
     )
-    filters.push(`[bgv]${videoLabel}overlay=0:0:format=auto,setsar=1,fps=${fps}[vfin]`)
+    filters.push(`[bgv]${videoLabel}overlay=0:0:format=auto,setsar=1,fps=${fpsArg}[vfin]`)
     videoLabel = '[vfin]'
   }
 
@@ -1527,7 +1876,7 @@ function buildPlan({
       ? ''
       : `trim=start=${round(offset)}:duration=${round(dur * pipRate)},${speed.setptsExpr(pipRate, round)}${reverse.videoReversePart(clip)},`
 
-    filters.push(`${pipCurve || `[${idx}:v]`}${seek}scale=${w}:-2,setsar=1,fps=${fps},format=${pixFmt}${alphaPart}[pipin${i}]`)
+    filters.push(`${pipCurve || `[${idx}:v]`}${seek}scale=${w}:-2,setsar=1,fps=${fpsArg},format=${pixFmt}${alphaPart}[pipin${i}]`)
     /**
      * 画中画同样吃效果链（圆角/蒙版/抠像/描边/阴影）。
      * ⚠️ 遮罩走**运行时 geq**（不预生成 PNG）：画中画的高度由素材比例决定，
@@ -1535,9 +1884,24 @@ function buildPlan({
      * ⚠️ 宽度传 `w`（画中画在主画布里的像素宽），因为描边/阴影的粗细是相对
      *    **元素自身宽度**的比例 —— 传主画布宽度会让画中画的描边粗一倍。
      */
+    /**
+     * 画中画上的边框：要**跟着画中画自己的矩形**，不是铺满画布。
+     * 画中画的高度由素材比例决定、构建命令时算不出来，所以这里用 `scale2ref`
+     * 把边框缩到画中画流自身的尺寸 —— 这是唯一能"按另一路输入的尺寸缩放"的滤镜。
+     * ⚠️ 同样排在效果链之前：圆角/蒙版要能把边框一起切进去。
+     */
+    const pipBorderPath = borderFileOf(clip.border)
+    const pipFxLabel = pipBorderPath ? `fpip${i}` : `pipin${i}`
+    if (pipBorderPath) {
+      args.push('-loop', '1', '-t', round(dur), '-i', pipBorderPath)
+      const pbIdx = inputIndex++
+      filters.push(`[${pbIdx}:v][pipin${i}]scale2ref=w=iw:h=ih[fbrd${i}][fref${i}]`)
+      filters.push(`[fbrd${i}]setsar=1,format=${pixFmt}[fbrd2${i}]`)
+      filters.push(`[fref${i}][fbrd2${i}]overlay=0:0:format=auto[fpip${i}]`)
+    }
     const pipFx = effectsStages({
       tag: `p${i}`,
-      label: `pipin${i}`,
+      label: pipFxLabel,
       clip,
       width: w,
       height,
@@ -1612,12 +1976,16 @@ function buildPlan({
    *    `rgb(0,175,63)` 的绿。而 ffmpeg 不报任何错，只有读像素才看得见。
    *    预览那侧画布底下就是黑色，所以"压黑"才是与预览一致的口径。
    * ⚠️ 有背景时不压：背景图本身已经提供了不透明的底，再压黑会把背景整个盖掉。
+   * ⚠️ **导出带 Alpha 的格式时也不压**（ProRes 4444）：压黑之后 alpha 恒为 1，
+   *    那这个格式就白选了 —— 用户要的是"抠掉的部分到后期里还是透明的"。
+   *    这两个条件是互斥的两种意图，必须都在这里判。
    */
-  if (needAlpha && !withBackdrop && finalDuration > 0.05) {
-    filters.push(`color=c=black:s=${width}x${height}:r=${fps},format=yuv420p[blkbg]`)
+  const keepAlpha = exportCodec.acceptsAlpha(options && options.codec)
+  if (needAlpha && !withBackdrop && !keepAlpha && finalDuration > 0.05) {
+    filters.push(`color=c=black:s=${width}x${height}:r=${fpsArg},format=yuv420p[blkbg]`)
     /* ⚠️ 黑底必须是 overlay 的**第一个**输入（底图），画面是第二个（盖上去的那层）。
        写反了就是把黑幕盖在画面上 —— 成片整幅全黑，而命令一行错都不报。 */
-    filters.push(`[blkbg]${videoLabel}overlay=0:0:format=auto,setsar=1,fps=${fps}[vflat]`)
+    filters.push(`[blkbg]${videoLabel}overlay=0:0:format=auto,setsar=1,fps=${fpsArg}[vflat]`)
     videoLabel = '[vflat]'
   }
 
@@ -1755,7 +2123,12 @@ function buildPlan({
    * 而且在本机永远复现不出来（本机的播放器恰好忽略了标签）。
    */
   args.push(...hdr.encoderTagArgs())
-  args.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000')
+  /**
+   * 音频：MP4 走 AAC 192k，MOV（ProRes）走 PCM 16bit。
+   * 后期把 ProRes 素材拖进剪辑软件时，PCM 是唯一不会被二次转码的音轨；
+   * 而 MP4 里塞 PCM 会被多数播放器忽略（能导出、能看见时长、就是没声音）。
+   */
+  args.push(...exportCodec.audioArgs(options && options.codec))
   args.push('-movflags', '+faststart')
   args.push(outPath)
 
@@ -1950,6 +2323,32 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
   if (!bin) return { ok: false, error: '找不到 ffmpeg', reason: 'not-found' }
 
   /**
+   * 编码器存在性先拦一道。
+   *
+   * 面板只列本机 probe 出来的编码器，但导出入口不止一个（内置 MCP 桥、脚本调用），
+   * 所以这里还要自己确认。不拦的话 ffmpeg 抛的是 `Unknown encoder 'libx265'`，
+   * 用户看到的是一个英文名字，不知道"该换回 H.264"。
+   * 探测本身失败（拿不到 -encoders）时**不拦** —— 那是我们查不出来，不是它不存在，
+   * 让 ffmpeg 自己去试，试失败它的报错比我们的猜测准。
+   */
+  const wantedCodec = exportCodec.readCodec(options && options.codec)
+  if (wantedCodec.family !== 'h264') {
+    try {
+      const have = await probeEncoders(bin)
+      if (have.length && !exportCodec.supported(wantedCodec.key, have)) {
+        const missing = exportCodec.encodersFor(wantedCodec.key, [])[0]
+        return {
+          ok: false,
+          reason: 'encoder-missing',
+          error: `这台机器的 ffmpeg 没有 ${wantedCodec.label} 编码器（缺 ${missing}），换成 H.264 导出，或装一版完整的 ffmpeg`
+        }
+      }
+    } catch {
+      /* 探测不了就交给 ffmpeg 自己报错 */
+    }
+  }
+
+  /**
    * 背景先在这里落一次地（asar 包内的图要复制到临时目录，见 backdropToLocal）。
    * 放在循环外是因为它不依赖 assumeVideoAudio 的那两次重试。
    */
@@ -1993,6 +2392,22 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
     /* warnings / subtitleCount 一并透出：成片本身是好的，但"字幕没写进去"这种
        没办全的事必须让调用方知道（否则界面上只会看到"没有字幕"，原因全靠猜）。 */
     if (result.ok) {
+      /**
+       * 封面：从**成片**里抽一帧（不是从源片段抽）。
+       *
+       * 为什么不在渲之前抽：成片带背景、画中画、调色、字幕 —— 用户想当封面的那一帧
+       * 就是他预览里看到的样子，从源片段抽会得到"没调色、没字幕、没画中画"的另一张图。
+       *
+       * 抽失败**不让整次导出失败**：成片已经好好地在那儿了，封面是附加产物。
+       * 但必须把原因透出去（`coverError`），否则界面上只会看到"开了封面却没生成"。
+       */
+      const coverResult = await writeCover({
+        bin,
+        outPath,
+        cover: options && options.cover,
+        duration: plan.duration,
+        fps: options && options.fps
+      })
       return {
         ok: true,
         outPath,
@@ -2000,7 +2415,11 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
         segmentCount: plan.segmentCount,
         subtitleCount: plan.subtitleCount || 0,
         warnings: plan.warnings || [],
-        attempts: i + 1
+        attempts: i + 1,
+        /* 没开封面时这两项是空串 / 0，调用方不必再判断 undefined */
+        coverPath: coverResult.path || '',
+        coverAt: coverResult.at || 0,
+        coverError: coverResult.error || ''
       }
     }
     lastError = result.error
@@ -2009,6 +2428,39 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
     if (!retriable) break
   }
   return { ok: false, error: lastError || '渲染失败' }
+}
+
+/**
+ * 从成片里抽一帧当封面。
+ *
+ * 三个必须在这里做的判断：
+ *   · 开关没开 ⇒ 直接返回空路径，**不生成任何文件**（面板上关着开关却多出一张图的
+ *     话，用户会以为上次的残留）；
+ *   · 时间点按 `coverTimeAt` 夹到最后一帧 —— 传 duration 进去会得到 0 字节文件，
+ *     而 ffmpeg 退出码依然是 0，这类"成功了但没东西"最难查；
+ *   · 产物要**真的存在且不是空壳**才算成功（≥512 字节）。只信退出码的话，
+ *     编解码器不吃某些参数时会静默写一个 0 字节文件。
+ */
+async function writeCover({ bin, outPath, cover, duration, fps }) {
+  const want = coverTable.readCover(cover)
+  if (!want.enabled) return { path: '' }
+  const target = coverTable.coverPathFor(outPath)
+  if (!target) return { path: '', error: '算不出封面文件路径' }
+  const at = coverTable.coverTimeAt(want.at, duration, fps)
+  const result = await run(bin, coverTable.buildCoverArgs({ outPath, coverPath: target, at }), {
+    timeout: 60 * 1000
+  })
+  let size = 0
+  try {
+    size = fs.statSync(target).size
+  } catch {
+    size = 0
+  }
+  if (!result.ok || size < 512) {
+    const why = (result.stderr || '').trim().slice(-300)
+    return { path: '', at, error: why || '抽帧没写出文件' }
+  }
+  return { path: target, at }
 }
 
 function runRender(bin, args, totalDuration, onProgress, signal) {
@@ -2168,6 +2620,7 @@ async function makeProxy({ sourcePath, height = 540, outDir }) {
 
 module.exports = {
   findFfmpeg,
+  chooseFfmpeg,
   resetFfmpegCache,
   probe,
   probeStreams,

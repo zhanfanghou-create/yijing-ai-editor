@@ -1,0 +1,14 @@
+内置贴纸素材
+
+来源：Noto Animated Emoji（Google），静态 512×512 帧
+仓库：https://github.com/googlefonts/noto-emoji
+许可：Apache License 2.0（https://www.apache.org/licenses/LICENSE-2.0）
+
+本目录下的 PNG 由其公开的 512 帧原样取得，未做变色/重绘/裁剪，
+仅按用途分了目录并生成了 catalog.json（文件名、中文显示名、宽高、sha1）。
+
+Apache-2.0 允许再分发与商业使用，要求保留本声明；
+本项目不做界面署名，改为在「帮助 → 关于」里列出素材来源。
+
+重新获取素材：node tools/fetch-stickers.mjs
+校验清单完整性：node tools/check-stickers.mjs --static

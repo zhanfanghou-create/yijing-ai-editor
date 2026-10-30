@@ -1,0 +1,21 @@
+MediaPipe Face Landmarker —— 随包运行时与模型
+==================================================
+
+本目录下的文件来自 Google MediaPipe，许可证 Apache License 2.0：
+  https://github.com/google-ai-edge/mediapipe
+  https://www.apache.org/licenses/LICENSE-2.0
+
+文件来源
+--------
+vision_wasm_internal.js / vision_wasm_internal.wasm
+  @mediapipe/tasks-vision（npm 包）的 wasm/ 目录，版本见 package.json。
+face_landmarker.task
+  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+
+重新获取
+--------
+  npm install
+  node tools/fetch-mediapipe.mjs
+
+这些文件不入 git 仓库（体积 + 许可），只随**安装包**分发。
+若二次分发本软件，请随附本文件与 Apache-2.0 全文。

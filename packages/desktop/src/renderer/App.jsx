@@ -22,16 +22,28 @@ import { localAssetsFrom, probeMedia } from './assets.js'
 import { compositeAt, effectiveClips } from './composite.js'
 import { PIP_DEFAULT_ANCHOR, PIP_DEFAULT_SIZE, pipAnchor } from './pip.js'
 import { textStyleDef } from './textStyles.js'
+/* 模板：数据表 + 纯函数（把一条模板翻成片段）。贴纸 key → 地址用共用的清单索引。 */
+import { planTemplate, templateOf } from '../shared/templates.js'
+/* 智能包装：判定「哪句是关键句」+ 成套方案（纯函数，脱机可测） */
+import { planPackaging, planScene, planStrip } from '../shared/packaging.js'
+import { loadStickerCatalog } from './stickerIndex.js'
+import { detectFaceTrack } from './facefx.js'
 import {
   EPSILON,
   MIN_CLIP_SECONDS,
   clipSpeed,
   curveSourceTime,
+  cutAllAt,
   linkMovePatches,
   readCurve,
   replacePatch,
   speedPatch
 } from './trim.js'
+/* 片段属性剪贴板：Ctrl+Alt+C / Ctrl+Alt+V 的"该搬哪些键、哪些要摘掉"全在这里。
+   抽成模块的理由同 trim.js —— 搬错了不报错，只表现为"换了属性，画面却变了"。 */
+import { applyAttrs, describeAttrs, pastePatch, pickAttrs } from './clipProps.js'
+/* 组合（逻辑成组）：与复合片段是两件事，见 groups.js 的头注释 */
+import { clearGroupOf, groupIdsOf, groupPeers, MIN_GROUP_SIZE, withGroup } from './groups.js'
 /* 时间线标记（纯逻辑，见 markers.js 的说明：它不进成片，所以只在渲染层闭环） */
 import { markerIndexAt, normalizeMarkers, stepMarker } from './markers.js'
 /* 时间区域：删除 / 复制 / 剪切 / 粘贴 / 只导出区间。
@@ -47,6 +59,9 @@ import {
 import { timecode, useToast } from './ui.jsx'
 /* 画面层级（自由层级）：比较与"上移/下移"的算术，导出侧用的是同一份 */
 import * as layersTable from '../shared/layers.js'
+/* 字幕文件读写 + 语音分句：导入解析 / 导出拼装 / 「按语音自动分句」全走这一份
+   （主进程只做落盘与编码嗅探，不写第二份解析器） */
+import * as SUBTITLE from '../shared/subtitle.js'
 /* 场景切换检测：解析与"源秒 → 时间线秒"的换算，与主进程同一份 */
 import * as scenesTable from '../shared/scenes.js'
 /* 预览画质 / 代理：档位表与代理文件名，主进程用的是同一份（导出永远用原片） */
@@ -82,6 +97,7 @@ import {
   saveKeymap,
   stepFrame
 } from './keymap.js'
+import { stepCut } from './timelineNav.js'
 import Home from './components/Home.jsx'
 import TopBar from './components/TopBar.jsx'
 import EditorTabs from './components/EditorTabs.jsx'
@@ -149,11 +165,35 @@ export default function App() {
   const [wbNode, setWbNode] = useState(() => defaultNodeOf('media'))
   const [assets, setAssets] = useState([])
   const [clips, setClips] = useState([])
+  /* 插件装 / 删 / 启停之后 +1。
+     边框与贴纸面板都是"有缓存就不重拉"，所以拿它当 React key 强制重挂载 ——
+     不这么做的话，插件页显示"导入成功"，回到边框页还是原来那 24 款。 */
+  const [packsVersion, setPacksVersion] = useState(0)
   const [selection, setSelection] = useState(null)
+  /**
+   * 片段属性剪贴板（Ctrl+Alt+C 的落点）。
+   *
+   * 用 ref 而不是 state 有两个原因：
+   *   · 它**不该引起重渲染** —— 复制属性不改变任何画面，只是捎带一份数据；
+   *   · 它**不该进草稿** —— 与「时间区域」同理，跨会话还留着的剪贴板会让人困惑
+   *     （下次打开时按 Ctrl+Alt+V 粘出上一次会话的属性，谁都会以为软件出错了）。
+   * 内容形态见 clipProps.js 的 pickAttrs（`{ keys, groups, count }`）。
+   */
+  const attrClipboardRef = useRef(null)
+  /* 剪贴板里**有没有**内容，供右键菜单的「粘贴属性」决定可不可点。
+     ref 存内容、state 存"有没有"，是因为禁用态必须跟着重渲染，
+     而内容本身不该引起任何重渲染（见上面那条注释）。 */
+  const [attrClipboardCount, setAttrClipboardCount] = useState(0)
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
+  /* 播放方向：1 正向 / -1 倒放。J / K / L 三键要它，空格（切换）不动它 ——
+     空格是"接着上次的方向继续"，所以停在哪边就该记着哪边。 */
+  const [playDir, setPlayDir] = useState(1)
   const [volume, setVolume] = useState(100)
   const [zoom, setZoom] = useState(1)
+  /* 「适配全片」的信号灯：递增一次 = 请求 Timeline 量一次视口并算缩放。
+     之所以不在这里算：视口宽度只有 Timeline 的滚动容器知道，App 拿不到。 */
+  const [fitTick, setFitTick] = useState(0)
   const [projectName, setProjectName] = useState('未命名项目')
   const [exportOpen, setExportOpen] = useState(false)
 
@@ -1137,6 +1177,188 @@ export default function App() {
   )
 
   /**
+   * 套用一套模板（开场 / 结尾 / 字幕套）：按播放头位置生成片段，写进时间线。
+   *
+   * ⚠️ 三处容易写成"看起来正常、其实没落地"：
+   *   ① 起点用**播放头**，不是 0 —— 否则在第 30 秒套开场会跑到最前面去；
+   *   ② 贴纸 key 必须先换成 `yjai-media://` 地址（走 stickerIndex 的共用索引），
+   *      换不到就**跳过那一条**并在提示里说出跳了几项，不能生成一个空 <img>；
+   *   ③ 落地的是**普通片段**（track/kind 与手工加的一模一样），
+   *      否则剪切、导出、右栏面板都要额外认一种"模板片段"。
+   */
+  const applyTemplate = useCallback(
+    async (tplKey) => {
+      const tpl = templateOf(tplKey)
+      if (!tpl) {
+        toast.bad('这套模板不在数据表里')
+        return
+      }
+      const catalog = await loadStickerCatalog()
+      const planned = planTemplate(tpl, {
+        start: Math.max(0, Number(playhead) || 0),
+        idFor: () => nextId('clip'),
+        resolveSticker: (key) => {
+          const hit = catalog && catalog.index ? catalog.index.get(key) : null
+          return hit ? { name: hit.name, url: hit.url } : null
+        },
+        /* 主标题先填工程名：套完立刻有内容可看，不用先去改字 */
+        titleText: String(projectName || '').trim()
+      })
+      if (!planned.clips.length) {
+        toast.bad('这套模板一条片段都没能落地（内置素材缺失）')
+        return
+      }
+      commitClips((list) => [...list, ...planned.clips])
+      setSelection({ type: 'clip', clipId: planned.clips[0].id })
+      toast.good(
+        `已套用「${tpl.name}」：${planned.clips.length} 条片段` +
+          (planned.skipped.length ? `，${planned.skipped.length} 枚贴纸缺失已跳过` : '')
+      )
+    },
+    [commitClips, playhead, projectName, toast]
+  )
+
+  /* ------------------------ 智能包装：口播 / 画面 ------------------------ */
+
+  /**
+   * 把一批 patch 真的写进片段表（口播包装与画面包装共用）。
+   *
+   * ⚠️ 用 `clipsRef.current` 取当前片段表，**不能**用 `clips`：
+   *    这个回调的依赖数组里只要写进 `clips`，每次片段变动都会重建它，
+   *    而面板把它当 `useState` 的闭包用 —— 重建之后点按钮拿到的还是旧引用，
+   *    表现为"连点两次才生效"。
+   */
+  const applyPackPatches = useCallback(
+    (patches) => {
+      if (!patches.length) return 0
+      const byId = new Map(patches.map((item) => [item.id, item.patch]))
+      commitClips((list) => list.map((clip) => (byId.has(clip.id) ? { ...clip, ...byId.get(clip.id) } : clip)))
+      return patches.length
+    },
+    [commitClips]
+  )
+
+  /**
+   * 口播包装：字幕轨批量套样式 + 关键句放大 + 按主题配贴纸。
+   *
+   * 贴纸先按组取 key（`stickerKeys`），再由这里把 key 换成 `yjai-media://` 地址 ——
+   * 换不到就跳过并计数（与模板同一条纪律：宁可少一枚，也不要留一条加载失败的空 img）。
+   */
+  const applyPack = useCallback(
+    async (styleKey, levelKey) => {
+      const catalog = await loadStickerCatalog()
+      const pools = {}
+      const urlOf = new Map()
+      if (catalog && Array.isArray(catalog.groups)) {
+        for (const group of catalog.groups) {
+          pools[group.key] = (group.items || []).map((item) => item.key)
+          for (const item of group.items || []) urlOf.set(item.key, item)
+        }
+      }
+      const plan = planPackaging(clipsRef.current, {
+        style: styleKey,
+        level: levelKey,
+        stickerKeys: pools
+      })
+      if (!plan.patches.length) {
+        toast.bad('字幕轨上还没有字幕，先从「字幕」页加几句')
+        return plan.summary
+      }
+      const byId = new Map(plan.patches.map((item) => [item.id, item.patch]))
+      const added = []
+      let missing = 0
+      for (const spec of plan.stickers) {
+        const hit = urlOf.get(spec.key)
+        if (!hit || !hit.url) {
+          missing += 1
+          continue
+        }
+        added.push({
+          id: nextId('clip'),
+          track: 'overlay',
+          assetId: '',
+          name: hit.name || '贴纸',
+          url: hit.url,
+          path: '',
+          kind: 'image',
+          text: '',
+          start: spec.at,
+          duration: spec.duration,
+          offset: 0,
+          sourceDuration: 0,
+          pip: { anchor: spec.anchor, size: spec.size },
+          /* 标记"这枚是包装自动加的"：清除包装时要能精确删掉，
+             同时用户自己拖进来的贴纸不能被误删 */
+          pack: { auto: true, mode: 'line', forClip: spec.forClip }
+        })
+      }
+      commitClips((list) => {
+        const patched = list.map((clip) => (byId.has(clip.id) ? { ...clip, ...byId.get(clip.id) } : clip))
+        /* 先把上一轮自动贴纸清掉再加：不清的话每点一次就多一层叠在一起 */
+        const kept = patched.filter((clip) => !(clip.pack && clip.pack.auto && clip.pack.mode === 'line'))
+        return [...kept, ...added]
+      })
+      toast.good(
+        `已包装 ${plan.patches.length} 条字幕（${plan.summary.keys} 条关键句）` +
+          (added.length ? `，配了 ${added.length} 枚贴纸` : '') +
+          (missing ? `，${missing} 枚贴纸缺失已跳过` : '')
+      )
+      return plan.summary
+    },
+    [commitClips, nextId, toast]
+  )
+
+  /** 画面包装：主轨每段统一边框 + 调色 */
+  const applyScenePack = useCallback(
+    (comboKey) => {
+      const plan = planScene(clipsRef.current, { combo: comboKey })
+      if (!plan.patches.length) {
+        toast.bad('主轨还没有画面片段，先把视频拖到时间线')
+        return plan.summary
+      }
+      applyPackPatches(plan.patches)
+      toast.good(`已给主轨 ${plan.patches.length} 段套上画面包装`)
+      return plan.summary
+    },
+    [applyPackPatches, toast]
+  )
+
+  /**
+   * 清除包装（口播 / 画面各清各的）。
+   *
+   * ⚠️ 还原必须走 `drop` **删键**，不能只写回旧值：包装时新增的键（比如 `textLoop`）
+   *    在片段上原本不存在，只写旧值的话它会永远留着 ——
+   *    症状是"点了清除，字幕还在呼吸"。
+   */
+  const clearPack = useCallback(
+    (mode = 'line') => {
+      const plan = planStrip(clipsRef.current, mode)
+      if (!plan.patches.length && !plan.remove.length) {
+        toast('没有可清除的包装')
+        return 0
+      }
+      const byId = new Map(plan.patches.map((item) => [item.id, item]))
+      const dropSet = new Set(plan.remove)
+      commitClips((list) =>
+        list
+          .filter((clip) => !dropSet.has(clip.id))
+          .map((clip) => {
+            const hit = byId.get(clip.id)
+            if (!hit) return clip
+            const next = { ...clip, ...hit.set }
+            for (const key of hit.drop) delete next[key]
+            return next
+          })
+      )
+      toast.good(
+        `已清除 ${plan.restored} 条包装` + (plan.remove.length ? `、${plan.remove.length} 枚自动贴纸` : '')
+      )
+      return plan.restored
+    },
+    [commitClips, toast]
+  )
+
+  /**
    * 把媒体库里的素材拖到时间线上：落在哪条轨就进哪条轨，落点即起点。
    * 起点由 Timeline 那边按像素换算好（含吸附），这里只负责入库。
    */
@@ -1206,7 +1428,27 @@ export default function App() {
           ? [prev.clipId]
           : []
       if (!options.additive) {
-        return { ...(prev || {}), type: 'clip', clipId: clip.id, assetId: clip.assetId || '', clipIds: [clip.id] }
+        /**
+         * 点中组合里的任一段 ⇒ **整组一起选中**。
+         *
+         * 这是"组合"唯一能被用户看见的地方：时间线上点一下，组内所有片段同时高亮，
+         * 接着的拖动/删除自然按整组结算。不在这里展开的话，组合就只剩一个
+         * 谁也不认识的字段，用户按了 Alt+G 之后除了提示语什么都没有。
+         *
+         * ⚠️ 只做**单选**路径（Ctrl+点选的加法路径不展开）：那条路径的用途是
+         *    "精确挑几段去做复合片段"，自动把整组加进去会让"我只想选这两段"变成
+         *    "怎么多出来三段"，而且没有提示。
+         * ⚠️ `clipId` 仍然是**被点的那一条**：检查器、播放头跟随、角标只认它，
+         *    这样多选是加法而不是改掉单选语义（与原有约定一致）。
+         */
+        const ids = groupIdsOf(clipsRef.current, clip.id)
+        return {
+          ...(prev || {}),
+          type: 'clip',
+          clipId: clip.id,
+          assetId: clip.assetId || '',
+          clipIds: ids.length ? ids : [clip.id]
+        }
       }
       const has = base.includes(clip.id)
       const nextIds = has ? base.filter((id) => id !== clip.id) : [...base, clip.id]
@@ -1360,7 +1602,9 @@ export default function App() {
          ⚠️ 修剪也联动的话，拖一下右端会让整组一起变长 —— 那不是剪辑软件的行为，
             而且会让"音画同步"这个前提在用户完全没预期的情况下被破坏。 */
       if (patch && typeof patch.start === 'number' && !('duration' in patch) && !('offset' in patch)) {
-        const group = linkMovePatches(list, clipId, patch.start, linkRef.current)
+        /* 组合成员走**同一段**钳位算术（第五个参数把组员并进参与集合）：
+           分两段写必然会在"往左拖到 0"那一刻算出两个位移，表现是组员静默错位。 */
+        const group = linkMovePatches(list, clipId, patch.start, linkRef.current, groupPeers(list, clipId))
         const byId = new Map(group.map((item) => [item.id, item.start]))
         const next = list.map((item) =>
           byId.has(item.id) ? { ...item, start: byId.get(item.id), ...(item.id === clipId ? patch : {}) } : item
@@ -1483,6 +1727,140 @@ export default function App() {
     },
     [commitClips, toast]
   )
+
+  /* ------------------------- 组合（逻辑成组） -------------------------
+     Alt+G / Alt+Shift+G。与「复合片段」（Ctrl+G / Ctrl+Shift+G）是两件不同的事：
+     组合只是"一起选中、一起动"，片段仍是几段、渲染完全不变（见 groups.js 头注释）。
+     组合信息存在片段的 `group` 字段上，跟着草稿落盘 —— 不维护成员表（会过期）。 */
+
+  /** 当前选中的片段 id（多选优先，退化成单选；不走 groupIdsOf 展开） */
+  const selectedIds = () =>
+    Array.isArray(selection?.clipIds) && selection.clipIds.length
+      ? selection.clipIds.filter(Boolean)
+      : selection?.clipId
+        ? [selection.clipId]
+        : []
+
+  const combineSelection = useCallback(() => {
+    const ids = selectedIds()
+    if (ids.length < MIN_GROUP_SIZE) {
+      toast.bad(`组合至少要选两段（按住 Ctrl 点选可多选，当前 ${ids.length} 段）`)
+      return
+    }
+    const current = clipsRef.current
+    const tags = new Set(ids.map((id) => current.find((item) => item.id === id)?.group).filter(Boolean))
+    if (tags.size === 1 && tags.has(current.find((item) => item.id === ids[0])?.group)) {
+      /* 已经是一组时再说"已组合"等于骗人：什么都没变。要如实说清下一步怎么改 */
+      toast('这几段已经是一组了；要改范围请先「取消组合」（Alt+Shift+G）再重新组合')
+      return
+    }
+    const next = withGroup(current, ids, nextId('grp'))
+    if (next === current) {
+      toast.bad('没能组合：选中的片段已经不在时间线上了，重新选一次')
+      return
+    }
+    commitClips(next)
+    toast.good(`已组合 ${ids.length} 段：点其中任意一段会整组选中，拖动和删除也按整组结算`)
+  }, [commitClips, selection, toast])
+
+  const removeCombination = useCallback(() => {
+    const id = selection?.clipId
+    if (!id) {
+      toast.bad('先选中组合里的任意一段，再按 Alt+Shift+G')
+      return
+    }
+    const { clips: next, count } = clearGroupOf(clipsRef.current, id)
+    if (!count) {
+      toast.bad('这段不在任何组合里')
+      return
+    }
+    commitClips(next)
+    toast.good(`已取消组合（${count} 段）`)
+  }, [commitClips, selection, toast])
+
+  /* ------------------------ 片段属性剪贴板 ------------------------
+     Ctrl+Alt+C / Ctrl+Alt+V。"搬哪些键、源上没有的要摘掉"全在 clipProps.js，
+     这里只负责取选中、落历史、说结果。 */
+
+  const copySegAttribute = useCallback(() => {
+    const id = selection?.clipId
+    if (!id) {
+      toast.bad('先在时间线上点一个片段，再按 Ctrl+Alt+C')
+      return
+    }
+    const target = clipsRef.current.find((item) => item.id === id)
+    if (!target) {
+      toast.bad('找不到这个片段了，重新点一下再复制')
+      return
+    }
+    const snapshot = pickAttrs(target)
+    if (!snapshot.count) {
+      toast.bad(`「${target.name}」上没有可复制的属性（这一段只有素材本身）`)
+      return
+    }
+    attrClipboardRef.current = snapshot
+    setAttrClipboardCount(snapshot.count)
+    toast.good(`已复制「${target.name}」的属性：${describeAttrs(snapshot)}`)
+  }, [selection, toast])
+
+  const pasteSegAttribute = useCallback(() => {
+    const snapshot = attrClipboardRef.current
+    if (!snapshot) {
+      toast.bad('剪贴板里还没有属性，先选中一段按 Ctrl+Alt+C')
+      return
+    }
+    const ids = selectedIds()
+    if (!ids.length) {
+      toast.bad('先选中要粘贴到的片段，再按 Ctrl+Alt+V')
+      return
+    }
+    /* 一次 commit 打完全部目标：逐段 commit 会让"撤销一次只退一段"，
+       而用户按一次 Ctrl+Alt+V 的心理单位是"一次操作"。 */
+    const hit = new Set(ids)
+    let touched = 0
+    commitClips((list) =>
+      list.map((item) => {
+        if (!hit.has(item.id)) return item
+        const patch = pastePatch(item, snapshot)
+        if (!patch) return item
+        touched += 1
+        return applyAttrs(item, patch)
+      })
+    )
+    if (!touched) {
+      toast.bad('选中的片段都不在时间线上了，重新选一次')
+      return
+    }
+    toast.good(`已把属性粘贴到 ${touched} 段：${describeAttrs(snapshot)}`)
+  }, [commitClips, selection, toast])
+
+  /* ---------------------------- 批量分割 ----------------------------
+     Ctrl+Shift+K：播放头处一刀切穿所有未锁定轨道。算术在 trim.js 的 cutAllAt
+     （倍速 / 曲线变速的右半段入点换算与单段分割共用同一口径）。 */
+
+  const batchCutNow = useCallback(() => {
+    const result = cutAllAt(clipsRef.current, playhead, {
+      lockedTracks: trackStateRef.current.locked,
+      nextId: () => nextId('clip')
+    })
+    if (!result.cuts.length) {
+      /* 一句"没切"是不合格的：用户按了键必须知道**为什么**没切 */
+      const why = []
+      if (result.skipped.locked) why.push(`${result.skipped.locked} 段在锁定轨`)
+      if (result.skipped.compound) why.push(`${result.skipped.compound} 段是复合片段`)
+      if (result.skipped.tooShort) why.push(`${result.skipped.tooShort} 段两侧不足 ${MIN_CLIP_SECONDS} 秒`)
+      toast.bad(
+        why.length
+          ? `播放头处没有可分割的片段（${why.join('、')}）`
+          : '播放头处没有跨过的片段，先把播放头移到要切的位置'
+      )
+      return
+    }
+    commitClips(result.clips)
+    /* 不改选中：批量分割会在多条轨上同时产生右半段，一次选中它们会让
+       接着的一次拖动把七八段不同轨的东西一起拖走（谁也想不到会这样）。 */
+    toast.good(`已在播放头处分割 ${result.cuts.length} 段`)
+  }, [commitClips, playhead, toast])
 
   /* ------------------------- 时间区域（区间操作） -------------------------
      「时间区域」= 时间线上框出来的一段 [start, end)，对它做整体操作：
@@ -1811,6 +2189,18 @@ export default function App() {
         toast.bad(`「${target.track}」轨道已锁定，解除锁定后才能分割`)
         return false
       }
+      /**
+       * 复合片段拒分割 —— 与批量分割（`cutAllAt`）同一条口径。
+       *
+       * 为什么必须拒：`compound.children` 是按**父片段坐标系**存的，`{ ...target }` 拆成
+       * 两半会让两半**各自带一份同一批子片段**，成片里同一段内容播两遍。
+       * 而界面上看不出任何异常：两段都在、总时长也没变。
+       * 以前这里没有这道闸，是"能切、切完静默错"的类型。
+       */
+      if (isCompound(target)) {
+        toast.bad('复合片段要整体处理：先「解除复合片段」（Ctrl+Shift+G），再分割')
+        return false
+      }
       if (at <= target.start + 0.05 || at >= target.start + target.duration - 0.05) {
         toast.bad('播放头不在这个片段内部，无法分割')
         return false
@@ -2061,6 +2451,64 @@ export default function App() {
   )
 
   /**
+   * 识别人物特效要用的「人脸框序列」。
+   *
+   * 三个设计决定：
+   *   ① **另起一个隐藏 <video> 跑检测**，不复用预览里那个：检测会把 currentTime
+   *      逐帧改掉，借用预览元素的话，识别过程中用户看到画面在闪，结束还得再还原 ——
+   *      而还原失败就是"识别完播放头跑到别处去了"。
+   *   ② 起点用片段的**入点**（`clip.offset`）：素材可能只用了中间一段，
+   *      从头检测既慢又可能把"用不到的那段里的脸"当成主脸。
+   *   ③ 结果写 `clip.faceTrack`（只写这一个字段）。没检到就写 null，
+   *      让面板能区分"还没识别"和"识别了但没有人脸"—— 前者提示去识别，
+   *      后者提示换素材。两种状态混成一个，用户只会反复点识别。
+   */
+  const detectFaceForClip = useCallback(
+    async (clipId, onProgress) => {
+      const clip = clipsRef.current.find((item) => item.id === clipId)
+      if (!clip) throw new Error('找不到这个片段')
+      if (clip.track === 'audio' || clip.track === 'text') {
+        throw new Error('人物特效只作用于画面片段')
+      }
+      const url = clip.url || (clip.asset && clip.asset.url) || ''
+      if (!url) throw new Error('这个片段没有可读取的画面')
+
+      const video = document.createElement('video')
+      video.preload = 'auto'
+      video.muted = true
+      video.playsInline = true
+      video.src = url
+      try {
+        await new Promise((resolve, reject) => {
+          const fail = () => reject(new Error('素材读不出来（可能是图片片段或文件已被移走）'))
+          video.addEventListener('loadedmetadata', resolve, { once: true })
+          video.addEventListener('error', fail, { once: true })
+          /* 有些容器 metadata 早就绪、事件不再触发：兜一条超时，别让面板永远卡在"识别中" */
+          setTimeout(() => {
+            if (video.videoWidth) resolve()
+          }, 3000)
+        })
+        const res = await detectFaceTrack(video, {
+          start: Number(clip.offset) || 0,
+          duration: Math.max(0.1, Number(clip.duration) || 0),
+          onProgress
+        })
+        patchClip(clipId, { faceTrack: res.found ? res.track : null })
+        return res
+      } finally {
+        /* 必须显式卸载：<video> 挂在 yjai-media:// 上，不卸载会一直占着那把文件句柄 */
+        video.removeAttribute('src')
+        try {
+          video.load()
+        } catch {
+          /* 已经释放 */
+        }
+      }
+    },
+    [patchClip]
+  )
+
+  /**
    * 从 `from` 往后找第一个"没被字幕占住"的时刻。
    *
    * 为什么不是直接放末尾（原来就是末端追加）：字幕要立刻看得见，
@@ -2160,6 +2608,196 @@ export default function App() {
     },
     [commitClips, playhead, selection, textClipAt, toast]
   )
+
+  /* ------------------ 字幕文件：导入 / 导出 / 按语音分句 ------------------ */
+
+  /**
+   * 一批 cue → 字幕轨片段（追加）。
+   *
+   * 三条容易漏的细节：
+   *   · `duration` 兜一个 0.2 秒下限：导入的 srt 里偶有 `00:00:05,000 --> 00:00:05,000`
+   *     这种零长条目，直接照搬会在时间线上变成一个宽度 0 的方块 —— 看得见、点不着；
+   *   · 上限 500 条：一份 3000 条的字幕一次铺上去会让时间线渲染卡死十几秒，
+   *     用户以为软件挂了。超出部分要明说（见调用方），不能静默截断；
+   *   · 样式统一走 `textStyleDef(undefined)`（fallback 那条），不写死 key ——
+   *     写死的 key 一旦样式表改名，新导入的字幕就会变成"没有样式"。
+   */
+  const appendSubtitleClips = useCallback(
+    (cues, { labelPrefix = '字幕', limit = 500 } = {}) => {
+      if (!cues || !cues.length) return { created: 0, skipped: 0 }
+      const styleKey = textStyleDef(undefined).key
+      const rows = cues.slice(0, limit).map((cue, index) => ({
+        id: nextId('clip'),
+        track: 'text',
+        assetId: '',
+        name: `${labelPrefix} ${index + 1}`,
+        url: '',
+        path: '',
+        kind: 'text',
+        text: String(cue.text || ''),
+        textSize: 32,
+        textStyle: styleKey,
+        start: Math.max(0, Number(cue.start) || 0),
+        duration: Math.max(0.2, (Number(cue.end) || 0) - (Number(cue.start) || 0)),
+        offset: 0,
+        sourceDuration: 0
+      }))
+      commitClips((list) => [...list, ...rows])
+      return { created: rows.length, skipped: Math.max(0, cues.length - rows.length) }
+    },
+    [commitClips]
+  )
+
+  /** 导入字幕文件（SRT / VTT / LRC / ASS）。解析全在 shared/subtitle.js。 */
+  const importSubtitle = useCallback(async () => {
+    if (!window.yjai?.subtitle?.read) {
+      toast.bad('导入字幕需要桌面端')
+      return
+    }
+    let file = null
+    try {
+      file = await window.yjai.subtitle.read({})
+    } catch (error) {
+      toast.bad(`导入失败：${(error && error.message) || '未知原因'}`)
+      return
+    }
+    if (!file || file.canceled) return
+    if (!file.ok) {
+      toast.bad(file.error || '读不到这个字幕文件')
+      return
+    }
+    const parsed = SUBTITLE.readSubtitles(file.text, file.name)
+    if (!parsed.ok) {
+      /* 失败原因必须说清是"认不出格式"还是"格式对但里面没条目" ——
+         两者对用户的下一步动作完全不同（换文件 vs 检查文件内容）。 */
+      toast.bad(parsed.error)
+      return
+    }
+    const { created, skipped } = appendSubtitleClips(parsed.cues)
+    toast.good(
+      skipped > 0
+        ? `已导入 ${created} 条字幕（超过 500 条的 ${skipped} 条未导入）`
+        : `已导入 ${created} 条字幕 · ${SUBTITLE.FORMAT_LABEL[parsed.format] || parsed.format}`
+    )
+    /* 播放头挪到第一条：否则导入完画面停在别处，用户看不到"字幕真的进来了" */
+    setPlayhead(parsed.cues[0].start)
+  }, [appendSubtitleClips, toast])
+
+  /** 导出字幕轨为 SRT 文件。 */
+  const exportSubtitle = useCallback(async () => {
+    if (!window.yjai?.subtitle?.write) {
+      toast.bad('导出字幕需要桌面端')
+      return
+    }
+    const cues = SUBTITLE.cuesOfClips(clipsRef.current)
+    if (!cues.length) {
+      toast.bad('字幕轨是空的，没有可导出的内容')
+      return
+    }
+    const name = String(projectName || '字幕').trim() || '字幕'
+    let result = null
+    try {
+      result = await window.yjai.subtitle.write({ content: SUBTITLE.toSrt(cues), format: 'srt', name })
+    } catch (error) {
+      toast.bad(`导出失败：${(error && error.message) || '未知原因'}`)
+      return
+    }
+    if (!result || result.canceled) return
+    if (!result.ok) {
+      toast.bad(result.error || '写不出去')
+      return
+    }
+    toast.good(`已导出 ${cues.length} 条字幕 → ${result.name}`)
+  }, [projectName, toast])
+
+  /**
+   * 按语音自动分句：在**选中的画面片段**上分析音量，按"有人说话的区间"切空白字幕段。
+   *
+   * ⚠️ 这不是语音识别。开源版不带 ASR 模型，这里只切**时间轴**，文字留空由用户填。
+   *    UI 上这三个字必须写明白（SubtitleTools 里写了），否则"点了得到一堆空白"就是欺骗。
+   *
+   * 分辨率：`media:peaks` 单次最多 512 个桶。为了让 VAD 有 0.1 秒的分辨率，
+   * 这里按 30 秒一段分批取（每段 300 桶），拼成一条连续包络后再一次性分句 ——
+   * 分批而不是"一次取 512 桶"：3 分钟的片子只用 512 桶时，一桶 0.35 秒，
+   * 一句话会被吞进一两个桶里，切出来的字幕段边界能差半秒。
+   */
+  const autoSegmentSubtitles = useCallback(async () => {
+    const list = clipsRef.current
+    const selId = selection?.clipId
+    let target = selId ? list.find((item) => item.id === selId) : null
+    if (!target || target.track === 'text') {
+      target =
+        list.find(
+          (item) =>
+            item.track !== 'text' &&
+            item.track !== 'audio' &&
+            playhead >= item.start &&
+            playhead < item.start + item.duration
+        ) || null
+    }
+    if (!target || !target.url) {
+      toast.bad('先在时间线上选中一个画面片段（或把播放头停在它上面）')
+      return
+    }
+    if (!window.yjai?.media?.peaks) {
+      toast.bad('按语音分句要读音频，需要桌面端（本机 ffmpeg）')
+      return
+    }
+    const total = Number(target.duration) || 0
+    if (total < 0.5) {
+      toast.bad('这一段太短了（不到半秒），没法分句')
+      return
+    }
+    if (total > 600) {
+      toast.bad('一次最多分析 10 分钟，先把它切成几段再分句')
+      return
+    }
+
+    const CHUNK = 30
+    const PER = 0.1
+    toast('正在分析这一段的声音…')
+    const peaks = []
+    for (let at = 0; at < total - 0.05; at += CHUNK) {
+      const span = Math.min(CHUNK, total - at)
+      const buckets = Math.max(8, Math.round(span / PER))
+      let part = null
+      try {
+        part = await window.yjai.media.peaks({
+          url: target.url,
+          offset: (Number(target.offset) || 0) + at,
+          duration: span,
+          buckets
+        })
+      } catch (error) {
+        toast.bad(`读不到声音：${(error && error.message) || '未知原因'}`)
+        return
+      }
+      if (!part || !part.ok) {
+        toast.bad((part && part.error) || '读不到声音')
+        return
+      }
+      /* 桶数与请求不符 ⇒ 直接说清，不要硬拼。拼了之后时间轴会整体偏移，
+         而偏移的字幕看起来"只是早了半拍"，没人会想到是波形长度不对。 */
+      if (!Array.isArray(part.peaks) || part.peaks.length !== buckets) {
+        toast.bad('波形数据长度不对，无法可靠分句')
+        return
+      }
+      peaks.push(...part.peaks)
+    }
+
+    const segments = SUBTITLE.vadSegments(peaks, { secondsPerBucket: PER, minDur: 0.35, maxDur: 8 })
+    if (!segments.length) {
+      toast('这一段里没检测到说话声（可能没有人声，或全程音量一样平）')
+      return
+    }
+    const cues = SUBTITLE.cuesFromSpeech(segments).map((cue) => ({
+      start: target.start + cue.start,
+      end: Math.min(target.start + total, target.start + cue.end)
+    }))
+    const { created } = appendSubtitleClips(cues, { labelPrefix: '分句' })
+    toast.good(`已按语音切出 ${created} 段空白字幕 —— 点每一段填文字`)
+    setSelection(null)
+  }, [appendSubtitleClips, playhead, selection, toast])
 
   /**
    * 「智能剪辑 → 平均分段」：把视频轨第一段按当前时长平均切成 n 段。
@@ -2601,6 +3239,30 @@ export default function App() {
         toast('先在时间线上点一个片段，再按删除')
         return
       }
+      /**
+       * 组合内删除 = **整组删**。
+       *
+       * 理由与"一起选中、一起移动"同源：用户按 Alt+G 之后已经看不到"单独一段"这个
+       * 概念了（点一下就整组高亮），这时按删除只删掉一段，剩下几段留在原地 ——
+       * 那是这一组里"悄悄掉了一块"，比整组删掉更难发现。要单独删就先取消组合。
+       *
+       * 锁定轨仍然拦：与单段删除同一套口径，且**整组一起拒**（避免删一半留一半）。
+       */
+      const ids = groupIdsOf(clipsRef.current, id)
+      if (ids.length > 1) {
+        const lockedTracks = trackStateRef.current.locked || []
+        const blocked = clipsRef.current.find(
+          (item) => ids.includes(item.id) && lockedTracks.includes(item.track)
+        )
+        if (blocked) {
+          toast.bad(`「${blocked.track}」轨道已锁定，整组删除被拒；先解锁或取消组合`)
+          return
+        }
+        commitClips((list) => list.filter((item) => !ids.includes(item.id)))
+        setSelection(null)
+        toast.good(`已删除一个组合（${ids.length} 段）；想只删其中一段请先取消组合`)
+        return
+      }
       removeClip(id)
     },
     toggleDisableClip: () => {
@@ -2621,6 +3283,18 @@ export default function App() {
       toast('已清空时间线')
     },
     toggleSnap: () => setSnap((value) => !value),
+    /* 主轨联动（Ctrl+L）：与工具栏那个开关是同一个状态 —— 一处改，另一处跟着变。
+       处理表每次渲染重建，所以这里读到的 linkEnabled 一定是最新值。 */
+    linkage: () => changeLinkEnabled(!linkEnabled),
+    /* 组合 / 复合各一对命令。这个名字与参考客户端的具名命令一一对应，
+       所以「设置 · 快捷键」里看到的条目能和行业方案（FCP / PR）对上。 */
+    segmentCombination: combineSelection,
+    segmentRemoveCombination: removeCombination,
+    segmentMakeGroup: () => createCompound(selectedIds()),
+    segmentRemoveGroup: () => ungroupClip(selection?.clipId),
+    copySegAttribute,
+    pasteSegAttribute,
+    batchCut: batchCutNow,
     /* 时间区域的三条键：入点 / 出点落在**播放头**，删除按当前区间结算 */
     regionIn: () => markRegion('in', playhead),
     regionOut: () => markRegion('out', playhead),
@@ -2639,15 +3313,49 @@ export default function App() {
       setPlayhead(next)
     },
     playPause: () => setPlaying((value) => !value),
+    /* 三键播放：L / K / J 是"指定方向"，不是"切换"。
+       空格在播的时候按下去是暂停，K 在播的时候按下去也是暂停 —— 但对**停着**的时候，
+       空格是"往前播"、K 是"什么都不做"。这就是为什么行业里两个键都留着。 */
+    playForward: () => {
+      setPlayDir(1)
+      setPlaying(true)
+    },
+    pause: () => setPlaying(false),
+    playBackward: () => {
+      setPlayDir(-1)
+      setPlaying(true)
+    },
     toStart: () => setPlayhead(0),
     toEnd: () => setPlayhead(contentEnd()),
     prevFrame: () => setPlayhead((value) => stepFrame(value, -1)),
     nextFrame: () => setPlayhead((value) => stepFrame(value, 1)),
     prevSecond: () => setPlayhead((value) => Math.max(0, value - 1)),
     nextSecond: () => setPlayhead((value) => Math.min(timelineDuration, value + 1)),
+    /* 剪切点跳转：读 clipsRef（每次渲染重建处理表，但 ref 更稳 ——
+       删除/粘贴后立即按键不会拿到上一帧的片段表）。到不了就明说，
+       不许静默不动：用户会以为键坏了。 */
+    prevCut: () => {
+      const next = stepCut(clipsRef.current, playhead, -1)
+      if (next === null) {
+        toast('播放头之前没有剪切点')
+        return
+      }
+      setPlayhead(next)
+    },
+    nextCut: () => {
+      const next = stepCut(clipsRef.current, playhead, 1)
+      if (next === null) {
+        toast('播放头之后没有剪切点')
+        return
+      }
+      setPlayhead(next)
+    },
     zoomIn: () => setZoom((value) => clampZoom(Number((value + 0.2).toFixed(2)))),
     zoomOut: () => setZoom((value) => clampZoom(Number((value - 0.2).toFixed(2)))),
     zoomReset: () => setZoom(1),
+    /* 适配全片要量视口宽度，而视口只有 Timeline 摸得到 ⇒ 这里只发一个信号，
+       具体缩到多少由 Timeline 按实际 clientWidth 算（见 timelineNav.fitZoom）。 */
+    zoomFit: () => setFitTick((value) => value + 1),
     fullscreen: toggleFullscreen,
     save: () => persistDraft({ silent: false }),
     openSettings: () => setDialog('settings'),
@@ -2825,6 +3533,21 @@ export default function App() {
             capabilityCode={currentNode.capability || null}
             textStyleGroup={currentNode.textStyle ?? null}
             stickerGroup={currentNode.sticker ?? null}
+            templateGroup={currentNode.template ?? null}
+            onApplyTemplate={applyTemplate}
+            /* 「插件」：左栏三项（我的插件 / 我的边框 / 我的贴纸）共用一个面板 */
+            pluginTab={currentNode.pluginTab || 'mine'}
+            /* 插件变更后 +1 ⇒ 边框/贴纸面板按 key 重挂载，读到新清单 */
+            packsVersion={packsVersion}
+            onPacksChanged={() => setPacksVersion((v) => v + 1)}
+            /* 人物特效：识别当前片段的人脸（结果写 clip.faceTrack，预览与导出共用） */
+            onDetectFace={detectFaceForClip}
+            /* 智能包装：左栏两项决定包"谁"（口播 = 字幕 / 画面 = 主轨） */
+            packMode={currentNode.packMode || null}
+            onApplyPack={applyPack}
+            onClearPack={() => clearPack('line')}
+            onApplyScene={applyScenePack}
+            onClearScene={() => clearPack('scene')}
             clips={clips}
             projectName={projectName}
             assets={assets}
@@ -2832,6 +3555,10 @@ export default function App() {
             onPatchClip={patchClip}
             activeClip={clipAtPlayhead}
             onAddTextClip={addTextClip}
+            /* 字幕文件的进出与语音分句（只挂在「字幕 → 字幕模板」页显示） */
+            onImportSubtitle={importSubtitle}
+            onExportSubtitle={exportSubtitle}
+            onAutoSegment={autoSegmentSubtitles}
             onAddToTimeline={addClipFromAsset}
             /* 本地工具（如「提取音频」）要把产物放回素材库 */
             onAddAsset={addAsset}
@@ -2980,13 +3707,15 @@ export default function App() {
               /* 叠加轨（画中画）压在主画面之上 —— 此刻在场的**全部**片段 */
               pip={composite.pip}
               playing={playing}
+              /* 播放方向：倒放靠往回推播放头（浏览器没有负向 playbackRate） */
+              direction={playDir}
               playhead={playhead}
               totalDuration={timelineDuration}
               volume={volume}
               onTogglePlay={() => setPlaying((value) => !value)}
               onSeek={setPlayhead}
               onSkip={(delta) => setPlayhead((value) => Math.max(0, Math.min(timelineDuration, value + delta)))}
-              onFrame={(direction) => setPlayhead((value) => stepFrame(value, direction))}
+              onFrame={(step) => setPlayhead((value) => stepFrame(value, step))}
               playerRef={playerRef}
               fullscreen={fullscreen}
               onToggleFullscreen={toggleFullscreen}
@@ -3089,6 +3818,13 @@ export default function App() {
             /* 复合片段：新建吃多选集合，解除吃当前那一个 */
             onCreateCompound={createCompound}
             onUngroupClip={ungroupClip}
+            /* 组合（逻辑成组）：与复合片段是两件事，见 groups.js 头注释 */
+            onCreateCombination={combineSelection}
+            onRemoveCombination={removeCombination}
+            /* 片段属性剪贴板：粘贴项要按"剪贴板里有没有东西"决定可不可点 */
+            onCopyAttrs={copySegAttribute}
+            onPasteAttrs={pasteSegAttribute}
+            attrClipboardCount={attrClipboardCount}
             onCreateMulticam={createMulticamClip}
             onUngroupMulticam={ungroupMulticamClip}
             /* 时间区域：状态在这里（导出面板也要读），时间线只负责画与手势 */
@@ -3108,6 +3844,7 @@ export default function App() {
             canUndo={pastRef.current.length > 0}
             canRedo={futureRef.current.length > 0}
             onZoom={(value) => setZoom(clampZoom(value))}
+            fitTick={fitTick}
             snap={snap}
             onSnap={setSnap}
             onSeek={setPlayhead}
@@ -3190,6 +3927,9 @@ export default function App() {
                 /* 时间区域：「只导出这一段」用。传的是**当前生效**的区间
                    （半开状态传 null ⇒ 面板不会出现那个开关）。 */
                 range={liveRegion()}
+                /* 封面取帧位置 = 播放头。少传它，封面会永远抽在第 0 帧（画面看着"没选对"，
+                   而导出流程一句错都不报）。 */
+                playhead={playhead}
               />
             </div>
           </div>

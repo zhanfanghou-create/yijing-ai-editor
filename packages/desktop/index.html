@@ -8,10 +8,18 @@
     <!-- yjai-media: 是主进程注册的本地素材协议（见 src/main/index.js）。
          三个位置都要放行，少一个就会出现「素材导入了却是黑的」这类静默失败：
            img-src / media-src —— <img>/<video> 取流
-           connect-src        —— fetch/XHR 读本地字节（上传给生成接口、算校验都靠它） -->
+           connect-src        —— fetch/XHR 读本地字节（上传给生成接口、算校验都靠它）
+
+         script-src 里那两个额外 token 是**人物特效**换来的，各有明确用途与边界：
+           'wasm-unsafe-eval' —— 编译 WebAssembly。Chrome 97+ 起无法绕过；
+             它**不等于** 'unsafe-eval'：只放开 wasm 编译，不放开 eval / new Function。
+           blob:              —— 注入 MediaPipe 的 wasm 加载器。加载器内容来自
+             **本包 bundle**（`?raw` 进的代码），不是磁盘上的素材文件。
+             ⚠️ 绝不能改成放行 yjai-media: —— 那等于"任何能写进素材目录的
+                文件都能被当脚本执行"，而素材目录是用户可写的。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yjai-media: http: https:; media-src 'self' blob: yjai-media: http: https:; connect-src 'self' yjai-media: http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:"
+      content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yjai-media: http: https:; media-src 'self' blob: yjai-media: http: https:; connect-src 'self' yjai-media: http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:"
     />
     <title>艺镜AI剪辑</title>
   </head>

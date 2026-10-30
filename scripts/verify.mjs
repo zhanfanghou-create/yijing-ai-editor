@@ -294,7 +294,14 @@ const GATES = [
     // 否则"findConflicts 恒返回 []"这种退化也能全绿。
     // --no-warnings：这个 .js 在没写 "type":"module" 的包下会被 Node 重新按 ESM 解析，
     // 从而打一条 MODULE_TYPELESS_PACKAGE_JSON 告警。它不影响结论，但会混进日志尾部。
-    expected: 55,
+    // 55 → 64（2026-10-28）：G 段「键位方案」9 条 —— 三套预置逐套验
+    // 完整覆盖 / 内部无冲突 / 引用合法 / 可往返 / 未知 id 退回默认。
+    // 64 → 71（2026-10-28 同日晚）：H2 段「三键播放与行业方案」7 条 ——
+    // J/K/L 三键各占一键且指向正确动作、两套行业方案都带播放键、
+    // 反斜杠与 , . 能归一化（写进方案却按不出来就是"面板说已绑定"）、
+    // 拇指单手方案全挂 Alt、以及**用 resolveAction 走真实派发路径**核对命中。
+    // 这一层错了不报错：界面照画、按键照跑，只表现为"某些键莫名不响应"。
+    expected: 71,
     marker: /KEYMAP_SELFTEST_PASSED/,
     count: /KEYMAP_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -351,6 +358,59 @@ const GATES = [
     count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
   },
   {
+    id: 'timeline-nav-selftest',
+    name: '自证·时间线导航（切点表 / ↑↓ 步进 / 适配全片的缩放）',
+    argv: [NODE, '--no-warnings', 'tools/timeline-nav-selftest.mjs'],
+    // 稳定数字 35 = 切点表 10 + 步进 10 + 末点 4 + 适配 10 + 接缝 1。
+    // 这三件都是**算得出来、编译不报错、界面也不报警**的：
+    //   · 切点算重（0.1+0.2 那种浮点）→ 按一下 ↑ 只动半格，看起来像"键不太灵"；
+    //   · 步进用 >= 而不是 > → 站在切点上按 ↓ 原地不动，看起来像"键坏了"；
+    //   · 适配把空时间线也算一遍 → zoom 被压到 0.05，整条时间线缩成一条线。
+    // 所以边界（站在切点上 / 到两头 / 零长片段 / 空表 / 视口量为 0）逐条钉住。
+    // 另有一条**故意写错方向的历史**记在脚本里：视口变宽不是"缩放翻倍"（右侧留白固定），
+    // 按翻倍写断言会红，而红的是断言不是实现。
+    expected: 35,
+    marker: /TIMELINE_NAV_SELFTEST_PASSED/,
+    count: /TIMELINE_NAV_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'hsl-selftest',
+    name: '自证·分区 HSL（八色带权重 / 调色方向 / 3D LUT 烘焙与行序）',
+    argv: [NODE, '--no-warnings', 'tools/hsl-selftest.mjs'],
+    // 稳定数字 45 = 参数读写 9 + 色彩空间 6 + 权重 5 + 调色行为 8 + LUT 烘焙 12 + 行序 1 + 耗时 1。
+    // 这一族治的是「两侧各写一份、各自都"看起来对"」：
+    //   · 权重是**色相的函数**（三角窗 → 平方 → 归一化）。平方那一步不是美化：
+    //     不平方时纯红去饱和只褪 89%，剩下 11% 被邻带分走；
+    //   · `HALF_WIDTH` 取"较远邻带的**整段**距离"而不是一半 —— 取一半会在两带之间
+    //     留下 15° 的死区（那里八个带权重全 0，怎么拖都不动）；
+    //   · `.cube` 的行序必须 **b 最慢、r 最快**（= WebGL texImage3D 的行序）。
+    //     写反了 ffmpeg 退出码 0、命令串一字不差，只是把红读成蓝（实测 red → (0,0,253)）。
+    //     所以最后那一条单独钉"第 2 行只有 R 变化"，且必须用**中性表**验 ——
+    //     调过色的表里 G 本来就会动，拿它验行序等于什么都没验。
+    expected: 45,
+    marker: /HSL_SELFTEST_PASSED/,
+    count: /HSL_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'subtitle-selftest',
+    name: '自证·字幕文件读写与语音分句（SRT / VTT / LRC / ASS / 编码 / VAD）',
+    argv: [NODE, '--no-warnings', 'tools/subtitle-selftest.mjs'],
+    // 稳定数字 82 = 时间码 14 + SRT 13 + VTT 4 + LRC 6 + ASS 7 + 识别与失败原因 6
+    //            + 导出 6 + 片段转 cue 4 + 编码嗅探 4 + VAD 18。
+    // 这一族的失效**全是错位、不是报错** —— 导入"成功"、字幕轨上多了一堆条目，
+    // 只是位置全差一点：
+    //   · SRT 的毫秒位可能只有 2 位（`,50`）→ 按 3 位硬切得到 5 毫秒，整条前移半秒；
+    //   · ASS 的字段顺序由 `Format:` 行**自己声明** → 把下标写死，遇到另一种排序就
+    //     整份读空，界面上只说"导入 0 条"，看起来像文件坏了；
+    //   · LRC 只有开始时间 → 最后一行没有"下一行"可取，必须给一个兜底时长；
+    //   · 中文字幕文件大量是 GBK → 按 UTF-8 硬读不报错，只得到一串「锟斤拷」。
+    // VAD 那 18 条治的是"看起来智能其实不能用"：写死阈值会让安静的录音全是静音、
+    // 嘈杂的录音全是人声；不合并短停顿会把一句话切成三个碎片。
+    expected: 82,
+    marker: /SUBTITLE_SELFTEST_PASSED/,
+    count: /SUBTITLE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'trim-selftest',
     name: '自证·片段修剪算术本身正确（源入点同步 / 不变量夹具）',
     argv: [NODE, '--no-warnings', 'tools/trim-selftest.mjs'],
@@ -384,9 +444,155 @@ const GATES = [
     //   同源片段一起平移 / 无 assetId 的不参与 / 关掉只动自己 / 往左拖过头整组夹到 0 /
     //   间距守恒 / 目标不存在返回空。前三条挡的是"开关是装饰"，后三条挡的是
     //   "整组夹取只夹了被拖那一条"（画面到 0、声音还留在原地 ⇒ 音画错位，播放才发现）。
-    expected: 75,
+    // 75 → 94（2026-10-27）：新增 J 段「组合成员并入同一段钳位算术」6 条 + K 段
+    //   「批量分割 cutAllAt」13 条。J 段挡的是"组合与联动各写一份钳位"—— 两份必然在
+    //   "往左拖到 0"那一刻算出两个位移，组员静默错位；还钉住「Ctrl+L 关掉联动不能
+    //   顺手把组合也拆掉」（那等于给用户一个隐形的第二个开关）。K 段挡的是批量分割
+    //   最容易静默错的三件事：右半段入点**没乘倍速**（画面回头跳一下）、**复合片段
+    //   被切开**（两半各带一份同一批子片段 ⇒ 同一段内容播两遍）、**两侧不足最短时长
+    //   也切**（切出抓不回来的碎段）。另外钉住"总时长不变"这条代数不变式。
+    expected: 94,
     marker: /TRIM_SELFTEST_PASSED/,
     count: /TRIM_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'clip-props-selftest',
+    name: '自证·片段属性剪贴板（白名单 / 深拷贝 / 覆盖与清理夹具）',
+    argv: [NODE, '--no-warnings', 'tools/clip-props-selftest.mjs'],
+    // 稳定数字 28。clipProps.js 是 Ctrl+Alt+C / Ctrl+Alt+V 的全部判定，抽出来是为了
+    // 能在 node 里断言 —— 这一层的错法**全是静默的**，且错得越离谱越像"功能没做"：
+    //   · 黑名单漏一个 `url` ⇒ 粘贴时连素材一起换，用户看到的是"属性没变，画面成了另一条"；
+    //   · 只覆盖不清理 ⇒ "复制一条没调色的片段，粘到调过色的片段上"得到"旧调色 + 新位置"；
+    //   · 值不深拷贝 ⇒ 剪贴板与状态共用对象，改目标会把剪贴板一起改掉
+    //     （表现为"第二次粘贴的效果和第一次不一样"）。
+    // 判据用的是**键集合相等**与**引用独立**，而不是逐字段比对数值 ——
+    // 前者能自动覆盖"以后新增一个键忘了加进白名单"这种情况。
+    expected: 28,
+    marker: /CLIP_PROPS_SELFTEST_PASSED/,
+    count: /CLIP_PROPS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'groups-selftest',
+    name: '自证·组合（逻辑成组 / 组号覆盖 / 解组只清本组夹具）',
+    argv: [NODE, '--no-warnings', 'tools/groups-selftest.mjs'],
+    // 稳定数字 31。组合（Alt+G）与复合片段（Ctrl+G）是**两件事**：前者只是"一起选中 /
+    // 一起动"，后者才收成一个片段。这三条判据挡的是组合最典型的静默失效：
+    //   ① 组合信息写成成员表 ⇒ 片段被删后留幽灵 id，下次拖动"少带一条、不报错"；
+    //   ② 新组号不覆盖旧组号 ⇒ 一条片段同时属于两组，拖它一下两组都动；
+    //   ③ 解组连着别的组一起清 ⇒ 另一处组合无声消失（用户得靠回忆才发现）。
+    // 另外钉住"不足两段 / 本来就不在组里时**原样返回同一个引用**"：
+    // 调用方靠引用相等判断"什么都没发生"，返回新数组会让无效操作也进一次撤销栈。
+    expected: 31,
+    marker: /GROUPS_SELFTEST_PASSED/,
+    count: /GROUPS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'cover-selftest',
+    name: '自证·导出封面（开关语义 / 时间点夹取 / 帧对齐 / 抽帧命令次序）',
+    argv: [NODE, '--no-warnings', 'tools/cover-selftest.mjs'],
+    // 稳定数字 34。封面这条链路有两半，各自都会静默出错，所以要两半各钉一遍：
+    // 这一道证「算得对」（纯逻辑，秒级），render-e2e 里的三条证「真的抽出图」。
+    // 挡的四类：
+    //   ① `{ at: 3 }` 这种"选了时间点但没开开关"的中间态被当成开 ⇒ 用户没要的图冒出来；
+    //   ② 时间点不夹到**最后一帧** ⇒ `-ss duration` 得到 0 字节文件，而 ffmpeg 退出码是 0；
+    //   ③ 不按帧对齐 ⇒ 面板写第 3 秒、抽到第 3.03 秒，逐帧核对时像是错了一帧；
+    //   ④ `-ss` 写到 `-i` 前面 ⇒ 快速跳转到最近关键帧，图照样生成、内容不是那一帧。
+    // 判据里没有一项 import 被测代码的真值（期望值手写），否则等于没测。
+    expected: 34,
+    marker: /COVER_SELFTEST_PASSED/,
+    count: /COVER_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'ffmpeg-find-selftest',
+    name: '自证·ffmpeg 查找（磁盘绝对路径优先 / 裸命令不许插队 / 找不到就说找不到）',
+    argv: [NODE, '--no-warnings', 'tools/ffmpeg-find-selftest.mjs'],
+    // 稳定数字 12。
+    //
+    // 为什么值得单独立一道：这一层错了**不抛异常、不进日志**，而且在开发机上
+    // 恰好都能跑通 —— 开发机的 ffmpeg 通常就在 PATH 里或装在 C:\ffmpeg\bin。
+    // 真正出问题的是"装在 D:\ffmpeg-8.1.2-essentials_build\bin、PATH 里没有"
+    // （官方 essentials 包解压出来的默认形态，也是本机实测踩到的那次）。
+    //
+    // 那次的实际后果，比"报错"难看得多：候选表里裸命令 `ffmpeg.exe` 排在扫盘结果
+    // 之前，第一轮循环 `path.isAbsolute('ffmpeg.exe')` 为假却照样 `return`，
+    // 于是扫到的真路径永远轮不到 ⇒ probe() 报 broken ⇒ 界面说「本机未安装 ffmpeg」，
+    // 而**全量验证里 36 条真实渲染断言被静默跳过**（SKIP 不算失败），闸门照样报绿。
+    // 所以这里用注入的假 exists/PATH 把顺序钉死，不依赖本机装没装 ffmpeg。
+    expected: 12,
+    marker: /FFMPEG_FIND_SELFTEST_PASSED/,
+    count: /FFMPEG_FIND_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'export-rate-selftest',
+    name: '自证·导出规格（帧率七档 / NTSC 整数比 / 分辨率六档 / 非法输入退回默认）',
+    argv: [NODE, '--no-warnings', 'tools/export-rate-selftest.mjs'],
+    // 稳定数字 27。
+    //
+    // 这一层错了**画面完全正常**，所以判据必须落在换算结果上：
+    //   · 29.97 被 Math.round 成 30 ⇒ NTSC 母版错档，成片照样能播；
+    //   · 29.97 原样拼进 `fps=` 滤镜 ⇒ 容器里存 2997/100 这个非标准 timebase，
+    //     每小时只差 0.1 帧（看不出来），但广播 QC 与 NLE 二次导入会要求重转；
+    //   · 档位少一个（25 / 50 / 29.97 / 59.94）⇒ 用户根本选不出来，导 30 再转一次必掉帧；
+    //   · 多出 36/42/48 ⇒ 那是不存在的交付规格。
+    // 「真的落进容器了吗」由 render-e2e 的两条真渲断言证（ffprobe 读 avg_frame_rate），
+    // 这一道只证「算得对」。
+    expected: 27,
+    marker: /EXPORT_RATE_SELFTEST_PASSED/,
+    count: /EXPORT_RATE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'export-codec-selftest',
+    name: '自证·导出编码格式（容器 / 色深 10bit / ProRes Alpha / 编码器族内回落）',
+    argv: [NODE, '--no-warnings', 'tools/export-codec-selftest.mjs'],
+    // 稳定数字 48。
+    //
+    // 这一层错了同样是「成片照旧生成、时长画面全对，只是不是选的那个规格」：
+    //   · 10bit 写死 yuv420p10le ⇒ 选硬件编码时 ffmpeg 拒收（"Incompatible pixel format"）；
+    //   · ProRes 也拼 -crf ⇒ 被 ffmpeg 当未知参数忽略，看起来"调了没反应"；
+    //   · 跨族回落编码器（ProRes 落成 libx264）⇒ 面板写 4444、成片既无损也没 alpha；
+    //   · 扩展名不跟着格式改 ⇒ ffmpeg 报 "Could not find tag for codec prores"。
+    // 「真的落进容器了吗」由 render-e2e 的 ffprobe 断言证（codec_name / profile / pix_fmt），
+    // 这一道只证「表本身自洽、回落不跨族」。
+    expected: 48,
+    marker: /EXPORT_CODEC_SELFTEST_OK/,
+    count: /EXPORT_CODEC_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'curves-selftest',
+    name: '自证·颜色曲线（样条过点 / 复合顺序 / 预览表 / ffmpeg 串 / 与真 ffmpeg 逐项对表）',
+    argv: [NODE, '--no-warnings', 'tools/curves-selftest.mjs'],
+    // 稳定数字 36。
+    //
+    // 曲线这一层的错全是「两边都对，但两边不一样」：
+    //   · 插值换成单调样条 ⇒ 控制点照样过点、照样单调，所有形状断言全绿，
+    //     而成片的暗部与预览差一档（ffmpeg 用的是自然三次样条）；
+    //   · master 与单通道复合顺序反了 ⇒ 「提亮 + 压红」得到另一张表，
+    //     人眼分辨不出是顺序错了，只会觉得"两边颜色有点不一样"；
+    //   · tableValues 少几项 / 带科学计数 ⇒ 浏览器把整串 filter 判无效，
+    //     连调色、描边一起静默消失。
+    // 最后 3 条拿本机 ffmpeg 真跑一遍 0..255 灰度渐变，把输出字节与我们算的表
+    // 逐项比对（最大偏差 ≤ 2）。没有 ffmpeg 时这 3 条记 SKIP，总数不变 ——
+    // 而 verify 的汇总会把 SKIP 条数打到最后一屏，不会静默变绿。
+    expected: 36,
+    marker: /CURVES_SELFTEST_OK/,
+    count: /CURVES_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'wheels-selftest',
+    name: '自证·一级色轮（手柄→颜色 / 三段式语义 / 预览表 / ffmpeg 表达式 / 与真 ffmpeg 逐项对表）',
+    argv: [NODE, '--no-warnings', 'tools/wheels-selftest.mjs'],
+    // 稳定数字 44。
+    //
+    // 色轮这一层的错同样是「两边都对，但两边不一样」，而且比曲线更隐蔽：
+    //   · 1/gamma 写成 gamma ⇒ 形状断言全过（单调、两端不动），只是方向反了；
+    //   · 用 colorbalance 代替 lutrgb ⇒ 要靠读它的 C 源码才复现得了预览侧，
+    //     换 ffmpeg 版本就可能漂；
+    //   · 色环的 conic 停止点算错 90° ⇒ 色环照画、手柄照拖，只是"拖到蓝那块却是橙"。
+    // 最后 3 条拿本机 ffmpeg 真处理一张自写的 256 级灰阶 BMP，逐值比三路输出
+    // （最大偏差 ≤ 2，实测 1）。没有 ffmpeg 时记 SKIP，总数不变。
+    expected: 44,
+    marker: /WHEELS_SELFTEST_OK/,
+    count: /WHEELS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
   {
     id: 'composite-selftest',
@@ -442,6 +648,216 @@ const GATES = [
     count: /自证：通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
   },
   {
+    id: 'stickers',
+    name: '贴纸·内置图库成链（清单↔左栏↔网格↔叠加轨）',
+    argv: [NODE, 'tools/check-stickers.mjs'],
+    // 三类"看起来有、其实用不了"的缺陷，全都不报错：
+    //   ① 清单的 group key 与左栏静态表对不上 → 点分类中栏空着；
+    //   ② 素材没登记进 `yjai-media://` 白名单 → 面板一片空白（只有一条 Failed to load）；
+    //   ③ 素材不带透明信息 → 叠到画面上是个方框。
+    // 13 项 = 静态 7（真数据 / 文件齐全 / 带透明 / 两边表一致 / 页签与图标 /
+    //          随包 / IPC 三段接线）+ 真机 6（页签 / 左栏 8 组 / 网格全加载 /
+    //          点一枚进叠加轨 / 切分组真换内容 / 0 页面错误）。
+    // ⚠️ 成片那一侧（贴纸透明区是否透出背景）不在这里，在 render 闸门 ——
+    //    这道只管"界面到轨道"，像素归 render-e2e。
+    expected: 13,
+    marker: /STICKERS_OK/,
+    count: /STICKERS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'borders',
+    name: '边框·内置图库成链（素材透明↔左栏↔面板↔片段属性↔预览）',
+    argv: [NODE, 'tools/check-borders.mjs'],
+    // 边框与贴纸**不是一类东西**，所以另起一道闸：
+    //   贴纸 = 往时间线投放一个新片段；边框 = 给**已有片段**写属性（clip.border）。
+    // 治的四类缺陷，全都不报错：
+    //   ① 素材窗口不透明 —— 叠上去整幅画面被盖死，而缩略图上垫着底衬看不出来。
+    //      判据是**真解 PNG 像素**得的中心 alpha，不是读 IHDR 的 colorType
+    //      （贴纸那道用 IHDR 就够，因为贴纸只要"有 alpha"；边框要的是"这块真的透明"）。
+    //   ② 左栏没入口 / 错挂成 effect 面板 —— 点开是特效网格。
+    //   ③ 面板点了没反应 —— 没选中片段时必须给提示，不能静默。
+    //   ④ 预览有、成片没有 —— 归 render 闸门（白框压四边 + 窗口中心仍是原画面）。
+    // 19 项 = 静态 13（真数据 / 尺寸可解 / 窗口透明 / 非空白 / 左栏节点 / 未错挂 /
+    //          随包 / IPC 三段 / 白名单 / 片段属性 / 载荷字段 / 成片两处 / 预览钩子）
+    //        + 真机 6（网格 24 全加载 / 无选中给提示 / 有片段 / 点一款进画面 /
+    //          再点取消 / 0 页面错误）。
+    expected: 19,
+    marker: /BORDERS_OK/,
+    count: /BORDERS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'templates',
+    name: '模板·成套预设成链（数据表↔左栏分组↔面板卡片↔时间线↔预览）',
+    argv: [NODE, 'tools/check-templates.mjs'],
+    // 治的四类缺陷，全都不报错：
+    //   ① 数据里引用了不存在的文字样式 / 贴纸 key —— 套上去"少了半套"，但没有一句报错；
+    //   ② 同一条字幕轨上两条文字时间重叠 —— 时间线胶片上的名字压成一团；
+    //   ③ 点了没反应（片段没进时间线，或进了但画面上什么都没有）；
+    //   ④ 文字宽度上限写成 `%` —— 外层 `.ta-move` 是 shrink-to-fit，
+    //      `maxWidth: 92%` 等于"只占自己宽度的 92%"，5 个汉字会被挤成 4+1 两行。
+    // 14 项 = 静态 7（规模 / 数据自检 / 左栏一致 / 接线三段 / 白名单 / 页签 /
+    //          maxWidth 单位）+ 真机 7（页签 / 卡片 / 真落地 / 预览文字单行 / 切组 /
+    //          贴纸真落成叠加片段 / 0 错误）。
+    // ⚠️ 模板落地之后就是**普通片段**，所以成片那一侧不必另开闸：
+    //    文字走 subtitle 那条已有的链、贴纸走 overlay+pip、边框走 clip.border。
+    expected: 14,
+    marker: /TEMPLATES_OK/,
+    count: /TEMPLATES_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'packaging',
+    name: '智能包装·口播与画面批量套（词库判定↔面板↔预览真的变↔能清回去）',
+    argv: [NODE, 'tools/check-packaging.mjs'],
+    // 与「模板」的区别：模板往空时间线**造**内容，包装对**已有**内容批量改属性。
+    // 治的五类静默失效：
+    //   ① 判定不准（该放大的没放大）—— 判据是**关键句与普通句的字号差**，
+    //      因为"整条轨一起放大"也能让"字号变了"成立；
+    //   ② 放大叠乘（textSize 与 textScale 同时写，1.18 变 1.39）—— 静态钉死不写 textSize；
+    //   ③ 贴纸地址没解析（时间线多一条空 img）—— 真机读叠加轨的 data-visual；
+    //   ④ 清除不干净（新增的键只写回旧值会永远留着：清完还在呼吸）—— 真机量字号回到原值；
+    //   ⑤ 左栏两项共用 panel，packMode 写错就是"点画面包装、改的是字幕"。
+    // 16 项 = 静态 7（数据表 / 词库 / 不写 textSize / 接线三段 / 白名单 / 页签 / 钩子）
+    //         + 真机 9（页签 / 左栏与卡片 / 统计与判定 / 字样真变 / 关键句更大 /
+    //                  贴纸真落地 / 清除回原样 / 画面边框真出现 / 0 错误）。
+    // ⚠️ 包装改的都是**已有字段**（textStyle / textScale / textIn… / border / filter），
+    //    成片那侧不必另开闸：这些字段的导出链早有各自的闸门（subtitle / render / borders）。
+    expected: 16,
+    marker: /PACKAGING_OK/,
+    count: /PACKAGING_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'templates-selftest',
+    name: '自证·模板纯逻辑（起点平移 / 贴纸缺 key / 重叠 / 时长跨度）',
+    argv: [NODE, 'tools/templates-selftest.mjs'],
+    // 模板的错法全是"位置错、不是报错"：起点没平移 ⇒ 在第 30 秒套开场会跑到第 0 秒；
+    // 相对偏移被吃掉 ⇒ 多条文字叠在同一帧；贴纸查不到却照样生成 ⇒ 多一条空 img。
+    // 这些在界面上只表现成"套上去乱七八糟"，看不出是哪一条错，只能在夹具里逐条对时间。
+    // ⚠️ 这道自检 2026-10-30 就已经写好，但**当时没挂进本清单**（漏了），
+    //    110 道里一直没有它 —— 补挂时数字照旧是 35（自检本身的断言数没变）。
+    expected: 35,
+    marker: /TEMPLATES_SELFTEST_PASSED/,
+    count: /TEMPLATES_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'packaging-selftest',
+    name: '自证·智能包装纯逻辑（关键句判定 / 不叠乘 / 清除还原 / 不压别人的贴纸）',
+    argv: [NODE, 'tools/packaging-selftest.mjs'],
+    // 包装的错法同样全是静默的：判错关键句（该放大的没放大）、放大叠两次（1.18→1.39）、
+    // 清除之后循环动画还在、贴纸压在已有画中画上、把主轨当成"被占用"导致一条贴纸都配不出。
+    // 这些只表现成"看着有点怪"，所以判定 / 加成 / 回滚三条都在夹具里逐条对。
+    expected: 85,
+    marker: /PACKAGING_SELFTEST_PASSED/,
+    count: /PACKAGING_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'facefx-selftest',
+    name: '自证·人物特效纯逻辑（取框 / 离群帧 / 二分插值 / sendcmd / 遮罩尺寸）',
+    argv: [NODE, 'tools/facefx-selftest.mjs'],
+    // 这条链的错法一条都不报错，全是"位置不对"：
+    //   · 取框没有外扩 ⇒ 描边贴着五官、眼角切进去；
+    //   · 离群帧不剔除 ⇒ 检测抖一下，描边跳一帧再跳回来（人眼看得见、日志看不见）；
+    //   · 插值按线性两端外推 ⇒ 播放头越过最后一帧后，描边继续往右飘出画面；
+    //   · sendcmd 的 target 写成 `mk` ⇒ ffmpeg **静默忽略**整条命令（成片一动不动，
+    //     退出码仍然是 0）—— 实测只有写成完整实例名 `overlay@mk` 才生效；
+    //   · 遮罩尺寸取当帧框 ⇒ 人走近镜头时描边越来越细、露出脸边（scale 无法逐帧改，
+    //     所以只能按整段最大框做定型，这个取舍必须在夹具里固定住）。
+    expected: 32,
+    marker: /FACEFX_SELFTEST_PASSED/,
+    count: /FACEFX_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'facefx',
+    name: '人物特效·MediaPipe 478 点（识别↔预览跟随↔成片跟随）',
+    argv: [NODE, 'tools/check-facefx.mjs'],
+    // 这道闸门真正要挡的是"看起来有、其实没跟"：
+    //   ① 面板说"已识别 N 个人脸位置"，但 `composite.js` 的投影没带 face/faceTrack
+    //      ⇒ 预览一像素不动（导出反而是对的）—— 判据读 `.canvas-face` 的 left；
+    //   ② 导出的 sendcmd target 写错 ⇒ ffmpeg 静默忽略，成片静止但退出码 0
+    //      —— 判据是**从成片像素里**找回描边位置，两个时刻必须差 60px 以上；
+    //   ③ 识别结果只活在内存里、没落盘 ⇒ 重开草稿就没了 —— 判据是读回草稿里的
+    //      `clip.faceTrack`（面板文案会撒谎，落盘的数组不会）；
+    //   ④ 选了字幕片段时面板空白 —— 真实边界，断言 wrong-track 提示文案。
+    // 35 项 = 静态 23（效果表 / 几何同源 / CJS 白名单 / CSP 三处 / 打包 / 贴图 /
+    //              左栏 / 面板接线 / 导出顺序 / faceTrack 解耦 / IPC / preload / 兜底）
+    //       + 真机 12（左栏 / 字幕提示 / 识别按钮 / ready / 落盘 / 效果卡 /
+    //                  预览层出现 / 随播放头移动 / 导出跑完 / 成片跟随 / 0 错误 / 跑到底）。
+    // ⚠️ 最后一条「整套跑到底」是专门防"中断也全绿"的：真机段一旦抛错，
+    //    前面那些断言一条都不会执行，而静态 23 条照样全过 ⇒ 一个什么都没验的全绿。
+    expected: 35,
+    marker: /FACEFX_OK/,
+    count: /FACEFX_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'plugins-selftest',
+    name: '自证·插件包纯逻辑（清单校验 / id 稳定性 / PNG 头 / 安装落盘）',
+    argv: [NODE, 'tools/plugins-selftest.mjs'],
+    // 这一层管"算得对不对"，其中最要紧的是 **id 必须可复现**：
+    //   插件条目 key 会写进草稿（`clip.border = 'pv-<id>-3'`），卸载重装同一个插件
+    //   之后草稿里的片段还带着那个 key —— id 是随机数的话，重装后所有边框都"找不到"，
+    //   画面直接掉边框且一句错都不报。
+    // 另外三条也在这里钉：
+    //   · 清单里 `file` 写 `../` ⇒ 必须被丢弃（清单是用户可写的）；
+    //   · 没有回收站时**拒绝**删除（不许退化成直接删）；
+    //   · 安装落临时目录再原子替换（中途失败不留半个插件）。
+    // 46 → 73：加了「安装/列表/启停/卸载」真落盘那 27 条。
+    expected: 73,
+    marker: /PLUGINS_SELFTEST_PASSED/,
+    count: /PLUGINS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'plugins',
+    name: '插件·本地素材包（导入 → 边框库多出来 → 预览生效 → 停用/删除收回）',
+    argv: [NODE, 'tools/check-plugins.mjs'],
+    // 这道闸门治的是「装进去了但看不见」，每一步都不报错：
+    //   ① 装好了、素材库没变 —— `packCaches`（主进程）与 `borderCatalog`（渲染层）
+    //      是**两份**缓存，漏清任何一份都表现为"面板说导入成功、边框页还是 24 款"；
+    //   ② 素材库变了、预览不动 —— `borderUrlOf` 拿不到新 key 就返回空串，
+    //      `.canvas-border` 整个不渲染；判据读**预览画布上的 DOM**，不读 clip 上的值；
+    //   ③ 停用了却还留在素材库里 —— `groupsOf` 忘了过滤 enabled；
+    //   ④ 面板说自己支持 .ofx —— 那是要宿主实现 OpenFX C++ API 的事，本工程不做，
+    //      文案里出现"支持 .ofx"直接判红（不许假装）。
+    // 49 项 = 静态 33（清单校验 / 路径穿越 / 回收站 / 原子替换 / 缓存清理三处 /
+    //                allowedMedia / IPC 五个 / preload 面 / 左栏三项 / 页签 / 钩子）
+    //       + 真机 16（页签 / 空状态 / 说明 / 打桩 / 导入 / 卡片 / 边框库 +2 /
+    //                   套用 / 预览层 / 停用收回 / 启用回来 / 删除清空 / 回到基线 /
+    //                   0 错误 / 跑到底）。
+    // ⚠️ 最后一条同样是防"中断也全绿"的 —— 真机段抛错时前面的断言一条都没跑。
+    expected: 49,
+    marker: /PLUGINS_OK/,
+    count: /PLUGINS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'app-icon-wiring',
+    name: '静态·exe/任务栏/托盘图标成链且 AppID 三方一致',
+    argv: [NODE, 'tools/check-app-icon-wiring.mjs'],
+    // 这道闸门治的是「只在打包后才出现、开发模式永远看不到」的三类图标缺陷：
+    //   ① 没设 AppUserModelID → 任务栏显示 Electron 默认图标、通知区空白方块；
+    //   ② 托盘图标路径与窗口 icon 各写一套 → 改了一个漏掉另一个；
+    //   ③ electron-builder 的 files 白名单漏了 build/icon.ico → asar 里没有图标，
+    //      开发模式完全正常、装出来托盘是空白。
+    // 8 项 = 设置了 AppID / 与打包 appId 一致 / 与安装器 APP_ID 一致 / 在 whenReady 前 /
+    //        建了托盘 / 托盘与窗口同图标 / 图标文件存在 / files 已随包。
+    expected: 8,
+    marker: /APP_ICON_WIRING_OK/,
+    count: /APP_ICON_WIRING_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'tray-runtime',
+    name: '客户端 E2E（托盘运行时：实例真建起来 / 有面积 / 菜单两项 / 关闭语义没被改成 hide）',
+    argv: [NODE, 'tools/tray-runtime-e2e.mjs'],
+    // 稳定数字 8。上面那道 app-icon-wiring 读的是**源码文本**（`new Tray(` 在不在、
+    // 路径字面量对不对、files 白名单），这道读的是**主进程里的活对象**。
+    // 必须分开，是因为 createTray() 是 try/catch 静默兜底的：图标没随包 / 路径算错时
+    // new Tray 抛异常被吞，编辑器照常启动，静态闸门照样全绿 —— 用户那边只是"没有托盘"。
+    // 反向验过：把 build/icon.ico 挪走，第 2/3/4/5/6/7 条立刻红，报错是
+    // `Failed to load image from path '...build\icon.ico'`；放回去归零。
+    // 第 8 条盯的是"托盘把 close 改成 hide"——那会让全套 E2E 挂在进程不退出上，
+    // 对用户则是"点了叉关不掉"，必须单独有一条拦。
+    expected: 8,
+    marker: /TRAY_RUNTIME_E2E_OK/,
+    count: /TRAY_RUNTIME_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'installer',
     name: '安装器 E2E（真实解压 + 快捷方式 + 卸载器）',
     argv: [NODE, 'tools/installer-e2e.mjs'],
@@ -465,7 +881,10 @@ const GATES = [
     //   为什么放这里而不是 real-film：这三条都需要**像素比例可控的夹具**，
     //   而这里有自造的 64×48 PNG / 320×240 MP4 / 纯正弦 wav，期望值是算出来的。
     //   三条都按"环境不足记 SKIP"处理，总数不变。
-    expected: 35,
+    // 35 → 36（2026-10-28）：新增「已有素材时工具区不再自称没有媒体文件」。
+    //   底部引导语原先写死在 JSX 里，库里有 3 个素材时仍显示「没有媒体文件？」，
+    //   语义自相矛盾；不抛异常也不让任何闸门变红，只有看截图才发现。
+    expected: 36,
     marker: /MEDIA_IMPORT_OK/,
     count: /MEDIA_IMPORT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -509,7 +928,41 @@ const GATES = [
     //   必须是背景图而不是黑边 —— 两条合起来才钉得住"默认铺满 + 缩小露背景"的完整语义。
     //   顺带把三处提前 return 的 SKIP 清单合并成 render-e2e.mjs 里的一份 REST_LABELS：
     //   以前抄了三份且漏了画面特效那两条，缺 ffmpeg 时总数会对不上，红得莫名其妙。）
-    expected: 35,
+    // · 38（2026-10-28 +3：封面图进导出。判据特意把取帧位置放在**第 5 秒（蓝）**
+    //   而不是第 0 秒（红）—— 抽帧没读时间点、或 `-ss` 放到 `-i` 前面落到首个关键帧，
+    //   两种情况抽到的都是红的那一帧，而文件照样生成、退出码照样 0。
+    //   另两条：文件真的存在且非空、封面尺寸与成片一致。）
+    // · 40（2026-10-28 +2：NTSC 帧率真渲一遍。帧率这一层错了**画面完全正常** ——
+    //   面板写 29.97、主进程 Math.round 成 30，成片照样能播；29.97 原样拼进 fps 滤镜，
+    //   容器里存的是 2997/100，也能播能剪，但广播 QC 与 NLE 二次导入会判"帧率不规范"。
+    //   唯一能分辨的是 ffprobe 读回来的 avg_frame_rate，所以判据只能落在它上面。
+    // +1（2026-10-28 曲线）：同一段纯红素材渲两遍，带「压暗曲线」那一条的中间调明显变暗
+    //   （红通道落差 ≥ 30）。判据取像素而不是"命令串里有 curves=" —— 坐标把 0..255
+    //   当成 0..1 传进去时，命令照样有那一项，画面却一点没变。40 → 41。
+    // +1（2026-10-28 一级色轮）：纯红素材渲两遍，带「阴影推蓝」的那一遍成片 B 通道
+    //   必须抬起来、G 通道必须不动（只看"B 变大"会让整体提亮一档也混过去，
+    //   是"方向有没有接反"与"到底有没有生效"两件事一起证）。
+    // +6（2026-10-28 导出编码格式）：真编一版 H.265 10bit 与一版 ProRes 4444，
+    //   用 ffprobe 读 codec_name / profile / pix_fmt（hevc+main10+yuv420p10le、
+    //   prores+4444+yuva444p10le），再读 rgba 的第四个字节证明 alpha 没被压黑。
+    //   这一类错的特征是"成片照旧生成、画面时长全对，只是不是选的那个规格"，
+    //   所以判据只能落在产物的流参数与像素上。42 → 48。
+    // +2（2026-10-28 分区 HSL）：这套走 3D LUT（预览 WebGL 3D 纹理 / 导出 lut3d + .cube），
+    //   ① 纯红素材 + 红带色相 +30° ⇒ 成片 G 抬起、B 不动（实测 255,23,0 → 255,129,0）；
+    //   ② 纯灰素材套同一组参数 ⇒ 三通道一律不变（实测最大偏移 0）。
+    //   ② 才是"分区"二字的证据：权重是色相的函数，一个"全局加绿"的实现在 ① 上照样绿。
+    //   ⚠️ 不查命令串里有没有 `lut3d=`：.cube 行序写反时命令一字不差，红会被读成蓝。
+    // +1（2026-10-30 贴纸进成片）：主轨纯红 + 叠加轨一张带透明的 PNG，判**两处**：
+    //   贴纸中心必须是黄的（叠上去了）、方框角上必须仍是红（透明区透出背景）。
+    //   ⚠️ 只判中心是不够的 —— 实测把 `needAlpha` 里的 imageOverlay 拿掉之后，
+    //   中心照样是 255,214,37，只有角上从 255,23,0 变成 0,0,0（alpha 被丢、透明区填黑），
+    //   一个"白底/黑底方块"在中心那条判据上是全绿的。50 → 51。
+    // +2（2026-10-30 边框进成片）：主轨纯红片段带 `border: 'br-basic-white'`，判两点：
+    //   ① 左边框处 (12,180) 必须是白 —— 证明 PNG 真的叠上去了；
+    //   ② 窗口中心 (320,180) 必须仍是红 —— 证明边框图的窗口是透明的。
+    //   ② 同时挡住两种死法：透明区被 `format=yuv420p` 吃掉（中心变黑）、
+    //   窗口没挖洞（整幅变白）。两种都退出码 0、不报错。51 → 53。
+    expected: 53,
     marker: /RENDER_E2E_OK/,
     count: /RENDER_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -534,7 +987,7 @@ const GATES = [
     id: 'export-contract-selftest',
     name: '自证·导出载荷契约看门狗本身会说「不」（合成夹具正反两面）',
     argv: [NODE, 'tools/check-export-contract.selftest.mjs'],
-    // 稳定数字 32。夹具覆盖 17 个场景：完整契约绿 / 漏 frameFx / 漏 backdrop /
+    // 稳定数字 48。夹具覆盖 20 个场景：完整契约绿 / 漏 frameFx / 漏 backdrop /
     // IPC 不转 / render() 不收 / 只有"挖透明"没有 overlay / buildPlan 多读字段 /
     // 叠加轨没从主链排除（成片会凭空多出一段）/ App 没有叠加轨入口（轨道存在但用不到）/
     // Stage 不接收 pip（画中画只在成片里有、预览里看不见）/ 片段漏发 text（字幕写不进成片）/
@@ -544,7 +997,21 @@ const GATES = [
     // 主进程自己又抄一份。倍速是「时间线秒 ↔ 源素材秒」的换算因子，
     // 两边各写一份就会有一边漏掉，症状是"预览一个速度、成片另一个速度"。
     // 每条例外都要求**红在对的那条断言上**，防止"检查器空转却报绿"。
-    expected: 32,
+    // 2026-10-28 +4（32 → 36）：封面两条 —— 面板漏发 options.cover（勾了也不出图）/
+    // 抽封面写在 runRender 之前（读到的是上一轮旧成片，第一次失败、第二次"成功"抽到旧画面）。
+    // 同一轮里闸门本身也多了两条判据（require shared/cover.js、vite 白名单里有 cover.js），
+    // 所以「good」夹具必须同时补上这两处，否则完整契约会被自己的新判据判红。
+    // 36 → 42（2026-10-28 +6：帧率从滑杆改档位。三条正例判据（面板用 RATES.map、
+    // 反向禁止滑杆回来、主进程与 vite 两侧都引用 shared/exportRate.js）+ 三条反例
+    // 逐条验它真能红。反例里「vite 漏白名单」用改名而不是删条目实现 ——
+    // 跟模板字符串里的反斜杠转义较劲，写错一次反例就"照样通过"，而它正是用来
+    // 证明检查器不是空转的。
+    // 42 → 48（2026-10-28 编码格式）：闸门多了 7 条判据（面板发 options.codec /
+    // render 引用 shared/exportCodec.js / encodeArgs 不写死 8 位像素格式且用 pixelFormatFor /
+    // 压黑排除要留 Alpha 的格式 / 音频走 audioArgs / 主进程纠正扩展名 / vite 白名单），
+    // 「good」夹具同步补齐；另加三条反例（写死 yuv420p、面板不发 codec、压黑不排除 Alpha）
+    // 逐条验新判据真能红 —— 少了这一步，新加的判据有可能**压根不触发**却全绿。
+    expected: 48,
     marker: /EXPORT_CONTRACT_SELFTEST_OK/,
     count: /EXPORT_CONTRACT_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -691,7 +1158,7 @@ const GATES = [
     id: 'keymap-e2e',
     name: '客户端 E2E（设置里的快捷键页：改绑 → 真按键 → 冲突 → 重启仍生效）',
     argv: [NODE, 'tools/editor-keymap-e2e.mjs'],
-    // 稳定数字 31。为什么在 keymap-selftest（纯逻辑）之外还要这道：
+    // 稳定数字 35。为什么在 keymap-selftest（纯逻辑）之外还要这道：
     // 纯逻辑证不了"设置页真的画出来了"，更证不了下面三件只在真机才成立的事 ——
     //   1. **录入态截得住按键**：录入时按 Ctrl+E 不能顺手弹出导出框。
     //      App 的全局派发挂在 window 冒泡阶段，不在捕获阶段截就会先执行一遍，
@@ -701,13 +1168,96 @@ const GATES = [
     //      会被"两个键位都留着"蒙过去。
     //   3. **活过重启**：自定义键位落的是主进程 settings，不是内存。
     //      这一条只能真的关进程再启一次。
-    // 各组行数/分组名/固定键位都写成**独立期望值**（21 / 6 组 / Esc），
+    // 各组行数/分组名/固定键位都写成**独立期望值**（36 行 / 6 组 / Esc），
     // 不从 keymap.js import —— 从被测算的代码里取期望值等于没测。
     // profile 目录带 pid（每轮唯一），否则上一轮残留的自定义键位会让
     // "开头应当全部为默认"变成一条莫名其妙的假红。
-    expected: 31,
+    // 31 → 35（2026-10-28）：新增 B0 段 4 条「键位方案」—— 三套方案都在、
+    // 点一下表格真的变、主进程 settings 真的写、切回默认整套恢复。
+    // 方案的**派发**不在这里重复按键证明：派发器读的就是 settings.keymap，
+    // 与下面「改绑 F9 → 真按 F9 生效」是同一条同源证据。
+    // 35 → 37（2026-10-28）：11b 从「3 套方案」改「5 套」，并新增 11b-2 / 11b-3 ——
+    // 两套行业方案各点一次、读「分割」行的键位列。只数 chip 数量证明不了点击有效：
+    // 两个按钮指向同一张表时，数字照样对、点下去什么都没换。
+    expected: 37,
     marker: /EDITOR_KEYMAP_E2E_OK/,
     count: /EDITOR_KEYMAP_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'timeline-nav-e2e',
+    name: '客户端 E2E（时间线导航：切点跳转 ↑↓ / 适配全片 Shift+Z / Alt+滚轮横移）',
+    argv: [NODE, 'tools/timeline-nav-e2e.mjs'],
+    // 稳定数字 13。为什么在 timeline-nav-selftest（35 条纯逻辑）之外还要这一道：
+    // 自测证得了「切点算得对、缩放算得对」，证不了「按下去真的发生」——
+    // 这一族的三根断线全都不报错、界面也照画：
+    //   ① 动作登记了但派发表里没有 ⇒ 按下去毫无反应（用户以为键坏了）；
+    //   ② 派发接到了别的动作 ⇒ 播放头不动、别的东西动了；
+    //   ③ 适配把缩放写进了 state 但样式没跟上（或反过来）⇒ 滑块动了、内容没动。
+    // 判据一律读**消费端**：`.playhead[data-playhead]`（用户看到的那根线插在哪一秒）、
+    // `getBoundingClientRect()`（内容右边界 vs 视口右边界），不读 React state。
+    // 另一条只有真机才照得出来的事实：range 的 value 会被**吸附到 step 网格**上，
+    // step=0.05 时"适配算出的 1.872"在滑块上显示成 1.85，差值落到布局上就是十几像素。
+    // 第 10 条不打"scrollWidth 恰好等于视口"（画布本来就有刻度余量），改打**幂等**：
+    // 连按两次结果必须一样 —— 那能抓住"适配拿当前缩放当输入"的退化。
+    // 13 → 16（2026-10-28 同日晚）：E 段三键播放 —— L 前进 / K 停住 / J 后退。
+    // 这一族的失效形状很统一：**播放头一动没动**（方向没进 rAF）、
+    // 或 **K 停不住**（只清了标志位、rAF 还在推）。两种都不报错、图标还会变。
+    expected: 16,
+    marker: /TIMELINE_NAV_E2E_OK/,
+    count: /TIMELINE_NAV_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'subtitle-e2e',
+    name: '客户端 E2E（字幕文件：三颗按钮 / 导出禁用态 / IPC 双向 / 扩展名白名单）',
+    argv: [NODE, 'tools/subtitle-e2e.mjs'],
+    // 稳定数字 8。纯逻辑那 82 条证得了"解析得对、切得对"，证不了这四件真机事实：
+    //   ① 按钮真的长在**字幕页**上（StylePanel 被「字幕模板」与「花字」共用，
+    //      少一个 `group === null` 判断，按钮会跑到花字页去，字幕页反而是空的）；
+    //   ② 导出按钮的 enabled **跟着字幕轨走**（空轨时必须是 disabled，判据读 DOM 属性）；
+    //   ③ `subtitle:read` / `subtitle:write` 真的通（这一段传 path 绕开原生对话框 ——
+    //      原生对话框在 E2E 里必须打桩，真弹框 = 永久卡住）；
+    //   ④ 白名单真的挡住非字幕扩展名（没有它，这个 IPC 就是渲染层"读任意文件"的口子）。
+    expected: 8,
+    marker: /SUBTITLE_E2E_OK/,
+    count: /SUBTITLE_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'editor-batch',
+    name: '客户端 E2E（组合 / 属性剪贴板 / 批量分割 / 主轨联动：真启 Electron + 真按键）',
+    argv: [NODE, 'tools/editor-batch-e2e.mjs'],
+    // 稳定数字 17。这四个动作的纯逻辑各自已有 node 自测（groups / clip-props /
+    // trim 的 J、K 段），但那三处证的全是「算得对」，证不了「按下去真的发生」。
+    // 这一族最典型的失效恰恰在接线层，而且**四种错法全都不报错**：
+    //   ① 键位登记了、处理表里没有 ⇒ 按键什么都不做，界面无提示；
+    //   ② 处理表有了、但读的是 `selection.clipId` 而组合成员在 `clipIds` 里 ⇒
+    //      组合了却只动一段，看着像"组合没生效"；
+    //   ③ 属性粘贴把 `url` 一起搬 ⇒ 用户以为是"属性没变、画面成了另一条"；
+    //   ④ 联动开关画出来了但拖动没读它 ⇒ 开关是装饰（本次特意正反各按一次）。
+    // 判据一律读**消费端**：`.multi` 类名数（不是 selection 对象）、右栏 `input[data-slider]`
+    // 与 `input[data-insp-num]` 的 inputValue（不是 clip 对象）、时间线片段 DOM 数。
+    // 批量分割那条还兼钉「左半段沿用原 id」——换新 id 会让选中与撤销历史指向空气。
+    // 最后 3 条走**右键菜单**这条第二条路径：菜单项接到隔壁动作上（粘贴接成复制、
+    // 组合接成复合片段）时，上面那些按键断言照样全绿，只有真点菜单才照得出来。
+    expected: 17,
+    marker: /EDITOR_BATCH_E2E_OK/,
+    count: /EDITOR_BATCH_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'export-panel',
+    name: '客户端 E2E（导出面板的编码格式真的驱动下游：编码器候选 / 容器扩展名 / 码率控件）',
+    argv: [NODE, 'tools/export-panel-e2e.mjs'],
+    // 稳定数字 16。为什么光有 export-codec-selftest（48 条纯逻辑）与契约闸门的静态判据不够：
+    // 那两道证的是"表对、线接上了"，证不了「按下去真的发生」。这一族的三根断线全都不报错：
+    //   ① 受控 select 的 onChange 没写 ⇒ 选了立刻弹回，字面上"根本没变"；
+    //   ② 写了 setCodec 但没重算编码器候选 ⇒ H.265 的下拉里还摆着 h264_nvenc，
+    //      真按下去 ffmpeg 报 "Unknown encoder"，而面板上看不出任何不对；
+    //   ③ 换了格式但输出路径不改扩展名 ⇒ 选 ProRes 仍是 .mp4，直到封装那一步才失败。
+    // 判据一律读**DOM 消费端**：select 的 value 与 option 列表（不是 state、不是常量表）、
+    // 容器提示的 data-* 属性、以及 ProRes 时码率控件是否真的从 DOM 里消失。
+    // 最后一条还钉「切回 H.264 那组控件要回来」—— 只删不回来的条件渲染同样是 bug。
+    expected: 16,
+    marker: /EXPORT_PANEL_E2E_OK/,
+    count: /EXPORT_PANEL_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
     id: 'preview-follow',
@@ -1046,7 +1596,8 @@ const GATES = [
     id: 'ui-spec',
     name: '静态·界面规格（设计令牌被真的消费 / 状态三态 / 主按钮唯一 / 图标尺寸显式）',
     argv: [NODE, 'tools/check-ui-spec.mjs'],
-    // 稳定数字 14 = 令牌定义 1 + 消费 4 + 状态层 4 + 主按钮 3 + 图标 2。
+    // 稳定数字 17 = 令牌定义 1 + **废弃令牌 1** + **档外字号 1** + **档外圆角 1**
+    //   + 消费 4 + 状态层 4 + 主按钮 3 + 图标 2。
     //
     // 这一族全是"构建通过、静态扫描也过、只有盯着看才发现"的错：
     //   · 令牌定义了没人用 ⇒ 字号仍在 9/10/11/12/13/15 六个值上散着；
@@ -1055,7 +1606,17 @@ const GATES = [
     //   · 主按钮与次级按钮都带底板 ⇒ 一屏里三个"最重要"；
     //   · 禁用态用 opacity ⇒ 底板与字形一起偏色（实测把峰值从 123 抬到 141）。
     // 判据取**级联后最终生效值**，不取"某个块里有没有 var()"。
-    expected: 14,
+    // 14 → 17（2026-10-27）：把"量表"从**令牌层**推进到**实值层**。
+    //   原先只钉"令牌定义齐全且被引用 8 处"，而全站 200+ 条 font-size / border-radius
+    //   里绝大多数是写死的裸 px —— 令牌在不在根本不拦人。三条新判据：
+    //     ① `--fs-15` / `--r-md` 不许再出现（15px 与 6px 是参考量表里**不存在**的档，
+    //        留着就会有人用，而那正是"看着不像一个软件"的直接来源）；
+    //     ② 三份 CSS 的 font-size 必须落在 10/11/12/13/14/16/20 上
+    //        （唯一豁免首页主标语 28px：按实测墨高定的展示性大字，不走控件量表）；
+    //     ③ 圆角只许 4/8（1px 分隔线、2px 小标签、胶囊 >=99px、50% 正圆除外）。
+    //   本轮据这三条清掉档外字号 17 处、收敛圆角 91 处（3/5/6/7/9/10/11/12/14/15/16/21/30）。
+    // 扫之前先剥掉注释：注释里讲的 `border-radius: inherit` 之类示例否则会被当成真声明。
+    expected: 17,
     marker: /UISPEC_OK/,
     count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
   },
@@ -1349,7 +1910,13 @@ const GATES = [
     //     · 配图族只认「被左栏节点点名」这一条挂载路径 —— 能力卡片区已经不存在，
     //       再要求它有样本只会假红；
     //     · 标签下界 8 → 7。
-    expected: 75,
+    // 75 → 83（2026-10-30 加「贴纸」页）：左栏多 8 个分组节点（表情/手势/心形/闪亮/
+    //   庆祝/动物/美食/标记），每条节点一句"有去向"。实测 83/83、problems 0。
+    // 84 → 87 加「模板」（3 个分组节点）；87 → 89 加「智能包装」（口播包装 / 画面包装）；
+    // 89 → 90 加「人物特效」（1 个叶子节点，自身就是落点）；
+    // 90 → 93 加「插件」（3 个叶子节点：我的插件 / 我的边框 / 我的贴纸）。
+    //   ⚠️ 带子项的**根卡片不计入**节点数（它自己不是落点），所以每次只加子项条数。
+    expected: 93,
     marker: /WORKBENCH_TREE_CHECK_OK/,
     count: /WORKBENCH_TREE_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+problems=(?<f>\d+)/
   },
@@ -1584,7 +2151,17 @@ const GATES = [
     //     写死了 `'stock-local'`，而这个 key 在本次对齐后已不存在 ⇒
     //     `nodeOf` 返回 null ⇒ 左栏没有高亮、中栏退回"显示全部素材"（点了没反应）。
     //     现在一律走 `defaultNodeOf(tab)`。
-    expected: 195,
+    // 195 → 216（2026-10-30 加「贴纸」标签）：标签级 3 条 + 8 个分组各 2 条（选中态 /
+    //   中栏非空壳）+ F 段两项各 1 条 = 21。实测 216 全过、0 跳过；
+    //   贴纸那 8 项的中栏都判为非空壳（8 个分类各自的网格都渲染出来了）。
+    // 216 → 229（2026-10-30 加「模板」标签）：3(标签级) + 3 节点×2 + 2(根卡片) = 11。
+    // 229 → 238（同日加「智能包装」）：3 + 2 节点×2 + 2 = 9。实测 238 全过、0 跳过。
+    // 238 → 240（2026-10-31 加「人物特效」）：**没有新标签**，只在「特效」页多 1 个节点
+    //   ⇒ 1 节点×2 = 2。
+    // 240 → 251（同日加「插件」页签）：3(标签级) + 3 节点×2 + 2(根卡片) = 11。实测 251、0 跳过。
+    //   ⚠️ 数字全部由脚本里的 TABS 表算出来（`TABS.length * 3` 等），
+    //   所以只能靠跑一遍拿真实值，不能手推 —— 手推漏掉 `TABS.length * 2` 那项就少 2。
+    expected: 251,
     marker: /TABS_E2E_OK/,
     count: /TABS_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -1857,7 +2434,22 @@ const GATES = [
     //   选择器压成竖排/被挤到另一行（看着不像页签）。前者读 DOM、后者量矩形，都是消费端。
     // +2（2026-10-19 文字系统）：点「入场·上浮」预览真的挂上 ta-up-in 动画；
     //   点「左对齐」外框的 justify-content 真的变 flex-start。
-    expected: 44,
+    // +4（2026-10-28 曲线）：编辑器在「调整」页且默认归直 · 拖中点后画面层 computed filter
+    //   真的引用 url(#yjai-curve-) · 生效的表恰 256 项且中点被抬到 0.6 以上、首末仍是 0/1 ·
+    //   点「归直」定义被撤掉（不留恒等滤镜）。判据读 SVG 定义里 feFuncR 的 tableValues
+    //   —— 那是浏览器真正拿去算每个像素的表；只看面板上画出的折线，没挂到层上也照样绿。
+    // +6（2026-10-28 一级色轮）：四枚色环且默认在圆心 · 拖阴影环后手柄 x/y 都变负 ·
+    //   画面层引用 url(#yjai-wheel-) · 蓝表首项抬起且红表首项被压住（方向没接反）·
+    //   拉中间调亮度后绿表中点抬高两端不动 · 点「全部复位」定义撤掉。
+    //   与曲线同机制但判据不同：曲线看形状，色轮必须看**方向**（红蓝接反时"表也变了"）。
+    // +6（2026-10-28 分区 HSL）：八色带默认全中性（不建 WebGL 上下文、不出复位键）·
+    //   拉红带饱和度后画面上**真的多出一层 GPU 画布** · 原画面被藏起来（否则盖住的是
+    //   没调过色的旧像素）· 该画布按源尺寸上传过一帧（不是 300×150 空画布）·
+    //   被调过的带亮脏点 + 分节出复位键 · 点复位后画布卸掉、画面回到原生元素。
+    //   ⚠️ 这套判据不能照抄曲线那套：`权重 = f(像素色相)` 用 SVG 滤镜表达不了，
+    //   预览走 WebGL 3D 纹理、导出写 .cube，所以要看"谁来显示像素"而不是看 filter。
+    //   「按源尺寸上传过一帧」这条挡的是**图片分支没有 ref**（原图被藏 + 画布空白 = 黑屏）。
+    expected: 60,
     marker: /INSPECTOR_FX_OK/,
     count: /INSPECTOR_FX_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -2296,7 +2888,7 @@ async function main() {
       // salvage 救回来的条目必须**看得见**：不标注的话，"收尾卡住"会变成一种
       // 无声的常态，下一次真出现"断言没跑完"时也没人会多看一眼。
       const detailWithNote = rec.note ? `${detail}；${rec.note}` : detail
-      results.push({ gate, ok: true, detail: detailWithNote, logFile: rec.logFile })
+      results.push({ gate, ok: true, detail: detailWithNote, logFile: rec.logFile, innerSkips: rec.skippedN || 0 })
       log(`[PASS] ${gate.name} :: ${detailWithNote}`)
     }
     log('')
@@ -2323,8 +2915,27 @@ async function main() {
   const failed = results.filter((r) => r.ok === false).length
   const skipped = results.filter((r) => r.skipped).length
 
+  /**
+   * 断言级跳过也要汇总。
+   *
+   * 为什么单独算（2026-10-28 现场）：上面那行只数「**整道闸门**被跳过」，
+   * 闸门**内部**逐条记的 SKIP 完全不出现在汇总里。于是这套环境里
+   * media 掉了 10 条真渲染断言（本机 PATH 上没有 ffmpeg），而汇总照样印
+   * 「1/1 通过，0 失败，0 跳过」—— 与闸门自己印的「跳过 10」自相矛盾。
+   * 这和「跳过不算失败」是同一个病，只不过发生在总闸门口：
+   * 只读最后一屏的人会以为全部验过。
+   */
+  const innerSkips = results.reduce((n, r) => n + (r.innerSkips || 0), 0)
+  const skipGates = results.filter((r) => (r.innerSkips || 0) > 0)
+
   log('='.repeat(64))
-  log(`一键验证：${passed}/${results.length} 通过，${failed} 失败，${skipped} 跳过`)
+  log(`一键验证：${passed}/${results.length} 通过，${failed} 失败，${skipped} 道闸门跳过`)
+  if (innerSkips) {
+    // 不计入失败（环境不足是合法的），但必须在最后一屏看得见，且说清是哪些项。
+    log(`⚠️  断言级跳过：${innerSkips} 条 —— 这些条目**本次没有验证**，绿色不代表验过：`)
+    for (const r of skipGates) log(`  - ${r.gate.name} :: ${r.innerSkips} 条（原因见日志 ${path.relative(root, r.logFile)}）`)
+    log('   多为环境缺失（ffmpeg / ffprobe）。补齐后复跑：set FFMPEG_PATH=<ffmpeg.exe 绝对路径>')
+  }
   if (skipped) {
     log('跳过项：')
     for (const r of results.filter((x) => x.skipped)) log(`  - ${r.gate.name} :: ${r.why}`)

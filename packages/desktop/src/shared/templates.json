@@ -1,0 +1,168 @@
+{
+  "$comment": [
+    "成套预设（模板）—— 唯一真源。渲染层按它生成片段，闸门按它校验。",
+    "",
+    "为什么这份表能「真跑」而不是一片空白：模板里**不引用任何外部文件**。",
+    "每一条只能取三种原料，全部是本工程自带、已随包离线的：",
+    "  · 文字  —— shared/textStyles.json 的 19 个样式（样式表定了字号/颜色/描边/动画）",
+    "  · 贴纸  —— resources/stickers 的 140 枚（按 key 引用，套用时从清单换 yjai-media 地址）",
+    "  · 边框  —— resources/borders 的 24 款（写 clip.border，片段属性）",
+    "所以「点了模板没反应」这种假入口在结构上就不成立：要么生成真片段，要么明确报错。",
+    "",
+    "⚠️ 时间单位一律是**秒**，`at` 是相对模板起点的偏移（不是绝对时间）。",
+    "   套用时整体平移到当前播放头 —— 模板里写绝对时间的话，",
+    "   在时间线第 30 秒套一个 4 秒的开场会跑到第 0 秒去。",
+    "",
+    "⚠️ 贴纸的 key 必须在 resources/stickers/catalog.json 里真实存在。",
+    "   套用时查不到就**跳过那一条**（并在提示里说跳过了几项）——",
+    "   静默丢弃的话，用户看到的是「套了模板但少了个东西」，查不出原因。",
+    "   闸门 tools/check-templates.mjs 会把这里出现的每个贴纸 key 与清单逐条比对。",
+    "",
+    "⚠️ 文字的 `anchor`（top/center/bottom）与 `offset`（1280 基准 px，离所贴那条边的距离）",
+    "   走 shared/textOverrides.js 的同一套覆写，预览与导出共用 ——",
+    "   所以模板排出来的版式在成片里是同一个位置。center 时 offset 无效（本来就居中）。"
+  ],
+  "groups": [
+    { "key": "open", "name": "开场" },
+    { "key": "end", "name": "结尾" },
+    { "key": "pack", "name": "字幕套" }
+  ],
+  "templates": [
+    {
+      "key": "tpl-open-hero",
+      "name": "大字开场",
+      "group": "open",
+      "hint": "主标题压上三分之一处，副标题跟在下面",
+      "duration": 3.8,
+      "clips": [
+        { "type": "text", "text": "在这里写下标题", "style": "title-hero", "at": 0, "dur": 2.2, "anchor": "top", "offset": 170 },
+        { "type": "text", "text": "副标题 · 一秒钟说清这是什么", "style": "sub-plain", "at": 2.2, "dur": 1.6, "anchor": "center", "offset": 0, "scale": 0.72 }
+      ]
+    },
+    {
+      "key": "tpl-open-band",
+      "name": "色带开场",
+      "group": "open",
+      "hint": "带底色的标题条，适合栏目 / 系列名",
+      "duration": 3.6,
+      "clips": [
+        { "type": "text", "text": "本期主题 · 城市清晨", "style": "title-band", "at": 0, "dur": 2.8, "anchor": "center", "offset": 0 },
+        { "type": "text", "text": "EP.01", "style": "sub-plain", "at": 2.8, "dur": 0.8, "anchor": "center", "offset": 0, "scale": 0.6 }
+      ]
+    },
+    {
+      "key": "tpl-open-outline",
+      "name": "描边冲击",
+      "group": "open",
+      "hint": "粗描边大字 + 右上角一枚闪亮贴纸",
+      "duration": 3.4,
+      "clips": [
+        { "type": "text", "text": "开场就抓住人", "style": "title-outline", "at": 0, "dur": 3.4, "anchor": "center", "offset": 0 },
+        { "type": "sticker", "sticker": "spark-2728", "at": 0.3, "dur": 3.0, "anchor": "right-top", "size": 16 }
+      ]
+    },
+    {
+      "key": "tpl-open-fest",
+      "name": "节日开场",
+      "group": "open",
+      "hint": "渐变标题 + 两枚庆祝贴纸",
+      "duration": 3.4,
+      "clips": [
+        { "type": "text", "text": "新年好", "style": "title-gradient", "at": 0, "dur": 3.4, "anchor": "center", "offset": 0 },
+        { "type": "sticker", "sticker": "party-1f389", "at": 0.2, "dur": 3.0, "anchor": "left-top", "size": 18 },
+        { "type": "sticker", "sticker": "party-1f38a", "at": 0.5, "dur": 2.6, "anchor": "right-top", "size": 16 }
+      ]
+    },
+    {
+      "key": "tpl-end-credit",
+      "name": "署名结尾",
+      "group": "end",
+      "hint": "制作署名，末尾接一句致谢",
+      "duration": 3.2,
+      "clips": [
+        { "type": "text", "text": "制作 · 在这里署名", "style": "sub-plain", "at": 0, "dur": 2.2, "anchor": "center", "offset": 0 },
+        { "type": "text", "text": "感谢观看", "style": "sub-accent", "at": 2.2, "dur": 1.0, "anchor": "center", "offset": 0, "scale": 0.72 }
+      ]
+    },
+    {
+      "key": "tpl-end-tag",
+      "name": "标签结尾",
+      "group": "end",
+      "hint": "深色胶囊标签，放关键词 / 话题",
+      "duration": 3.0,
+      "clips": [
+        { "type": "text", "text": "# 本期关键词", "style": "sub-tag", "at": 0, "dur": 3.0, "anchor": "bottom", "offset": 140 }
+      ]
+    },
+    {
+      "key": "tpl-end-neon",
+      "name": "霓虹结尾",
+      "group": "end",
+      "hint": "发光字收尾，下方一枚星光",
+      "duration": 3.4,
+      "clips": [
+        { "type": "text", "text": "下次见", "style": "sub-neon", "at": 0, "dur": 3.4, "anchor": "center", "offset": 0 },
+        { "type": "sticker", "sticker": "spark-2b50", "at": 0.4, "dur": 2.6, "anchor": "bottom", "size": 12 }
+      ]
+    },
+    {
+      "key": "tpl-end-follow",
+      "name": "关注引导",
+      "group": "end",
+      "hint": "底部引导条 + 一颗心",
+      "duration": 4.0,
+      "clips": [
+        { "type": "text", "text": "点赞 · 关注 · 不迷路", "style": "sub-bar", "at": 0, "dur": 4.0, "anchor": "bottom", "offset": 100 },
+        { "type": "sticker", "sticker": "heart-2764", "at": 0.6, "dur": 2.8, "anchor": "right", "size": 14 }
+      ]
+    },
+    {
+      "key": "tpl-pack-bar",
+      "name": "底栏字幕 ×3",
+      "group": "pack",
+      "hint": "三条带底色的字幕，接在播放头后面",
+      "duration": 7.2,
+      "clips": [
+        { "type": "text", "text": "第一句台词", "style": "sub-bar", "at": 0, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第二句台词", "style": "sub-bar", "at": 2.4, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第三句台词", "style": "sub-bar", "at": 4.8, "dur": 2.4, "anchor": "bottom", "offset": 100 }
+      ]
+    },
+    {
+      "key": "tpl-pack-plain",
+      "name": "素字幕 ×3",
+      "group": "pack",
+      "hint": "无底衬白字，留给画面自己说话",
+      "duration": 7.2,
+      "clips": [
+        { "type": "text", "text": "第一句台词", "style": "sub-plain", "at": 0, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第二句台词", "style": "sub-plain", "at": 2.4, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第三句台词", "style": "sub-plain", "at": 4.8, "dur": 2.4, "anchor": "bottom", "offset": 100 }
+      ]
+    },
+    {
+      "key": "tpl-pack-accent",
+      "name": "强调字幕 ×3",
+      "group": "pack",
+      "hint": "带强调色块的短句，适合口播要点",
+      "duration": 7.2,
+      "clips": [
+        { "type": "text", "text": "第一个要点", "style": "sub-accent", "at": 0, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第二个要点", "style": "sub-accent", "at": 2.4, "dur": 2.4, "anchor": "bottom", "offset": 100 },
+        { "type": "text", "text": "第三个要点", "style": "sub-accent", "at": 4.8, "dur": 2.4, "anchor": "bottom", "offset": 100 }
+      ]
+    },
+    {
+      "key": "tpl-pack-chapter",
+      "name": "章节卡 ×3",
+      "group": "pack",
+      "hint": "三条标题条，给长视频分章节",
+      "duration": 9.0,
+      "clips": [
+        { "type": "text", "text": "01 · 起", "style": "title-band", "at": 0, "dur": 3.0, "anchor": "center", "offset": 0 },
+        { "type": "text", "text": "02 · 承", "style": "title-band", "at": 3.0, "dur": 3.0, "anchor": "center", "offset": 0 },
+        { "type": "text", "text": "03 · 转", "style": "title-band", "at": 6.0, "dur": 3.0, "anchor": "center", "offset": 0 }
+      ]
+    }
+  ]
+}

@@ -52,9 +52,15 @@ export const EPSILON = 0.001
  */
 import speedTable from '../shared/speed.js'
 import reverseTable from '../shared/reverse.js'
+import compoundTable from '../shared/compound.js'
 
 const { SPEED_MAX, SPEED_MIN, clipSpeed, clipRateAt, curveSourceTime, readCurve, sourceSpan } = speedTable
 export { SPEED_MAX, SPEED_MIN, clipSpeed, clipRateAt, curveSourceTime, readCurve, sourceSpan }
+
+/* 复合片段的判定**必须**用同一个函数：单段分割（App.jsx 的 splitClipAt）与批量分割
+   若各写一份"看起来差不多"的条件，某天一边加了 `kind === 'compound'`、另一边没加，
+   就会出现"单段切不动、批量切得动"——用户看不出规律，只会觉得软件时好时坏。 */
+const { isCompound } = compoundTable
 
 /* 倒放的局部时间翻转。真源在 shared/reverse.js —— 导出侧拼的是 ffmpeg 的 reverse/areverse，
    两侧**实现方式完全不同**（浏览器不能负速播放），所以更要共用同一份局部秒口径。 */
@@ -233,28 +239,125 @@ export function linkedIds(clips, clipId) {
  *    只有播放时才发现"没声音"或"声音晚半秒"。
  *    所以这里先算整组能平移多少（受组内最早起点限制），再统一用这个量。
  *
+ * `extraIds` 是**另一路来的组员**：组合（Alt+G，逻辑成组）与联动（同源音画）是两种
+ * 不同的绑定来源，但"拖一条带走一组"的钳位算术必须是同一段 —— 分两段写，就必然会在
+ * "往左拖到 0"那一刻算出两个不同的位移，表现是组员之间静默错位（谁也看不出为什么）。
+ * 所以这里把它们并进同一个参与集合，只钳一次。
+ *
+ * ⚠️ 联动开关关掉时 `extraIds` **仍然生效**：Ctrl+L 管的是"同源音画要不要一起动"，
+ *    与组合是两件事。关联动顺手把组合也拆掉，等于给了用户一个隐形的第二次开关。
+ *
  * @param {Array} clips 全部片段
  * @param {string} clipId 被拖的片段
  * @param {number} nextStart 被拖片段的目标起点（秒）
  * @param {boolean} enabled 联动开关（关掉 = 只动自己，行为与旧版一致）
+ * @param {string[]} [extraIds] 组合成员等额外参与平移的片段 id（不含被拖的那条）
  */
-export function linkMovePatches(clips, clipId, nextStart, enabled = true) {
+export function linkMovePatches(clips, clipId, nextStart, enabled = true, extraIds = []) {
   const list = Array.isArray(clips) ? clips : []
   const target = list.find((item) => item.id === clipId)
   if (!target) return []
   const want = Number(nextStart)
   const from = Number(target.start) || 0
   if (!Number.isFinite(want)) return []
-  if (!enabled) return [{ id: target.id, start: Math.max(0, want) }]
 
-  const group = list.filter((item) => (target.assetId ? item.assetId === target.assetId : item.id === target.id))
-  /* 整组的最小起点就是"最多还能往左挪多少" */
-  const floor = Math.min(...group.map((item) => Number(item.start) || 0))
+  const linked = enabled
+    ? list.filter((item) => (target.assetId ? item.assetId === target.assetId : item.id === target.id))
+    : [target]
+
+  const extra = new Set((Array.isArray(extraIds) ? extraIds : []).filter(Boolean))
+  extra.delete(target.id)
+  const participants = extra.size
+    ? [...linked, ...list.filter((item) => extra.has(item.id) && !linked.some((peer) => peer.id === item.id))]
+    : linked
+
+  /* 参与集合的最小起点就是"最多还能往左挪多少" */
+  const floor = Math.min(...participants.map((item) => Number(item.start) || 0))
   const delta = Math.max(want - from, -floor)
-  return group.map((item) => ({
+  return participants.map((item) => ({
     id: item.id,
     start: Number(((Number(item.start) || 0) + delta).toFixed(3))
   }))
+}
+
+/**
+ * 批量分割：在 `at` 处一刀切穿**所有**未锁定轨道上跨过该点的片段。
+ *
+ * 与单段分割（App.jsx 的 splitClipAt）共用同一套右半段入点换算，包括两处最容易错的：
+ *   · **倍速**：`at - start` 是时间线秒，源素材要走 `× speed` 秒，漏乘会让右半段
+ *     从"比正确位置早一半"的地方开始播；
+ *   · **曲线变速**：有曲线时按曲线累计面积算（`curveSourceTime`），不能用线性近似。
+ *
+ * 三条"拒绝"的口径，都必须能让调用方说出原因（返回 `skipped` 计数）：
+ *   ① 锁定轨 —— 与拖动/修剪/删除同一套口径；
+ *   ② 复合片段 —— 它的 `compound.children` 是按父片段坐标系存的，切开后**两半会
+ *      各自带一份同一批子片段**，成片里同一段内容播两遍。单段分割也该拒，
+ *      这里先拒（见 App.jsx splitClipAt 的同款判断）。
+ *   ③ 两侧不足最短时长 —— 切出来会有一段长度趋 0，用户抓不回来。
+ *
+ * @param {Array} clips 全部片段
+ * @param {number} at 切割点（时间线秒）
+ * @param {{lockedTracks?: string[], min?: number, nextId: () => string}} options
+ *        `nextId` **必传**：右半段的 id 必须由调用方发号，纯函数里造 id 会让同一份
+ *        输入产生不同输出，夹具无法比对。
+ * @returns {{clips: Array, cuts: Array<{id:string, rightId:string, name:string}>,
+ *            skipped: {locked:number, compound:number, tooShort:number}}}
+ */
+export function cutAllAt(clips, at, options = {}) {
+  const list = Array.isArray(clips) ? clips : []
+  const { lockedTracks = [], min = MIN_CLIP_SECONDS, nextId } = options
+  if (typeof nextId !== 'function') {
+    throw new TypeError('cutAllAt 需要 nextId 回调：右半段的 id 必须由调用方发号')
+  }
+  const point = Number(at)
+  const skipped = { locked: 0, compound: 0, tooShort: 0 }
+  if (!Number.isFinite(point)) return { clips: list, cuts: [], skipped }
+
+  const locked = new Set(Array.isArray(lockedTracks) ? lockedTracks : [])
+  const cuts = []
+  const next = []
+
+  for (const item of list) {
+    const start = Number(item.start) || 0
+    const duration = Number(item.duration) || 0
+    const end = start + duration
+    const inside = point > start + EPSILON && point < end - EPSILON
+    if (!inside) {
+      next.push(item)
+      continue
+    }
+    if (locked.has(item.track)) {
+      skipped.locked += 1
+      next.push(item)
+      continue
+    }
+    if (isCompound(item)) {
+      skipped.compound += 1
+      next.push(item)
+      continue
+    }
+    if (point - start < min || end - point < min) {
+      skipped.tooShort += 1
+      next.push(item)
+      continue
+    }
+
+    const base = Number(item.offset) || 0
+    const cutOffset = readCurve(item) ? curveSourceTime(item, point) : base + (point - start) * clipSpeed(item)
+    const rightId = nextId()
+    const left = { ...item, duration: Number((point - start).toFixed(4)) }
+    const right = {
+      ...item,
+      id: rightId,
+      start: Number(point.toFixed(4)),
+      duration: Number((end - point).toFixed(4)),
+      offset: Number(Number(cutOffset).toFixed(4))
+    }
+    next.push(left, right)
+    cuts.push({ id: item.id, rightId, name: item.name || '未命名片段' })
+  }
+
+  return { clips: next, cuts, skipped }
 }
 
 /**

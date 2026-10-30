@@ -238,6 +238,49 @@ await shoot('03-inspector-visual')
 await I('adjust')
 await shoot('04-inspector-adjust')
 
+/* 4b) 颜色曲线：先在 RGB 曲线上点两下摆出一条 S 形，再拍 —— 空曲线拍出来是一条直线，
+   看不出"这里有东西可用" */
+await page.locator('[data-ccurve-surface]').scrollIntoViewIfNeeded().catch(() => {})
+await sleep(300)
+const curveBox = await page.locator('[data-ccurve-surface]').boundingBox().catch(() => null)
+if (curveBox) {
+  const dragTo = async (fx, fy) => {
+    await page.mouse.move(curveBox.x + curveBox.width * fx, curveBox.y + curveBox.height * 0.5)
+    await page.mouse.down()
+    await sleep(120)
+    await page.mouse.move(curveBox.x + curveBox.width * fx, curveBox.y + curveBox.height * fy, { steps: 6 })
+    await sleep(120)
+    await page.mouse.up()
+    await sleep(250)
+  }
+  await dragTo(0.32, 0.6)
+  await dragTo(0.7, 0.3)
+}
+await shoot('04b-inspector-curve')
+/* 拍完把曲线清回直线：后面的取景不该带着这条 S 形（画面会整体变味） */
+await page.locator('[data-ccurve-clear]').click({ timeout: 4000 }).catch(() => {})
+await sleep(300)
+
+/* 4c) 一级色轮：推两枚手柄（阴影推蓝、高光推暖），让四枚环里有内容可看 */
+const wheelScroll = page.locator('[data-wheel-editor]')
+await wheelScroll.scrollIntoViewIfNeeded().catch(() => {})
+await sleep(250)
+const pushWheel = async (key, fx, fy) => {
+  const box = await page.locator(`[data-wheel-slot="${key}"]`).boundingBox().catch(() => null)
+  if (!box) return
+  await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy)
+  await page.mouse.down()
+  await sleep(100)
+  await page.mouse.move(box.x + box.width * fx, box.y + box.height * (fy - 0.02), { steps: 3 })
+  await page.mouse.up()
+  await sleep(200)
+}
+await pushWheel('shadow', 0.28, 0.74)
+await pushWheel('high', 0.74, 0.3)
+await shoot('04c-inspector-wheel')
+await page.locator('[data-wheel-clear]').click({ timeout: 4000 }).catch(() => {})
+await sleep(300)
+
 /* 5) 变速 */
 await I('speed')
 await shoot('05-inspector-speed')
@@ -295,6 +338,13 @@ await T('media')
 await pick('r_v1')
 if (await tap('.wb-export', '导出按钮')) {
   await shoot('14-export')
+  /* 再拍一张「选了 ProRes 4444」的样子：容器提示变 MOV、视频编码只剩 prores_ks、
+     码率控制那组控件收起来并换成一句说明。这几处都是条件渲染，静态扫描看不见版式。 */
+  await page.selectOption('[data-export-codec]', 'prores-4444').catch(() => {})
+  await sleep(500)
+  await shoot('14b-export-prores')
+  await page.selectOption('[data-export-codec]', 'h264').catch(() => {})
+  await sleep(300)
   await tap('.modal header button[aria-label="关闭"]', '关闭导出弹窗')
   await sleep(500)
 }

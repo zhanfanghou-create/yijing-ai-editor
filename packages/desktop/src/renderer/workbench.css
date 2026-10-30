@@ -74,28 +74,36 @@
   --wb-accent-glow: rgba(195, 107, 245, 0.22);
 
   /* ───────────────────────── 组件规格（全站唯一来源） ─────────────────────────
-   * 为什么要有这一组：以前字号散落在 9/10/11/12/13/15 六个值上，同一个"次级说明"
+   * 为什么要有这一组：以前字号散落在 9/10/11/12/13/15/18 七个值上，同一个"次级说明"
    * 在这屏是 11px、那屏是 10px；按钮高度有 22/24/26/28/32 五种；圆角有 2/3/4/5/6/9。
    * 结果不是"难看"，而是**看着不像一个软件**——这是本次 UI 对齐要修的第一件事。
    *
-   * 规则（照参考客户端的量表）：
-   *   · 字号只用四档：11 辅助 / 12 正文 / 13 标题 / 15 强调；行高固定 1.45 倍取整。
+   * 规则（照参考客户端的 LVFont / LVColor 量表，见 docs 里的排版规格）：
+   *   · 字号只用**七档**：10 辅助 / 11 按钮 / 12 列表与标签 / 13 正文 /
+   *     14 小节标题 / 16 面板标题 / 20 页面主标题。
+   *     ⚠️ 参考**没有 9、15、18**（也刻意不用 15 当"大一号的正文"）——
+   *        15 是我们自己造出来的档，正是"看着不像一个软件"的来源之一。
+   *     ⚠️ 例外：首页主标语一类**展示性大字**不走这套量表（它是按实测墨高定的
+   *        28px，不是控件文本），另行注释说明；除此之外不许出现档外字号。
    *   · 控件高度只用三档：24 小图标键 / 28 常规 / 32 主按钮。
-   *   · 圆角只用三档：4 小件 / 6 常规 / 8 面板与主按钮。
+   *   · 圆角只用**两档**：4 小件（按钮 / 菜单项 / 小标签）/ 8 面板、卡片、选中底、主按钮。
+   *     参考全量统计里除 1px 分隔线、2px 小标签与胶囊（=高/2）之外只有这两个值。
    *   · 间距只用 4 的倍数：4 / 8 / 12 / 16。
    * 新增组件**必须**消费这些令牌，闸门 `ui-spec` 会钉住"令牌存在且被真的用了"。
    */
+  --fs-10: 10px;
   --fs-11: 11px;
   --fs-12: 12px;
   --fs-13: 13px;
-  --fs-15: 15px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
   --lh-tight: 1.2;
   --lh-body: 1.45;
   --ctl-sm: 24px;
   --ctl-md: 28px;
   --ctl-lg: 32px;
   --r-sm: 4px;
-  --r-md: 6px;
   --r-lg: 8px;
   --gap-1: 4px;
   --gap-2: 8px;
@@ -177,7 +185,7 @@
   min-width: 126px;
   height: 26px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   -webkit-app-region: no-drag;
 }
@@ -190,7 +198,7 @@
   /* 实测参考的徽章底板是 24×24、落在 x8..31 y5..28（圆角 ~4px） */
   width: 24px;
   height: 24px;
-  border-radius: 5px;
+  border-radius: 4px;
   flex: none;
   display: block;
   overflow: hidden;
@@ -233,7 +241,7 @@
      实测结果：墨迹盒 x156..179(w24) y12..22(h11) —— 与参考逐像素一致。 */
   padding: 1px 6px 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   /* 实测参考「文件」墨迹盒 w24 h11、最亮像素 #919493（lum 147）——
      是**灰字**，不是白字。rgba(255,255,255,.55) 叠在底色 #0e0e13 上正好 ≈ #939393。
@@ -303,7 +311,7 @@
   height: 28px;
   padding: 0 9px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wb-text);
   font-size: 12px;
@@ -421,7 +429,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-text);
   display: grid;
@@ -624,7 +632,7 @@
   min-width: 48px;
   padding: 0 12px;
   border: 0;
-  border-radius: 6px 6px 0 0;
+  border-radius: 8px 8px 0 0;
   background: transparent;
   color: var(--wb-muted);
   font-size: 13px;
@@ -656,7 +664,7 @@
   height: 24px;
   flex: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wb-muted);
   display: grid;
@@ -681,7 +689,8 @@
   gap: 4px;
   padding: 4px 10px 4px;
   border: 0;
-  border-radius: var(--r-md);
+  /* 圆角走 8：参考侧栏项选中底就是 8（LVTabItem），原先自造的 6 已删档 */
+  border-radius: var(--r-lg);
   background: transparent;
   color: #d6d6d7;
   /* 文字降到 12px：参考 11.6 实测页签文字字面高 12px（局部放大图 zoom/z1，2 倍下 24px）。
@@ -913,7 +922,7 @@
   /* 参考实测：卡片 x16..148，图标从 x20 起 → 左内缩 4px */
   padding: 0 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--wb-card);
   /* 参考实测文字峰值 rgb(206,207,207) = #cecfcf（普通行与卡片行都是这个色）。
      我们原先用 --wb-text(#e8e8e8)，实测峰值 232 —— 明显偏亮，
@@ -1009,11 +1018,11 @@
 /* NEW 角标：贴在卡片右上角、略微出界（参考实测 x128..151 / y310..321，
    卡片 x16..148 / y313..344 → 右 -3px、上 -3px、高 12px），底色是紫→品红渐变 */
 .wb-node .wb-tag {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 12px;
   height: 12px;
   padding: 0 5px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -1199,7 +1208,7 @@
 .enh-card.is-bg .enh-art {
   width: 130px;
   height: 75px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 /* ------------------------------ 中栏：素材 ------------------------------ */
@@ -1566,7 +1575,7 @@
 .workbench .wb-grid.is-list .media-card .media-thumb {
   width: 64px;
   height: 36px;
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
   box-shadow: none;
 }
@@ -1630,7 +1639,7 @@
   height: 34px;
   padding: 0 22px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: linear-gradient(90deg, #8b6bf5, #d94be8);
   color: #fff;
   font-size: 13px;
@@ -1700,7 +1709,7 @@
   gap: 8px;
   height: 72px;
   border: 1px solid #3a3a3a;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #3b3b3b;
   color: var(--wb-text);
   font-size: 13px;
@@ -1735,7 +1744,7 @@
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wb-muted);
   display: grid;
@@ -1852,7 +1861,7 @@
   height: 24px;
   padding: 0 10px;
   border: 1px solid #3a3a3a;
-  border-radius: 12px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-muted);
   font-family: ui-monospace, Consolas, monospace;
@@ -1907,7 +1916,7 @@
   height: 22px;
   padding: 0 7px;
   border: 1px solid #3a3a3a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wb-muted);
   font-family: ui-monospace, Consolas, monospace;
@@ -1939,7 +1948,7 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-muted);
   display: grid;
@@ -1964,7 +1973,7 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-muted);
   display: grid;
@@ -2043,7 +2052,7 @@
   height: 28px;
   padding: 0 8px;
   border: 1px solid #3a3a3a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #202027;
   color: var(--wb-text);
   outline: none;
@@ -2060,7 +2069,7 @@
   height: auto;
   padding: 0;
   border: 0;
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   font-size: 13px;
 }
@@ -2106,7 +2115,7 @@
   display: flex;
   gap: 6px;
   padding: 2px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #1c1c1c;
 }
 
@@ -2124,7 +2133,7 @@
   height: 24px;
   padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-muted);
   font-size: 12px;
@@ -2253,7 +2262,7 @@
   height: 22px;
   flex: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--wb-muted);
   display: grid;
@@ -2293,7 +2302,7 @@
   height: 24px;
   padding: 0 6px;
   border: 1px solid #3a3a3a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #1c1c1c;
   color: var(--wb-text);
   font-size: 12px;
@@ -2344,7 +2353,7 @@
 .wb-chiprow > .chip {
   height: 26px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid #3a3a3a;
   background: transparent;
   color: var(--wb-muted);
@@ -2404,7 +2413,7 @@
 
 .wb-curve-tick {
   fill: var(--wb-faint);
-  font-size: 9px;
+  font-size: 10px;
   font-family: var(--wb-mono, ui-monospace, monospace);
 }
 
@@ -2499,7 +2508,7 @@
 .wb-lookchip {
   height: 26px;
   border: 1px solid #3a3a3a;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--wb-muted);
   font-size: 11px;
@@ -2518,6 +2527,227 @@
   color: #fff;
 }
 
+/* ---------- 颜色曲线（RGB / 红 / 绿 / 蓝）----------
+   与「变速曲线」(.wb-curve*) 是两套：那套横轴是进度、纵轴是对数速率。
+   这里横轴是输入亮度、纵轴是输出亮度，所以网格必须画在恒等对角线的两侧。 */
+.wb-ccurve {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-ccurve-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.wb-ccurve-tab {
+  flex: 1;
+  height: 22px;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.wb-ccurve-tab:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--wb-text);
+}
+
+/* 选中的页签用该通道自己的颜色（红/绿/蓝页签一眼能对应上那条线） */
+.wb-ccurve-tab.on {
+  border-color: var(--ccurve-color, var(--wb-accent));
+  color: var(--ccurve-color, #fff);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.wb-ccurve-tab.is-reset {
+  flex: 0 0 40px;
+  color: var(--wb-muted);
+}
+
+.wb-ccurve-box {
+  position: relative;
+  /* 颜色曲线必须**正方形**（横轴输入、纵轴输出，同一个 0..1 量纲）——
+     拉成长方形之后 45° 基准线会变形，"提亮还是压暗"就没法一眼看出来了。
+     宽度封顶 190：不封的话它会吃掉整栏高度，把下面的「单击加点 / 全部归直」推到
+     可视区外（第一版就是这个毛病，取景时下面那一行完全看不见）。 */
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  max-width: 190px;
+  margin: 0 auto;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #101010;
+  overflow: hidden;
+}
+
+.wb-ccurve-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.wb-ccurve-grid line {
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.wb-ccurve-grid line.base {
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-dasharray: 3 3;
+}
+
+.wb-ccurve-ghost {
+  fill: none;
+  stroke-width: 1;
+  opacity: 0.35;
+}
+
+.wb-ccurve-line {
+  fill: none;
+  stroke-width: 1.6;
+}
+
+.wb-ccurve-point {
+  fill: #0d0d0d;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+
+.wb-ccurve-point.on {
+  fill: var(--wb-accent);
+  cursor: grabbing;
+}
+
+.wb-ccurve-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--wb-muted);
+  font-size: 10px;
+}
+
+.wb-ccurve-all {
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.wb-ccurve-all:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--wb-text);
+}
+
+/* ------------------------------ 一级色轮 ------------------------------ */
+/* 四枚色环 2×2 排；环本身靠 conic-gradient 画色相、半径表示强度，
+   所以**不需要**任何图片资产，也不需要按尺寸出多套图。 */
+.wb-wheels {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-wheel-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.wb-wheel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 8px;
+}
+
+.wb-wheel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.wb-wheel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.wb-wheel-head em {
+  font-style: normal;
+  color: var(--wb-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-wheel-slot {
+  position: relative;
+  width: 100%;
+  max-width: 92px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px #3f3f43, 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* 拖动中给一圈强调色：手柄本身很小，没有这个反馈分不清"按下了"与"没按到" */
+.wb-wheel-slot.on {
+  box-shadow: inset 0 0 0 1px var(--wb-accent), 0 0 0 1px var(--wb-accent);
+}
+
+.wb-wheel-axis {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.16) 50%, transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.16) 50%, transparent calc(50% + 0.5px));
+}
+
+.wb-wheel-puck {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.6), 0 0 0 2.5px rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.wb-wheel-level {
+  width: 100%;
+  max-width: 92px;
+}
+
+.wb-wheel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--wb-muted);
+  font-size: 10px;
+}
+
 /* 字幕颜色：取色器 + 快捷色板 */
 .wb-colorrow {
   display: flex;
@@ -2531,7 +2761,7 @@
   height: 24px;
   padding: 0;
   border: 1px solid #3a3a3a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #1c1c1c;
   cursor: pointer;
 }
@@ -2568,7 +2798,7 @@
   position: relative;
   width: 34px;
   height: 18px;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid #3a3a44;
   background: #26262e;
   padding: 0;
@@ -2617,7 +2847,7 @@
   height: 24px;
   padding: 0;
   border: 1px solid #3a3a3a;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #1c1c1c;
   cursor: pointer;
 }
@@ -2938,7 +3168,7 @@
 .wb-rec-time {
   min-width: 82px;
   color: #ececf1;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.4px;
@@ -3052,7 +3282,7 @@
   gap: 2px;
   height: 22px;
   padding: 0 3px;
-  border-radius: 6px;
+  border-radius: 8px;
   background: rgba(107, 163, 255, 0.14);
   box-shadow: inset 0 0 0 1px rgba(150, 196, 255, 0.32);
 }
@@ -3111,7 +3341,7 @@
   right: 49px;
   top: 33px;
   bottom: 33px;
-  border-radius: 16px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3186,7 +3416,7 @@
   min-width: 186px;
   padding: 5px;
   border: 1px solid #3a3a44;
-  border-radius: 9px;
+  border-radius: 8px;
   background: #232323;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
   display: flex;
@@ -3212,7 +3442,7 @@
   height: 28px;
   padding: 0 9px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: #dcdce2;
   font-size: 13px;
@@ -3290,7 +3520,7 @@ kbd {
 }
 
 .wb-keys-row.capturing {
-  border-radius: 7px;
+  border-radius: 8px;
   background: rgba(131, 114, 254, 0.14);
   box-shadow: inset 0 0 0 1px rgba(131, 114, 254, 0.45);
 }
@@ -3339,7 +3569,7 @@ kbd {
   gap: 3px;
   padding: 1px 3px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   cursor: pointer;
 }
@@ -3401,7 +3631,7 @@ kbd {
   height: 22px;
   padding: 0 7px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--faint);
   font-size: 11px;
@@ -3421,7 +3651,7 @@ kbd {
 .wb-keys-hint {
   padding: 3px 9px;
   border: 1px dashed rgba(131, 114, 254, 0.6);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--violet-bright);
   font-size: 12px;
 }

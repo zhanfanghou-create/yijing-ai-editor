@@ -157,22 +157,65 @@ check('CRC32 · 与标准向量一致（0xCBF43926）', zip.crc32(Buffer.from('1
   '0x' + zip.crc32(Buffer.from('123456789')).toString(16))
 
 /* --------------------- ⑥ 外部解压器（独立实现，真正的判据） --------------------- */
-console.log('\n-- 外部解压器核对（Windows Expand-Archive）--')
+console.log('\n-- 外部解压器核对（Windows Expand-Archive / bsdtar）--')
 const unzipDir = path.join(work, 'unzipped')
 /* ⚠️ Expand-Archive **只按扩展名**判断（.yjpack 它会直接拒绝，报"只支持 .zip"），
    所以核对时复制成 .zip 再解 —— 内容完全相同，这一步只是为了过它的扩展名检查。 */
 const zipAlias = path.join(work, 'roundtrip.zip')
 fs.copyFileSync(zipPath, zipAlias)
+
+/**
+ * 找一台**真能跑**的外部解压器。
+ *
+ * 为什么不能直接 execFileSync('powershell')（2026-10-28 实测）：这条命令靠 PATH
+ * 上的 `System32\WindowsPowerShell\v1.0` 才能解析；本机（不少 CI 也一样）PATH 里
+ * 只有 `System32`，于是直接 ENOENT，三条外部解压判据一起变红 —— 报错长得像
+ * "包不是标准 ZIP"，其实跟包一点关系都没有。闸门假红和闸门空转一样有害：
+ * 假红会训练人无脑忽略它。
+ *
+ * 所以改成先按绝对路径找，再退回裸名；两个独立实现互为兜底
+ * （Expand-Archive 和 bsdtar 是两套完全不同的代码，任一个能解开都足以证明标准 ZIP）。
+ */
+function externalUnzippers() {
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows'].filter(Boolean)
+  const list = []
+  for (const root of roots) {
+    const ps = path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    if (fs.existsSync(ps)) {
+      list.push({
+        name: 'powershell',
+        bin: ps,
+        args: ['-NoProfile', '-NonInteractive', '-Command',
+          `Expand-Archive -LiteralPath '${zipAlias}' -DestinationPath '${unzipDir}' -Force`]
+      })
+    }
+    const tar = path.join(root, 'System32', 'tar.exe')
+    if (fs.existsSync(tar)) {
+      list.push({ name: 'bsdtar', bin: tar, args: ['-xf', zipAlias, '-C', unzipDir] })
+    }
+  }
+  // 绝对路径都没找到时退回裸名（非 Windows 或非常规安装）
+  if (!list.length) list.push({ name: 'powershell', bin: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command',
+    `Expand-Archive -LiteralPath '${zipAlias}' -DestinationPath '${unzipDir}' -Force`] })
+  return list
+}
+
 let externalOk = false
 let externalDetail = ''
-try {
-  execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    `Expand-Archive -LiteralPath '${zipAlias}' -DestinationPath '${unzipDir}' -Force`], { stdio: 'pipe', windowsHide: true })
-  externalOk = true
-} catch (error) {
-  externalDetail = String(error.stderr || error.message).slice(0, 160)
+const unzippers = externalUnzippers()
+for (const item of unzippers) {
+  try {
+    fs.mkdirSync(unzipDir, { recursive: true })
+    execFileSync(item.bin, item.args, { stdio: 'pipe', windowsHide: true })
+    externalOk = true
+    externalDetail = `${item.name} 解开`
+    break
+  } catch (error) {
+    externalDetail = `${item.name}: ` + String(error.stderr || error.message).slice(0, 140)
+  }
 }
-check('系统解压器能解开这个包（说明它是标准 ZIP）', externalOk, externalDetail)
+check('系统解压器能解开这个包（说明它是标准 ZIP）', externalOk,
+  externalDetail || `试过 ${unzippers.map((item) => item.name).join(' / ')}`)
 if (externalOk) {
   const names = fs.existsSync(unzipDir) ? fs.readdirSync(path.join(unzipDir, 'media')) : []
   check('系统解压器看到的中文文件名一致', names.length === 1 && names[0] === '001_画面.mp4', names.join(','))

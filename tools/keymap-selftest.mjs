@@ -16,6 +16,7 @@ import {
   ACTION_BY_ID,
   GROUPS,
   FRAME_RATE,
+  KEYMAP_PRESETS,
   ZOOM_MIN,
   ZOOM_MAX,
   clampZoom,
@@ -29,6 +30,8 @@ import {
   loadKeymap,
   mergeKeymap,
   normalizeCombo,
+  presetKeymap,
+  presetOf,
   resolveAction,
   saveKeymap,
   stepFrame
@@ -171,6 +174,138 @@ ok('作用域只有 global / editor', ACTIONS.every((a) => a.scope === 'global' 
 ok('每个分组都至少有一个动作', GROUPS.every((g) => ACTIONS.some((a) => a.group === g)), GROUPS.filter((g) => !ACTIONS.some((a) => a.group === g)).join(',') || '全部有动作')
 ok('动作都有中文名', ACTIONS.every((a) => a.label && a.label.length >= 2))
 ok('ACTION_BY_ID 与表一致', ACTIONS.every((a) => ACTION_BY_ID.get(a.id) === a))
+
+console.log('\nG. 键位方案（整套替换）===\n')
+/* 方案这一层的错法全是静的：多套表里抄了一份、少写一条覆盖、id 拼错、
+   两套方案里出现同一键位 —— 界面照画、按键照跑，只有"某些键莫名其妙不响应"。
+   所以这里逐套验：完整覆盖 / 内部无冲突 / 引用合法 / 可往返 / 未知 id 退回默认。 */
+ok('方案 id 唯一', new Set(KEYMAP_PRESETS.map((p) => p.id)).size === KEYMAP_PRESETS.length, `${KEYMAP_PRESETS.length} 套`)
+ok('每套方案都有名字与说明', KEYMAP_PRESETS.every((p) => p.name && p.note && p.name.length >= 2))
+ok(
+  '每套方案都覆盖全部动作（不是"只改几个键"的半套）',
+  KEYMAP_PRESETS.every((preset) => {
+    const map = presetKeymap(preset.id)
+    return ACTIONS.every((action) => Array.isArray(map[action.id]))
+  }),
+  `${ACTIONS.length} 个动作`
+)
+ok(
+  '每套方案内部无键位冲突',
+  KEYMAP_PRESETS.every((preset) => findConflicts(presetKeymap(preset.id)).length === 0),
+  KEYMAP_PRESETS.map((preset) => `${preset.id}:${findConflicts(presetKeymap(preset.id)).length}`).join(' ')
+)
+ok(
+  '方案里引用的动作 id 都真实存在（拼错要在这里红，不能在界面上静默失效）',
+  KEYMAP_PRESETS.every((preset) => Object.keys(preset.overrides || {}).every((id) => ACTION_BY_ID.has(id))),
+  KEYMAP_PRESETS.filter((preset) => Object.keys(preset.overrides || {}).some((id) => !ACTION_BY_ID.has(id)))
+    .map((preset) => preset.id)
+    .join(',') || '全部合法'
+)
+ok(
+  '默认方案与 defaultKeymap 逐条相等（方案不是第二份真源）',
+  JSON.stringify(presetKeymap('default')) === JSON.stringify(defaultKeymap())
+)
+ok(
+  'presetOf 能把每套方案认回来（界面才知道该高亮哪个）',
+  KEYMAP_PRESETS.every((preset) => presetOf(presetKeymap(preset.id)) === preset.id),
+  KEYMAP_PRESETS.map((preset) => presetOf(presetKeymap(preset.id))).join(',')
+)
+ok(
+  '改过一条之后 presetOf 返回空串（不许继续冒充某套方案）',
+  (() => {
+    const map = presetKeymap('singleKey')
+    map.split = ['F8']
+    return presetOf(map) === ''
+  })()
+)
+ok(
+  '未知方案 id 退回默认而不抛（配置里残留旧方案 id 不该白屏）',
+  JSON.stringify(presetKeymap('不存在的方案')) === JSON.stringify(defaultKeymap())
+)
+
+console.log('\nH2. 三键播放与行业方案 ===\n')
+/** J / K / L 必须**各占一个键**，且都真的绑到了对应动作上。
+ *  只验"表里有这三个动作"是不够的 —— 方案里把 pause 写成 ['L'] 也照样"有"，
+ *  那样 L 既是播放又是暂停，冲突检测会报，但如果两套方案都写错、又都没引到新动作，
+ *  界面上是 5 套方案看着都在、按下去全不对。 */
+ok(
+  'J / K / L 分别绑到 倒放 / 暂停 / 正向播放（默认方案）',
+  ['playBackward', 'pause', 'playForward'].every((id) => {
+    const keys = base[id]
+    return Array.isArray(keys) && keys.length === 1
+  }) &&
+    base.playBackward[0] === 'J' &&
+    base.pause[0] === 'K' &&
+    base.playForward[0] === 'L',
+  `J=${base.playBackward} K=${base.pause} L=${base.playForward}`
+)
+ok(
+  '两套行业方案都带三键播放（方案不许把播放键丢掉）',
+  ['editDesk', 'thumbOnly'].every((id) => {
+    const map = presetKeymap(id)
+    return map.playBackward[0] === 'J' && map.pause[0] === 'K' && map.playForward[0] === 'L'
+  }),
+  ['editDesk', 'thumbOnly']
+    .map((id) => {
+      const map = presetKeymap(id)
+      return `${id}:${map.playBackward}/${map.pause}/${map.playForward}`
+    })
+    .join(' ')
+)
+/** 反斜杠是"适配全片"在剪辑台式里的键。它必须能**归一化**回来，
+ *  否则方案里写着 `\`、用户按下去算出来是 `\\`（或反过来），面板显示已绑定而实际不触发。 */
+ok(
+  '反斜杠键位能归一化（\\ 写进方案后要能被 comboOf 的结果命中）',
+  normalizeCombo('\\') === '\\' && presetKeymap('editDesk').zoomFit[0] === '\\',
+  `${JSON.stringify(normalizeCombo('\\'))} / ${JSON.stringify(presetKeymap('editDesk').zoomFit)}`
+)
+ok(
+  '逗号 / 句号逐帧键能归一化（剪辑台式的 , . 逐帧）',
+  normalizeCombo(',') === ',' && normalizeCombo('.') === '.' && presetKeymap('editDesk').prevFrame[0] === ','
+)
+/** 拇指单手套：所有改内容的动作都必须带 Alt —— 抽查四条最容易漏的。 */
+ok(
+  '拇指单手方案：分割 / 删除 / 吸附 / 标记 全部挂 Alt',
+  ['split', 'deleteClip', 'toggleSnap', 'toggleMarker'].every((id) =>
+    presetKeymap('thumbOnly')[id].every((combo) => combo.startsWith('Alt+'))
+  ),
+  ['split', 'deleteClip', 'toggleSnap', 'toggleMarker']
+    .map((id) => `${id}=${presetKeymap('thumbOnly')[id].join('|')}`)
+    .join(' ')
+)
+/** resolveAction 是真正的派发路径：方案切过去之后，按下的键必须命中**对应**动作。
+ *  这条比"表里有值"更接近用户的真实路径。 */
+ok(
+  '切到剪辑台式后，J / K / L / B / \\ 各自命中正确的动作',
+  (() => {
+    const map = presetKeymap('editDesk')
+    return (
+      resolveAction('J', map) === 'playBackward' &&
+      resolveAction('K', map) === 'pause' &&
+      resolveAction('L', map) === 'playForward' &&
+      resolveAction('B', map) === 'split' &&
+      resolveAction('\\', map) === 'zoomFit'
+    )
+  })(),
+  `J=${resolveAction('J', presetKeymap('editDesk'))} B=${resolveAction('B', presetKeymap('editDesk'))} \\=${resolveAction('\\', presetKeymap('editDesk'))}`
+)
+ok(
+  '切到拇指单手后，Alt+S 分割、Alt+I 入点（Ctrl+I 让出给「导入素材」之外的用途）',
+  (() => {
+    const map = presetKeymap('thumbOnly')
+    /* ⚠️ 这条一开始我写成「Ctrl+I 仍是导入素材」，红了 —— 红的是**断言**、不是实现：
+       拇指单手方案把导入挪到了 Alt+Shift+I，就是为了给 Alt+I（入点）腾位置。
+       Ctrl+I 在这套方案里应当**谁都不绑**，这样它不会被"两个动作抢一个键"的
+       冲突检测判红（`findConflicts` 只报真冲突，所以这里必须断言空）。 */
+    return (
+      resolveAction('Alt+S', map) === 'split' &&
+      resolveAction('Alt+I', map) === 'regionIn' &&
+      resolveAction('Alt+Shift+I', map) === 'importMedia' &&
+      resolveAction('Ctrl+I', map) === ''
+    )
+  })(),
+  `Alt+S=${resolveAction('Alt+S', presetKeymap('thumbOnly'))} Alt+I=${resolveAction('Alt+I', presetKeymap('thumbOnly'))} Ctrl+I="${resolveAction('Ctrl+I', presetKeymap('thumbOnly'))}"`
+)
 
 console.log('\nI. 持久化（无 localStorage 环境不能抛）===\n')
 ok('无 localStorage 时 loadKeymap 退回默认', JSON.stringify(loadKeymap()) === JSON.stringify(base))

@@ -63,7 +63,7 @@
      源图（ico/256X256.ico 解出的 PNG）自带圆角与深色底，
      所以这里不再画渐变，只负责尺寸、裁切与投影。
      保留一层同色兜底底：万一图没加载出来，也不会露出一个空洞。 */
-  border-radius: 11px;
+  border-radius: 8px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -163,13 +163,13 @@
   min-width: 28px;
   height: 16px;
   padding: 0 3px;
-  border-radius: 5px;
+  border-radius: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #a855f7, #7c3aed);
   color: #fff;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1;
   font-weight: 700;
   letter-spacing: 0;
@@ -181,7 +181,7 @@
   /* 实测：参考的反馈卡是 y 606..695，正好 90 高；低沿离窗口底 24px（= 侧栏底部内边距） */
   height: 90px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   position: relative;
   overflow: hidden;
@@ -279,7 +279,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 11px 0 15px;
-  border-radius: 15px;
+  border-radius: 8px;
   background: rgba(14, 12, 24, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.16);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -288,7 +288,7 @@
 /* 参考胶囊里的标题是**斜体**（实测字高 10px ⇒ 字号 14），不是常规粗体 */
 .home-promo-text b {
   min-width: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-style: italic;
   font-weight: 600;
   line-height: 1;
@@ -341,7 +341,7 @@
   height: 18px;
   padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 5px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.14);
   color: #fff;
   display: grid;
@@ -499,7 +499,7 @@
 
 .home-hero {
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   position: relative;
   overflow: hidden;
@@ -596,10 +596,10 @@
   height: 32px;
   padding: 0 28px;
   border: 0;
-  border-radius: 16px;
+  border-radius: 8px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #fff;
   background: rgba(255, 255, 255, 0.2);
@@ -625,7 +625,7 @@
   flex: 1;
   min-width: 0;
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   position: relative;
   overflow: hidden;
@@ -652,7 +652,7 @@
 
 .home-feat h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -698,7 +698,7 @@
   bottom: -14px;
   width: 63px;
   height: 64px;
-  border-radius: 30px 30px 6px 6px;
+  border-radius: 8px 8px 8px 8px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.05));
 }
 
@@ -743,7 +743,7 @@
   width: 42px;
   height: 42px;
   border: 0;
-  border-radius: 21px;
+  border-radius: 8px;
   cursor: pointer;
   background: #3b3b3f;
   color: #d6d6da;
@@ -765,7 +765,7 @@
 
 .home-sec-head h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.2px;
 }
@@ -803,7 +803,7 @@
 .home-tool-ico {
   width: 48px;
   height: 48px;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--h-tile);
   color: #e4e4e8;
   display: grid;
@@ -907,7 +907,7 @@
 
 .home-page-head h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
 }
 
@@ -951,7 +951,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px 8px 8px;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--h-tile);
 }
 
@@ -979,7 +979,7 @@
   place-items: center;
   width: 52px;
   height: 32px;
-  border-radius: 6px;
+  border-radius: 8px;
   background: linear-gradient(135deg, #3a2f56, #262a45);
   color: #b18cf0;
 }
@@ -1012,7 +1012,7 @@
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: var(--h-muted);
   cursor: pointer;
@@ -1037,7 +1037,7 @@
   gap: 4px;
   padding: 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--h-tile);
   color: inherit;
   text-align: left;
@@ -1086,7 +1086,7 @@
   gap: 10px;
   padding: 0 0 12px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--h-tile);
   color: inherit;
   text-align: left;
@@ -1116,7 +1116,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
+  border-radius: 4px;
   background: rgba(0, 0, 0, 0.3);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
   color: rgba(255, 255, 255, 0.94);
@@ -1183,7 +1183,7 @@
   gap: 10px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--h-tile);
   color: inherit;
   text-align: left;

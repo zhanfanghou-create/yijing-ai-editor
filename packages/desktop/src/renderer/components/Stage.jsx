@@ -15,6 +15,20 @@ import { pipBoxCss } from '../pip.js'
 import { timecodeFrames } from '../ui.jsx'
 /* 调节 / 美颜 / 位置旋转（真源在 shared/adjust.js，导出侧 render.js 用的是同一份换算） */
 import { cssFilterOps, gradeMatrix, poseStyle } from '../../shared/adjust.js'
+/* 曲线（RGB 三通道）：查找表与导出侧的 ffmpeg curves 串来自同一份 shared/curves.js */
+import { isNeutral, tableValuesOf } from '../../shared/curves.js'
+/* 一级色轮（阴影/中间调/高光/全局）：与导出侧的 ffmpeg lutrgb 表达式同一份 shared/wheels.js。
+   这里用别名，避免与曲线的 isNeutral / tableValuesOf 撞名 —— 撞了不会报错，
+   只会让"色轮用了曲线的表"这种错静默生效。 */
+import { isNeutral as wheelsNeutral, tableValuesOf as wheelTables } from '../../shared/wheels.js'
+/* 分区 HSL：只判"中性与否"（中性时不挂 canvas，零代价）+ 预览层的 WebGL 组件。
+   isNeutral 重名，起别名 —— 上面的 isNeutral 是**曲线**那个，两者语义不同，
+   混用会让"曲线没调却在画面上挂了 HSL canvas"。 */
+import { isNeutral as hslNeutral } from '../../shared/hslBands.js'
+import HslCanvas from './HslCanvas.jsx'
+/* 内置边框库：把 `clip.border` 这个 key 换成 yjai-media 地址。
+   清单进程内缓存，预览与边框面板共用一份（见 renderer/borderCatalog.js）。 */
+import { borderUrlOf, ensureBorderCatalog } from '../borderCatalog.js'
 /* 效果（圆角 / 蒙版 / 抠像 / 混合 / 变形 / 描边 / 阴影）—— 真源在 shared/effects.js，
    导出侧 render.js 用的是同一份换算（见那份文件的说明：两侧不许各写一遍）。 */
 import {
@@ -44,11 +58,33 @@ import { cssCropTransform } from '../../shared/crop.js'
  *    都是不报错、只有盯着看才发现的缺陷。
  */
 import { ASPECTS, aspectRatioOf, normalizeAspect } from '../../shared/aspect.js'
+/* 人物特效：插值取框（预览与导出共用同一份，见 shared/facefx.js） */
+import { trackAt } from '../../shared/facefx.js'
 /* 预览框里的直接操作：选中谁、选框画在哪、拖动改哪个字段 */
 import SelectionBox, { layerOwnerId, selectionBoxOf, selectionTargetOf } from './PreviewSelect.jsx'
 
 /** 预览画布：图片/视频直接播，音频给波形占位，文本直接显示正文 */
-function Previews({ asset, videoRef, onReady, style }) {
+function Previews({ asset, videoRef, onReady, style, hsl = null }) {
+  /* ⚠️ hook 必须在下面那个 `if (!asset)` 提前返回**之前**：放在后面，
+     素材从「空」变成「有」的那一帧 hook 数量会变，React 直接抛
+     "Rendered more hooks than during the previous render"（白屏）。
+
+     图片也要有自己的一份 ref：HslCanvas 靠 `sourceRef.current` 上传纹理，
+     而 videoRef 只在 <video> 上挂着。之前图片分支没给 ref，于是
+     「原图被 visibility:hidden 藏掉 + canvas 一片空白」= 图片一开 HSL 就黑屏，
+     纯色测试图还看不出来（本来就是黑的）。 */
+  const imgRef = useRef(null)
+
+  /* WebGL2 拿不到（老驱动 / 被策略禁用）时**必须退回原生画面并说出来**：
+     什么都不做的话，原画面已被藏、canvas 又是空的，用户只看到一块黑，
+     会以为"这个片段坏了"。 */
+  const [hslFail, setHslFail] = useState('')
+  useEffect(() => {
+    /* 换片段时清掉上一次的失败：否则一次失败会永久钉住，别的片段也永远不显示 HSL */
+    if (!hsl) setHslFail('')
+  }, [hsl])
+  const hslOn = Boolean(hsl) && !hslFail
+
   if (!asset) {
     return (
       <div className="canvas-placeholder">
@@ -58,22 +94,69 @@ function Previews({ asset, videoRef, onReady, style }) {
     )
   }
 
-  if (asset.kind === 'image' && asset.url) return <img src={asset.url} alt={asset.name} style={style} />
+  /**
+   * 分区 HSL 生效时，画面多叠一层 canvas（见 HslCanvas 的说明）。
+   *
+   * 三个刻意的选择：
+   *   · 原 video / img **保留在流里**，只 `visibility: hidden` —— 它决定布局尺寸、
+   *     也负责解码与出声；把它 absolute 掉会让 `.canvas-clipbox` 这类
+   *     宽度由内容决定的父元素塌成 0；
+   *   · canvas **绝对定位盖上去**，带同一份 style（transform / opacity），
+   *     于是缩放、位置、旋转、镜像在两层上完全一致；
+   *   · 不做 `display: none`：Chromium 对 `display:none` 的视频会暂停解码，
+   *     再显示时首帧是黑的，表现为"一开 HSL 就黑屏一下"。
+   */
+  const overlay = hslOn ? (
+    <HslCanvas
+      sourceRef={asset.kind === 'image' ? imgRef : videoRef}
+      kind={asset.kind === 'image' ? 'image' : 'video'}
+      bands={hsl}
+      onFail={(message) => setHslFail(message || '分区 HSL 预览不可用')}
+      style={{ ...(style || null), position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+    />
+  ) : null
+
+  /* 显卡吃不消时的提醒条：挂在画面同一容器里，位置由 `.canvas-hsl-fail` 的 CSS 决定。
+     `data-hsl-fail` 是给闸门读的钩子（"失败要退回、而不是留一块黑"就这么验）。 */
+  const failNote = hslFail ? (
+    <span className="canvas-hsl-fail" data-hsl-fail="1" title={hslFail}>
+      分区 HSL 预览不可用，已显示原画面
+    </span>
+  ) : null
+
+  if (asset.kind === 'image' && asset.url) {
+    return (
+      <>
+        <img
+          ref={imgRef}
+          src={asset.url}
+          alt={asset.name}
+          style={hslOn ? { ...(style || null), visibility: 'hidden' } : style}
+        />
+        {overlay}
+        {failNote}
+      </>
+    )
+  }
   if (asset.kind === 'video' && asset.url) {
     return (
-      <video
-        ref={videoRef}
-        src={asset.url}
-        /* ⚠️ 不要在这里写 muted：主画面**带声**（音量由喇叭键/滑杆统一控制）。
-           以前这里写死了 muted，于是"加了视频预览却听不到声音"——
-           界面上有音量滑杆、有喇叭键，点下去却毫无变化，属于典型的静默失效。
-           转场交叠时那一段（IncomingLayer）才需要静音，理由见那里。 */
-        playsInline
-        preload="auto"
-        style={style}
-        /* metadata 到位才知道 el.duration，此时再对齐一次源时间（首帧不能停在 0） */
-        onLoadedMetadata={onReady}
-      />
+      <>
+        <video
+          ref={videoRef}
+          src={asset.url}
+          /* ⚠️ 不要在这里写 muted：主画面**带声**（音量由喇叭键/滑杆统一控制）。
+             以前这里写死了 muted，于是"加了视频预览却听不到声音"——
+             界面上有音量滑杆、有喇叭键，点下去却毫无变化，属于典型的静默失效。
+             转场交叠时那一段（IncomingLayer）才需要静音，理由见那里。 */
+          playsInline
+          preload="auto"
+          style={hslOn ? { ...(style || null), visibility: 'hidden' } : style}
+          /* metadata 到位才知道 el.duration，此时再对齐一次源时间（首帧不能停在 0） */
+          onLoadedMetadata={onReady}
+        />
+        {overlay}
+        {failNote}
+      </>
     )
   }
   if (asset.kind === 'audio' && asset.url) {
@@ -248,6 +331,76 @@ function useFrameSize(ref, active, aspectValue, fullscreen) {
 }
 
 /**
+ * 曲线（RGB 三通道）走 **SVG feComponentTransfer + 256 项查找表**。
+ *
+ * 为什么是它：CSS 的 `brightness()/contrast()` 只能整体缩放，表达不了"低光压、
+ * 高光提"这种任意形状；而 feComponentTransfer 的 `type="table"` 就是一条
+ * 逐值查表 —— 与 ffmpeg 的 `curves` 是同一件事（那边也是 256 级表）。
+ *
+ * ⚠️ 与 GradeDefs 同一个坑：`filter` 引用不存在的 id 会让**整串** filter 失效
+ *    （调色、描边、阴影一起静默消失），所以只在真要曲线时才生成，且与层同处一棵树。
+ * ⚠️ 表由 shared/curves.js 算（与导出共用），**不在这里另算一份** ——
+ *    另算一份的后果是"预览里 S 形很好看、成片略平"，不报错、也测不出来。
+ */
+function CurveDefs({ layers }) {
+  const list = (layers || [])
+    .filter((layer) => !isNeutral(layer.curves))
+    .map((layer) => ({ id: layer.id, tables: tableValuesOf(layer.curves) }))
+  if (!list.length) return null
+  return (
+    <svg className="canvas-curve-defs" aria-hidden="true" focusable="false">
+      <defs>
+        {list.map((item) => (
+          /* 三路表里**已经复合了 RGB 曲线**（先 master 再单通道，与 ffmpeg 同序），
+             所以这里直接用 r/g/b，不再单独挂一条 master。 */
+          <filter id={`yjai-curve-${item.id}`} key={item.id} colorInterpolationFilters="sRGB">
+            <feComponentTransfer>
+              <feFuncR type="table" tableValues={item.tables.r} />
+              <feFuncG type="table" tableValues={item.tables.g} />
+              <feFuncB type="table" tableValues={item.tables.b} />
+            </feComponentTransfer>
+          </filter>
+        ))}
+      </defs>
+    </svg>
+  )
+}
+
+/**
+ * 一级色轮走 **SVG feComponentTransfer + 256 项查找表**（与曲线同一个机制）。
+ *
+ * 为什么不用 CSS 的 `sepia()/hue-rotate()`：它们是固定公式的近似，而色轮是
+ * 「阴影 / 中间调 / 高光各自往某个方向推一点」—— 逐通道、分段、可任意定。
+ * 一维查表能表达任意这种映射，且与导出的 `lutrgb` 表达式**逐值对应**。
+ *
+ * ⚠️ 与 CurveDefs 同一个坑：`filter` 引用了不存在的 id 会让**整串** filter 失效
+ *    （调色、描边、阴影一起静默消失），所以只在真推过色轮时才生成。
+ * ⚠️ 表由 shared/wheels.js 算，**不在这里另算一份** —— 另算一份的后果是
+ *    "预览里偏冷、成片还是灰的"，不报错、也测不出来。
+ */
+function WheelDefs({ layers }) {
+  const list = (layers || [])
+    .filter((layer) => !wheelsNeutral(layer.wheels))
+    .map((layer) => ({ id: layer.id, tables: wheelTables(layer.wheels) }))
+  if (!list.length) return null
+  return (
+    <svg className="canvas-curve-defs" aria-hidden="true" focusable="false">
+      <defs>
+        {list.map((item) => (
+          <filter id={`yjai-wheel-${item.id}`} key={item.id} colorInterpolationFilters="sRGB">
+            <feComponentTransfer>
+              <feFuncR type="table" tableValues={item.tables.r} />
+              <feFuncG type="table" tableValues={item.tables.g} />
+              <feFuncB type="table" tableValues={item.tables.b} />
+            </feComponentTransfer>
+          </filter>
+        ))}
+      </defs>
+    </svg>
+  )
+}
+
+/**
  * 逐通道增益（亮度 / 美白 / 色温 / 色调）走 **SVG feColorMatrix**。
  *
  * 为什么非它不可：CSS 那套 `brightness()/contrast()/saturate()` 都是"整体"算子，
@@ -319,9 +472,13 @@ function KeyDefs({ layers }) {
  * ⚠️ 抠像与蒙版都是 alpha 操作、"相乘"关系，所以两者先后不影响结果；
  *    但**描边/阴影必须排在剪裁之后**（它们是从最终 alpha 推出来的）。
  */
-function effectFilterParts(layer, fx, gradeRef, adjustOps, cssFilter) {
+function effectFilterParts(layer, fx, refs, adjustOps, cssFilter) {
   const keyRef = fx.key.on ? `url(#yjai-key-${layer.id})` : ''
-  return [keyRef, gradeRef, adjustOps, cssFilter, strokeShadows(fx), shadowFilter(fx)].filter(Boolean)
+  /* 顺序与导出链逐字对应：抠像 → 增益/调色矩阵 → 调节美颜 → 色轮 → 曲线 → 调色(looks) → 描边/阴影
+     ⚠️ 色轮与曲线都是**逐像素重映射**，两者交换顺序在数学上不等价 ——
+        而画面"看起来都怪怪的"，没人能一眼看出是顺序问题。所以两侧必须是同一个顺序，
+        且只有一处写（这里与 render.js 的 `${wheelPart}${curvesPart}` 相邻）。 */
+  return [keyRef, refs.grade, adjustOps, refs.wheel, refs.curve, cssFilter, strokeShadows(fx), shadowFilter(fx)].filter(Boolean)
 }
 
 /**
@@ -370,10 +527,44 @@ function clipStyleFor(fx, aspectRatio) {
  * 时间对齐与主层同源：**对齐源文件时间**（不是播放头秒数）、阈值 0.25s。
  * 层的可见性、层叠顺序、谁是主层，全部由 composite.js 算好，这里只负责画。
  */
+/**
+ * 把一个边框 key 换成可用的 url。
+ *
+ * ⚠️ 为什么要一个 hook 而不是在渲染期直接 `borderUrlOf(key)`：
+ *    打开已有草稿时用户可能一次都没点开过边框页，清单还是空的 ——
+ *    直接取会拿到空串，画面上一根边框都没有，而片段上的 `border` 明明有值。
+ *    所以列表为空时补拉一次，拉到后 setState 触发一次重绘。
+ *    清单本身是进程内缓存，同一帧里十个带边框的层也只会问主进程一遍。
+ */
+function useBorderUrl(key) {
+  const [url, setUrl] = useState(() => (key ? borderUrlOf(key) : ''))
+  useEffect(() => {
+    if (!key) {
+      setUrl('')
+      return undefined
+    }
+    const now = borderUrlOf(key)
+    if (now) {
+      setUrl(now)
+      return undefined
+    }
+    let alive = true
+    ensureBorderCatalog().then(() => {
+      if (alive) setUrl(borderUrlOf(key))
+    })
+    return () => {
+      alive = false
+    }
+  }, [key])
+  return url
+}
+
 function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
   const ref = useRef(null)
   const sourceTime = Number(layer.sourceTime) || 0
   const url = layer.url || ''
+  /* 边框：挂在片段**自己的画框**上（画中画加了边框，边框在小框上，不铺满画布） */
+  const borderUrl = useBorderUrl(layer.border || '')
 
   const align = useCallback(() => {
     const el = ref.current
@@ -438,8 +629,14 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
   const cssFilter = cssFilterFor(layer.filter, layer.filterIntensity)
   const adjustOps = cssFilterOps(layer.adjust, layer.beauty)
   const gradeRef = gradeMatrix(layer.adjust, layer.beauty) ? `url(#yjai-grade-${layer.id})` : ''
+  const curveRef = isNeutral(layer.curves) ? '' : `url(#yjai-curve-${layer.id})`
+  const wheelRef = wheelsNeutral(layer.wheels) ? '' : `url(#yjai-wheel-${layer.id})`
   const fx = readEffects(layer.effects)
-  const filterParts = effectFilterParts(layer, fx, gradeRef, adjustOps, cssFilter)
+  /* 分区 HSL：合成层带来了非中性参数才启用（不启用时不建 WebGL 上下文，零代价）。
+     这一份同时是 <Previews> 的入参与 `data-hsl` 钩子的判据 —— 两者必须同源，
+     否则会出现"钩子说开了、画面没开"这种自欺的绿。 */
+  const hslOnLayer = Boolean(layer.hsl) && !hslNeutral(layer.hsl)
+  const filterParts = effectFilterParts(layer, fx, { grade: gradeRef, wheel: wheelRef, curve: curveRef }, adjustOps, cssFilter)
   const layerFilter = filterParts.length ? filterParts.join(' ') : ''
   const boxStyle = {}
   if (layerFilter) boxStyle.filter = layerFilter
@@ -463,6 +660,8 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
       videoRef={ref}
       onReady={align}
       style={mediaStyle}
+      /* 分区 HSL：中性时不传（不建 WebGL 上下文、零代价），非中性才叠 canvas */
+      hsl={hslOnLayer ? layer.hsl : null}
     />
   )
 
@@ -478,7 +677,9 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
    */
   const insetCss = innerShadowStyle(fx)
   const dashCss = dashedBoxCss(fx)
-  const media = clipBox || insetCss || dashCss ? (
+  /* 边框是第三层"叠在画面之上"的东西，但它必须**在剪裁盒里面** ——
+     片段有圆角时边框也要跟着圆，否则边框会从圆角外面探出来。 */
+  const media = clipBox || insetCss || dashCss || borderUrl ? (
     <span className="canvas-clipbox" style={clipBox || undefined}>
       {inner}
       {insetCss ? (
@@ -486,6 +687,14 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
       ) : null}
       {dashCss ? (
         <span className="canvas-dashbox" data-fx-dashed="1" style={dashCss.style} />
+      ) : null}
+      {borderUrl ? (
+        <span
+          className="canvas-border"
+          /* 闸门读这个：面板上点了 ≠ 画面上真有（key 有值、url 没解析出来也会是空的） */
+          data-fx-border={layer.border}
+          style={{ backgroundImage: `url("${borderUrl}")` }}
+        />
       ) : null}
     </span>
   ) : (
@@ -511,6 +720,9 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
         data-fx-shadow-inner={fx.shadow.on && fx.shadow.inner ? '1' : ''}
         data-fx-warp={hasWarp(fx) ? '1' : ''}
         data-fx-skew={Math.abs(fx.skewX) > 0.01 || Math.abs(fx.skewY) > 0.01 ? '1' : ''}
+        /* 分区 HSL 是否真的到了这一层：面板写回片段 ≠ 合成层拿到了它
+           （`describeLayer` 漏一个字段就断在这一步，而滑杆、脏点、复位键全都正常）。 */
+        data-hsl={hslOnLayer ? '1' : ''}
         data-xfade={layer.xfade.key}
         /* exact / approx：CSS 能一比一表达哪些、近似表达哪些，如实标出来，
            免得后来有人把"近似"当成"已经和参考一模一样" */
@@ -542,6 +754,8 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
       data-fx-shadow-inner={fx.shadow.on && fx.shadow.inner ? '1' : ''}
       data-fx-warp={hasWarp(fx) ? '1' : ''}
       data-fx-skew={Math.abs(fx.skewX) > 0.01 || Math.abs(fx.skewY) > 0.01 ? '1' : ''}
+      /* 同转场层：见上面那条说明 */
+      data-hsl={hslOnLayer ? '1' : ''}
       style={Object.keys(boxStyle).length ? boxStyle : undefined}
     >
       {media}
@@ -668,6 +882,10 @@ export default function Stage({
      底下照常播主画面，它压在上面（DOM 顺序 = 层叠顺序）。 */
   pip = [],
   playing,
+  /* 播放方向：1 正向 / -1 倒放（J 键）。见 shared/reverse.js 的取舍说明 ——
+     浏览器不接受负 playbackRate，所以倒放只能靠**往回推播放头**，由各图层
+     的 currentTime 同步把画面带回更早的位置。 */
+  direction = 1,
   playhead,
   totalDuration,
   volume,
@@ -717,19 +935,30 @@ export default function Stage({
   // 播放头按真实时间推进；这是剪辑软件的基本手感，不能只做个静态三角
   useEffect(() => {
     if (!playing) return undefined
+    /* 倒放：把 delta 取负。到头（0）就**主动停**，不能让 playing 一直挂着 true ——
+       那样按钮会显示"暂停"图标、而画面一动不动，用户会以为卡死了。 */
+    const dir = direction === -1 ? -1 : 1
     let last = performance.now()
     const step = (now) => {
-      const delta = (now - last) / 1000
+      const delta = ((now - last) / 1000) * dir
       last = now
       onSeek((value) => {
         const next = value + delta
+        if (dir < 0) return next <= 0 ? 0 : next
         return next >= totalDuration ? totalDuration : next
       })
       rafRef.current = requestAnimationFrame(step)
     }
     rafRef.current = requestAnimationFrame(step)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [playing, totalDuration, onSeek])
+  }, [playing, totalDuration, onSeek, direction])
+
+  /* 倒放到头就停：单独一条 effect，因为上面那条的 rAF 里读不到"最新的 playhead"
+     （闭包会一直拿到 effect 创建时的那一帧）。用 prop 就能读到。 */
+  useEffect(() => {
+    if (!playing || direction !== -1) return
+    if (playhead <= 0) onTogglePlay()
+  }, [playing, direction, playhead, onTogglePlay])
 
   /**
    * 预览底图。
@@ -824,6 +1053,25 @@ export default function Stage({
     onSelectClip(node ? node.getAttribute('data-selectable') : null)
   }
 
+  /**
+   * 人物特效：这一帧该把效果画在哪。
+   *
+   * 三个来源**必须**与导出侧完全一致，任何一处自己算都会漂：
+   *   · 框：`trackAt(track, 片段内秒数)` —— shared/facefx.js 的同一份插值；
+   *   · 片段内秒数 = 播放头 − 片段起点（track 的 t 从片段开头算，不是时间线时间，
+   *     这一点搞错会让特效整体偏移 clip.start 那么多）；
+   *   · 模糊半径按「画布宽度的百分比」（cqw），导出按像素算，两边同一条公式。
+   */
+  const faceLayer = (() => {
+    const face = main && main.face
+    const track = main && Array.isArray(main.faceTrack) ? main.faceTrack : []
+    if (!face || !face.fx || track.length < 2) return null
+    const box = trackAt(track, (Number(playhead) || 0) - (Number(main.start) || 0))
+    if (!box) return null
+    const strength = Math.min(1, Math.max(0, Number(face.strength) || 0))
+    return { fx: face.fx, strength, box }
+  })()
+
   return (
     <section
       className="wb-player"
@@ -860,6 +1108,10 @@ export default function Stage({
             <GradeDefs layers={layers} />
             {/* 抠像的 SVG 定义（同一棵树、同一个道理） */}
             <KeyDefs layers={layers} />
+            {/* 曲线的 SVG 定义（feComponentTransfer，256 项表来自 shared/curves.js） */}
+            <CurveDefs layers={layers} />
+            {/* 一级色轮的定义（同上机制，表来自 shared/wheels.js） */}
+            <WheelDefs layers={layers} />
 
             {/* 内容层：画面 / 转场 / 画中画 / 字幕 / 特效叠层全部装在这里。
                 transform 类画面特效挂这一层（见 contentClass 的说明），
@@ -882,6 +1134,31 @@ export default function Stage({
                 box={frameSize}
               />
             ))}
+
+            {/* 人物特效：跟着人脸走的局部层。
+                ⚠️ 用 backdrop-filter 而不是给画面加 filter —— 后者会和 `.canvas-frame`
+                   上挂着的调色互相覆盖（预览调色就住在那条内联 filter 里）。
+                ⚠️ 半径单位是 cqw：`.canvas-frame` 带 container-type: size，
+                   换窗口大小/进全屏时半径跟着画布等比缩放，与成片按像素算的结果一致。 */}
+            {faceLayer ? (
+              <span
+                className={`canvas-face is-${faceLayer.fx}`}
+                data-face-fx={faceLayer.fx}
+                data-face-box={`${faceLayer.box.x.toFixed(3)},${faceLayer.box.y.toFixed(3)}`}
+                style={{
+                  left: `${(faceLayer.box.x * 100).toFixed(2)}%`,
+                  top: `${(faceLayer.box.y * 100).toFixed(2)}%`,
+                  width: `${(faceLayer.box.w * 100).toFixed(2)}%`,
+                  height: `${(faceLayer.box.h * 100).toFixed(2)}%`,
+                  '--face-blur': `${(
+                    faceLayer.box.w *
+                    (0.04 + 0.1 * faceLayer.strength) *
+                    100
+                  ).toFixed(2)}cqw`,
+                  '--face-lift': (0.04 + 0.16 * faceLayer.strength).toFixed(3)
+                }}
+              />
+            ) : null}
 
             {/* 画面特效的覆盖层：闪光/故障/扫描线/漏光/暗角都画在这一层，
                 不去动 .canvas-frame 的 filter（那上面挂着调色，CSS 动画会把它顶掉） */}

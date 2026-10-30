@@ -37,6 +37,14 @@ export default defineConfig({
            漏了这一行 ⇒ detectBeats 是 undefined，按钮点下去直接抛 TypeError，
            而构建与静态扫描都看不见（同 speed.js 那条注释里说的道理）。 */
         /shared[\\/]beat\.js$/,
+        /* 模板：面板要用 planTemplate 把成套预设翻成片段。
+           漏了这一行 ⇒ 渲染层 import 到空对象，点模板直接 TypeError（同 speed.js）。 */
+        /shared[\\/]templates\.js$/,
+        /shared[\\/]facefx\.js$/,
+        /* 智能包装：面板要 analyzeTrack/analyzeScene，App 要 planPackaging/planScene/planStrip。
+           漏了这一行 ⇒ 渲染层拿到空对象，点「一键包装」抛 `planPackaging is not a function`，
+           而构建与静态扫描都看不见（同 speed.js / templates.js 那两条）。 */
+        /shared[\\/]packaging\.js$/,
         /* 复合片段：预览侧要展开它。漏了这一行 ⇒ expandCompounds 是 undefined，
            渲染层在 useMemo 里直接抛错（整块工作台白屏）；即便不抛，复合片段也会
            被当成普通片段、画成一张空占位卡 —— "复合之后画面没了"。 */
@@ -69,7 +77,39 @@ export default defineConfig({
         /* 自由变形：渲染层要算四角单应矩阵 → CSS matrix3d（导出侧走 ffmpeg perspective，
            两份参数都从这一份来）。漏了 ⇒ cssWarpTransform 是 undefined，
            表现是"四角拖了、选框动了、画面一动不动"，构建完全不报错。 */
-        /shared[\\/]warp\.js$/
+        /shared[\\/]warp\.js$/,
+        /* 导出封面：面板要显示"封面取第几帧"并按帧对齐后再发给主进程（主进程 require 同一份）。
+           漏了这一行 ⇒ coverTimeAt 是 undefined，面板渲染时直接抛错（工作台白屏）；
+           或者算出 NaN 传下去，封面抽帧变成"从 0.000 秒开始"，界面上看不出任何异常。 */
+        /shared[\\/]cover\.js$/,
+        /* 导出规格：面板的帧率/分辨率档与主进程拼 ffmpeg 参数读同一份。
+           漏了这一行 ⇒ RATES / readRate 是 undefined，导出面板渲染时直接抛错（右栏白屏），
+           或者算出 NaN 帧率传给 ffmpeg，导出报一句看不懂的滤镜错误。 */
+        /shared[\\/]exportRate\.js$/,
+        /* 曲线（RGB 三通道）：预览要用同一份查找表生成 SVG 的 tableValues，
+           导出把同一组控制点交给 ffmpeg 的 curves 滤镜。漏了这一行 ⇒
+           isNeutral / tableValuesOf 全是 undefined，绘制曲线的面板渲染时直接抛错，
+           或者算出空表 ⇒ 曲线拖了没反应、成片也没变（两边一起静默失效）。 */
+        /shared[\\/]curves\.js$/,
+        /* 一级色轮（阴影/中间调/高光/全局）：预览用它算 SVG 的 256 项 tableValues，
+           导出把同一份换算写成 ffmpeg 的 lutrgb 表达式。漏了这一行 ⇒
+           isNeutral / tableValuesOf 变成 undefined，右栏渲染色轮时直接抛错
+           （整块「调节」页白屏）—— 构建与静态扫描都看不出来。 */
+        /shared[\\/]wheels\.js$/,
+        /* 导出编码格式：面板的格式下拉、编码器候选、保存对话框扩展名都读这一份
+           （主进程 require 同一份拼 ffmpeg 参数）。漏了这一行 ⇒
+           EXPORT_CODEC.CODECS 是 undefined，导出面板一渲染就抛错（右栏白屏），
+           或者读出一个空表 ⇒ 下拉是空的、保存对话框没有过滤器。 */
+        /shared[\\/]exportCodec\.js$/,
+        /* 字幕文件读写 + 语音分句：渲染层要用它解析导入的文件、拼导出的 SRT，
+           主进程 require 同一份做写盘。漏了这一行 ⇒ readSubtitles 是 undefined，
+           点「导入字幕」直接抛 TypeError（或者更糟：解析出 0 条，提示"里面没有可用条目"）。 */
+        /shared[\\/]subtitle\.js$/,
+        /* 分区 HSL（八色带）：渲染层要它判"中性与否"并烘焙 3D LUT 传给 WebGL。
+           漏了这一行 ⇒ isNeutral 是 undefined，检查器一渲染就抛错（右栏白屏），
+           或者更糟：buildLutGpu 拿到空对象 ⇒ 传一张空表进纹理 ⇒ 整幅画面变黑，
+           而时间线、面板、按钮看上去全都正常。 */
+        /shared[\\/]hslBands\.js$/
       ]
     },
     outDir: 'dist-renderer',

@@ -4,13 +4,16 @@ import {
   ACTIONS,
   FIXED_KEYS,
   GROUPS,
+  KEYMAP_PRESETS,
   comboOf,
   comboParts,
   conflictCombos,
   defaultKeymap,
   findConflicts,
   mergeKeymap,
-  normalizeCombo
+  normalizeCombo,
+  presetKeymap,
+  presetOf
 } from '../keymap.js'
 import { Field, Modal, useToast } from '../ui.jsx'
 import { openExternal } from '../platform.js'
@@ -60,6 +63,8 @@ export function SettingsDialog({
       ),
     [current, defaults]
   )
+  /* 当前这份键位属于哪套方案；`''` = 用户改过其中一条，界面显示「自定义」 */
+  const activePreset = useMemo(() => presetOf(current), [current])
 
   /**
    * 归一化后上抛给 App。
@@ -119,6 +124,32 @@ export function SettingsDialog({
 
   const shortcutPanel = (
     <>
+      {/* 键位方案：参考客户端的快捷键页带多套预置 —— 迁移过来的人不用一条条重绑。
+          点一下是**整套替换**（不是逐条 diff），但替换完仍然可以单条改绑；
+          改过任意一条之后这里就显示「自定义」，不会再骗人说是某套方案。 */}
+      <Field label="键位方案" hint="整套替换；替换后单条改绑照旧">
+        <div className="seg" data-keymap-preset>
+          {KEYMAP_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              data-preset={preset.id}
+              title={preset.note}
+              aria-pressed={activePreset === preset.id}
+              className={activePreset === preset.id ? 'active' : ''}
+              onClick={() => apply(presetKeymap(preset.id))}
+            >
+              {preset.name}
+            </button>
+          ))}
+          {activePreset ? null : (
+            <span className="wb-muted-sm" data-preset-custom>
+              当前为自定义键位
+            </span>
+          )}
+        </div>
+      </Field>
+
       <div className="notice" style={{ marginBottom: 12 }}>
         <IconInfo size={14} />
         <span>
@@ -455,7 +486,11 @@ export function AboutDialog({ info, onClose }) {
     ['Electron', info?.electron || '—'],
     ['Chromium', info?.chrome || '—'],
     ['平台', info?.platform || '—'],
-    ['数据目录', info?.userData || '—']
+    ['数据目录', info?.userData || '—'],
+    /* 内置贴纸库的署名。Apache-2.0 只要求"保留声明"，不要求界面署名 ——
+       放在这里是为了让"素材是谁的"有据可查，而不是为了满足某条强制条款。
+       随包的文本在 `resources/stickers/LICENSE.txt`（与素材同目录）。 */
+    ['贴纸素材', 'Noto Emoji · Apache-2.0']
   ]
   return (
     <Modal

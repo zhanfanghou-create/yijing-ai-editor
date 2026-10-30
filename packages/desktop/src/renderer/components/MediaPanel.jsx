@@ -437,7 +437,10 @@ export default function MediaPanel({
       </div>
 
       <div className="wb-tools">
-        <div className="wb-tools-split">没有媒体文件？使用这些工具进行创作</div>
+        {/* 空库才说「没有媒体文件？」，否则与可见素材自相矛盾 */}
+        <div className="wb-tools-split" data-wb-tools-split={assets.length ? 'filled' : 'empty'}>
+          {assets.length ? '用这些工具继续创作' : '没有媒体文件？使用这些工具进行创作'}
+        </div>
         <div className="wb-tools-row">
           {TOOLS.map((tool) => (
             <button

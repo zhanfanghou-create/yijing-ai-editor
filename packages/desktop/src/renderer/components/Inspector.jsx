@@ -8,6 +8,17 @@ import {
   readAdjust,
   readBeauty
 } from '../../shared/adjust.js'
+/* 曲线（RGB 三通道）：面板只负责拖，换算与查找表在 shared/curves.js（预览/导出共用） */
+import { isNeutral, readCurves } from '../../shared/curves.js'
+import ColorCurveEditor from './ColorCurveEditor.jsx'
+/* 一级色轮（阴影/中间调/高光/全局）：同上，真源在 shared/wheels.js（预览/导出共用）。
+   这里用别名，避免与曲线的 isNeutral 撞名 —— 撞了不报错，只会让"色轮按曲线的中性判"静默成立。 */
+import { isNeutral as wheelsNeutral } from '../../shared/wheels.js'
+import ColorWheelEditor from './ColorWheelEditor.jsx'
+/* 分区 HSL（八色带）：真源在 shared/hslBands.js —— 预览烘成 3D 纹理、导出写成 .cube，
+   两侧共用同一个烘焙函数，所以这张表就是"预览与成片一致"的全部依据。 */
+import { isNeutral as hslBandsNeutral } from '../../shared/hslBands.js'
+import HslBandEditor from './HslBandEditor.jsx'
 import {
   ALIGNS,
   ANCHORS,
@@ -2080,6 +2091,40 @@ function ClipInspector({
                   onChange={(value) => patch({ adjust: { ...adjustValues, [item.key]: value } })}
                 />
               ))}
+            </Section>
+
+            <Section
+              title="曲线"
+              hook="curves"
+              dirty={!isNeutral(readCurves(clip.curves))}
+              resetHint="恢复默认（四条曲线全部归直）"
+              onReset={() => patch({ curves: null })}
+            >
+              <ColorCurveEditor value={clip.curves} onChange={(next) => patch({ curves: next })} />
+            </Section>
+
+            <Section
+              title="色轮"
+              hook="wheels"
+              dirty={!wheelsNeutral(clip.wheels)}
+              resetHint="恢复默认（四个色轮全部回到圆心）"
+              onReset={() => patch({ wheels: null })}
+            >
+              <ColorWheelEditor value={clip.wheels} onChange={(next) => patch({ wheels: next })} />
+            </Section>
+
+            {/* 分区 HSL 排在色轮之后、也是**导出滤镜链的最前面** ——
+                顺序不是随手排的：预览里这一层是叠在画面元素上的 canvas，
+                而调色 filter 挂在更外层的容器上，所以它作用在曲线/色轮之前。
+                导出必须逐字对应（lut3d 放在滤镜链最前），否则"预览和成片各调各的"。 */}
+            <Section
+              title="分区 HSL"
+              hook="hsl"
+              dirty={!hslBandsNeutral(clip.hsl)}
+              resetHint="恢复默认（八个色带的色相 / 饱和度 / 亮度全部归零）"
+              onReset={() => patch({ hsl: null })}
+            >
+              <HslBandEditor value={clip.hsl} onChange={(next) => patch({ hsl: next })} />
             </Section>
           </>
         ) : null}

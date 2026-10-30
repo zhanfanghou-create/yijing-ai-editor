@@ -229,7 +229,7 @@ button:disabled {
   width: 34px;
   height: 30px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
   display: grid;
@@ -454,14 +454,14 @@ button:disabled {
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--panel-2);
 }
 
 .seg button {
   padding: 5px 11px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -546,7 +546,7 @@ button:disabled {
   container-type: size;
   background: #000;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
   overflow: hidden;
   display: grid;
@@ -703,7 +703,7 @@ button:disabled {
      角标是界面自己的信息，不能被内容盖住 */
   z-index: 5;
   padding: 3px 9px;
-  border-radius: 6px;
+  border-radius: 8px;
   background: rgba(8, 10, 24, 0.78);
   color: var(--muted);
   font-size: 11px;
@@ -766,7 +766,7 @@ button:disabled {
 .media-card {
   position: relative;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--panel-2);
   overflow: hidden;
   cursor: pointer;
@@ -789,6 +789,20 @@ button:disabled {
   place-items: center;
   color: var(--faint);
   font-size: 11px;
+  /**
+   * ⚠️ 行高必须写成**确定值**，否则下面 `.media-thumb video` 的 `height: 100%` 是假的。
+   *
+   * 实测（2026-10-28，工作台 grid 视图，102.39×64 的格子放进 320×240 的片子）：
+   * 容器有 `height: 64px`，但 grid 的**行是 auto** ⇒ 子元素的百分比高度按"行高不定"处理，
+   * 直接退化成 auto ⇒ `<video>` 按自身比例排出 102.39×76.78，比格子高 12.78px，
+   * 被 `.media-card` 的 `overflow:hidden` 从下缘裁掉一条。
+   * 表现出来的不是"报错"，而是"这个视频的缩略图看着有点怪"——
+   * 而且宽高比越竖，裁掉得越多（竖版素材能裁掉一半）。
+   * `grid-template-rows: 100%` 让行高跟随容器（容器高度确定时它也确定），
+   * 于是 `height: 100%` 才真的等于格子高。容器高度是 auto 的场合（首页卡片）
+   * 这一行自动退化，不产生影响。
+   */
+  grid-template-rows: 100%;
 }
 
 .media-thumb img {
@@ -885,7 +899,7 @@ button:disabled {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: rgba(8, 10, 24, 0.8);
   color: var(--muted);
   display: grid;
@@ -1027,7 +1041,7 @@ input[type='range']::-webkit-slider-thumb {
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--faint);
   display: grid;
@@ -1079,7 +1093,7 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   top: 6px;
   bottom: 6px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 0;
   background: var(--clip-video);
   overflow: hidden;
@@ -1184,7 +1198,7 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   left: 7px;
   bottom: 3px;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.2px;
   color: rgba(255, 255, 255, 0.5);
   white-space: nowrap;
@@ -1213,7 +1227,7 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   left: 7px;
   bottom: 3px;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.2px;
   color: rgba(200, 232, 255, 0.62);
   white-space: nowrap;
@@ -1239,12 +1253,12 @@ input[type='range']::-webkit-slider-thumb {
 
 .clip .clip-trim.start {
   left: 0;
-  border-radius: 6px 0 0 6px;
+  border-radius: 8px 0 0 8px;
 }
 
 .clip .clip-trim.end {
   right: 0;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 8px 8px 0;
 }
 
 .clip:hover .clip-trim,
@@ -1443,7 +1457,7 @@ input[type='range']::-webkit-slider-thumb {
   left: -5.5px;
   width: 12px;
   height: 16px;
-  border-radius: 3px;
+  border-radius: 4px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
@@ -1495,7 +1509,7 @@ input[type='range']::-webkit-slider-thumb {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -1528,7 +1542,7 @@ input[type='range']::-webkit-slider-thumb {
 
 .modal > header h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 620;
 }
 
@@ -1544,7 +1558,7 @@ input[type='range']::-webkit-slider-thumb {
   width: 28px;
   height: 28px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
 }
@@ -1583,7 +1597,7 @@ input[type='range']::-webkit-slider-thumb {
   gap: 8px;
   padding: 9px 11px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--panel-2);
   color: var(--muted);
   font-size: 12px;
@@ -1633,7 +1647,7 @@ input[type='range']::-webkit-slider-thumb {
   height: 22px;
   padding: 0 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--panel-2);
   color: var(--muted);
   font-size: 11px;
@@ -1678,7 +1692,7 @@ input[type='range']::-webkit-slider-thumb {
   gap: 9px;
   padding: 9px 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--panel-2);
 }
 
@@ -1726,7 +1740,7 @@ input[type='range']::-webkit-slider-thumb {
   max-width: 380px;
   padding: 10px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--panel-2);
   color: var(--text);
   font-size: 13px;
@@ -1769,14 +1783,14 @@ input[type='range']::-webkit-slider-thumb {
   justify-items: center;
   padding: 26px 40px;
   border: 1px dashed var(--violet);
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
   text-align: center;
 }
 
 .drop-card strong {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
 }
@@ -1813,7 +1827,7 @@ input[type='range']::-webkit-slider-thumb {
   width: 26px;
   height: 26px;
   flex: 0 0 auto;
-  border-radius: 7px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
   color: var(--violet-bright);
@@ -1892,7 +1906,7 @@ input[type='range']::-webkit-slider-thumb {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: rgba(131, 114, 254, 0.16);
   color: var(--violet);
   margin-bottom: 2px;
@@ -1924,7 +1938,7 @@ input[type='range']::-webkit-slider-thumb {
      inset 阴影不参与布局，卡片内外都是 100×122，与参考 QML 的 itemWidth/itemHeight 对齐。 */
   border: 0;
   box-shadow: inset 0 0 0 1px transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   font-family: inherit;
@@ -1959,7 +1973,7 @@ input[type='range']::-webkit-slider-thumb {
   width: 100px;
   height: 100px;
   flex: 0 0 auto;
-  border-radius: 6px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
   color: #fff;
@@ -1973,7 +1987,7 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   inset: 0;
   border: 1.5px solid var(--violet-bright);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .look-name {
@@ -2023,7 +2037,7 @@ input[type='range']::-webkit-slider-thumb {
 .look-adjust-art {
   position: absolute;
   inset: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background-size: cover;
   background-position: center;
   pointer-events: none;
@@ -2165,6 +2179,197 @@ input[type='range']::-webkit-slider-thumb {
   grid-template-columns: repeat(auto-fill, 100px);
 }
 
+/* ---------------------------- 内置贴纸库 ---------------------------- */
+
+/**
+ * 贴纸网格。
+ *
+ * 格子定宽 72px、`object-fit: contain`：素材本身是 512×512 的正方形，
+ * 但笔画有粗有细（「对勾」几乎撑满、「钥匙」只占中间一条），contain 才能
+ * 让每格看起来一样大 —— 用 cover 会把细的裁掉、粗的撑破。
+ * 底格给 `--wb-bar`（#303030），深色主题下浅色贴纸不会糊在面板底色上。
+ */
+.sticker-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 16px 8px 8px;
+}
+
+.sticker-head strong {
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--wb-text);
+}
+
+.sticker-head .muted {
+  font-size: var(--fs-11);
+  color: var(--wb-faint);
+}
+
+.sticker-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ctl-md);
+  margin: 0 16px 10px 8px;
+  padding: 0 8px;
+  /* ⚠️ 边框一律走 inset 阴影：全局 `* { box-sizing: border-box }` 下真 border 会
+     从定高控件里吃掉 2px，同一排的搜索框与按钮就差 2px —— 看着像没对齐。 */
+  border-radius: 4px;
+  background: var(--wb-bar);
+  color: var(--wb-faint);
+}
+
+.sticker-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: var(--fs-12);
+}
+
+/* 搜索框自带的清除按钮在深色底上是浅灰方块，与面板格格不入 */
+.sticker-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 72px);
+  gap: 8px;
+  padding: 0 16px 12px 8px;
+  align-content: start;
+  justify-content: start;
+}
+
+.sticker-cell {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  padding: 7px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px transparent;
+  border-radius: 8px;
+  background: var(--wb-bar);
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+
+.sticker-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* 图片自己不吃鼠标事件：否则按住 img 拖拽时按钮收不到 click，
+     "点一下加进叠加轨"会间歇性失灵（按住不放再松开就什么都没发生）。 */
+  pointer-events: none;
+}
+
+.sticker-cell:hover {
+  background: var(--wb-card);
+}
+
+.sticker-cell:active {
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+}
+
+/* ------------------------- 内置边框（特效 → 边框） ------------------------- */
+
+.border-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 16px 8px 12px;
+}
+
+.border-head strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.border-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px 12px;
+}
+
+.border-chip {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--wb-card);
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.border-chip.on {
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+  background: var(--wb-accent-glow);
+  color: var(--wb-text);
+}
+
+/*
+ * 边框格子。尺寸比贴纸大：边框的观感全靠"一圈带子有多宽"，
+ * 72px 的格子里那圈带子只剩 5px，看起来全是白块，选不出来。
+ * 底衬用**中亮度渐变**而不是棋盘格：棋盘格是"透明"的语义色，深色主题下它本身就是深灰，
+ * 黑框 / 布纹 / 划痕那几款的带子会整个隐进底里（看着像空格子没加载）。
+ */
+.border-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 120px);
+  gap: 10px;
+  padding: 0 16px 16px 12px;
+  align-content: start;
+  justify-content: start;
+}
+
+.border-cell {
+  display: grid;
+  gap: 4px;
+  width: 120px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.border-cell img {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  /* 底衬刻意不用棋盘格：棋盘格是"透明"的语义色，深色主题下它本身就是深灰，
+     黑框 / 布纹 / 划痕这几款的带子会整个隐进底里 —— 面板上看着像"空格子没加载"。
+     换成一块中亮度、带一点渐变的"假画面"，浅框深框都能读出来；
+     中间那块仍然透出底衬，也就仍然说明得了"这里是透明的窗"。 */
+  background-color: #6d7683;
+  background-image: linear-gradient(135deg, #8f9aa8 0%, #5c6674 55%, #7b8492 100%);
+  box-shadow: inset 0 0 0 1px var(--wb-card);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.border-cell.on img {
+  box-shadow: inset 0 0 0 2px var(--wb-accent);
+}
+
+.border-name {
+  font-size: 11px;
+  color: var(--wb-muted);
+  text-align: center;
+  line-height: 14px;
+}
+
+.border-cell.on .border-name {
+  color: var(--wb-text);
+}
+
 .style-card {
   display: block;
   padding: 0;
@@ -2173,7 +2378,7 @@ input[type='range']::-webkit-slider-thumb {
      预览块于是比卡片窄 2px，被 overflow: hidden 裁掉右边一条。 */
   border: 0;
   box-shadow: inset 0 0 0 1px transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   cursor: pointer;
   overflow: hidden;
@@ -2361,11 +2566,7 @@ input[type='range']::-webkit-slider-thumb {
  * 内阴影 —— **必须**是叠在画面上方的一层透明覆盖，不能挂在媒体元素自己身上。
  * `box-shadow: inset` 按规范画在"背景之上、内容之下"，而媒体元素的内容就是那一帧画面，
  * 于是阴影会被画面整整齐齐地盖住：面板上拖了、预览里一点变化都没有，成片里也没有。
- * `border-radius: inherit` 让圆角跟随剪裁盒；蒙版形状（椭圆等）跟不了 ——
- * 这是 box-shadow 的固有边界，界面上如实写在提示里。
- */
-.canvas-inset {
-  position: absolute;
+ * `border-radius: inherit` 让圆角跟随剪裁盒；蒙版形状（椭圆等）跟不了 —— * 这是 box-shadow 的固有边界，界面上如实写在提示里。 */ .canvas-inset { position: absolute;
   inset: 0;
   pointer-events: none;
   /* ⚠️ 刻意**不继承**圆角：导出的内阴影是沿画框矩形的距离场（见 shared/effects.js
@@ -2385,6 +2586,28 @@ input[type='range']::-webkit-slider-thumb {
   pointer-events: none;
   border-radius: inherit;
   z-index: 4;
+}
+
+/*
+ * 内置边框（`clip.border`）。
+ *
+ * 为什么用 `background-image` 而不是 `<img>`：
+ *   边框图要**拉伸**到片段的画框上（1080 正方形拉到 16:9 / 9:16 都好用），
+ *   `background-size: 100% 100%` 就是这件事；`<img>` 得再写 object-fit，
+ *   而 object-fit: fill 会被父级 flex 的对齐干扰。
+ * ⚠️ 必须在 `.canvas-clipbox` 里面：片段有圆角时边框要跟着圆，
+ *   `border-radius: inherit` + 父级的 `overflow: hidden` 才能切齐。
+ * ⚠️ z-index 要压过 内阴影(3) / 虚线框(4) —— 边框是最外面那一圈装饰。
+ */
+.canvas-border {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  z-index: 5;
 }
 
 /* ------------------- 字幕/文字的入场动画 ------------------- */
@@ -2653,7 +2876,7 @@ input[type='range']::-webkit-slider-thumb {
   flex: 1;
   height: 28px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-2);
   color: var(--muted);
   font-family: inherit;
@@ -2677,8 +2900,8 @@ input[type='range']::-webkit-slider-thumb {
   padding: 0 4px;
   height: 13px;
   line-height: 13px;
-  border-radius: 3px;
-  font-size: 9px;
+  border-radius: 4px;
+  font-size: 10px;
   color: #fff;
   background: rgba(0, 0, 0, 0.55);
   pointer-events: none;
@@ -2697,10 +2920,10 @@ input[type='range']::-webkit-slider-thumb {
   transform: translateX(-50%);
   height: 14px;
   padding: 0 6px;
-  border-radius: 7px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 14px;
   color: #fff;
   background: var(--violet);
@@ -2736,14 +2959,14 @@ input[type='range']::-webkit-slider-thumb {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #2e2e34;
   color: #cfd0d6;
 }
 
 .guide-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: #e8e8ea;
 }
@@ -2796,4 +3019,649 @@ input[type='range']::-webkit-slider-thumb {
   min-height: 96px;
   font-family: inherit;
   line-height: 1.6;
+}
+
+/* ---------------------- 分区 HSL（八色带调色板） ---------------------- */
+
+/**
+ * 预览里的 GPU 处理层：绝对定位盖在原画面之上（原画面只保留布局与解码）。
+ *
+ * `pointer-events: none` 不能省 —— 这一层铺满画布，会挡住画布上的点选与拖动
+ * （选中框、拖移缩放全靠那些 pointer 事件）。少了它，开了 HSL 的片段
+ * "点不中、拖不动"，而时间线上一切正常，非常难查。
+ */
+.canvas-frame .canvas-hsl {
+  display: block;
+  pointer-events: none;
+}
+
+/**
+ * 显卡不支持 WebGL2 时的提醒条（`previews` 会退回原生画面，不会留一块黑）。
+ * 贴在画面左上角、`pointer-events: none` —— 它只是告知，不该拦住画布上的点选。
+ */
+.canvas-frame .canvas-hsl-fail {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(20, 20, 20, 0.82);
+  color: #ffd400;
+  font-size: 11px;
+  line-height: 16px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 八个色带一行排开：两侧各 20px、间距 6px、每个约 40px 宽。
+   48px 是"一个色块 + 一个汉字"能同时放下的最小宽度，再窄就只能靠 tooltip。 */
+.hsl-bands {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+
+.hsl-band {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--wb-elev-2, #262626);
+  color: var(--wb-text, #e8e8e8);
+  font-size: 11px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.hsl-band:hover {
+  background: var(--wb-elev-3, #303030);
+}
+
+/* 选中态用品牌紫的描边而不是填充：填充会把色块本身的颜色盖掉，
+   而"我在调哪个色"这件事正是靠那个色块认的。 */
+.hsl-band.active {
+  border-color: var(--accent, #7c5cff);
+  box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.35);
+}
+
+.hsl-band-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* 已调过的色带：右上角一个小点。24 个参数只显示 3 根滑杆，没有这个点
+   用户根本不知道"橙带还留着昨天调的值"。 */
+.hsl-band-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent, #7c5cff);
+}
+
+.hsl-note {
+  margin: 8px 0 0;
+  color: var(--wb-muted, #8a8a8a);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ------------------------------- 模板 ------------------------------- */
+
+/*
+ * 模板卡 2 列。中栏宽约 300px，`minmax(126px, 1fr)` 在这里刚好排两列；
+ * 排三列的话卡片只有 90px，版式示意里的文字条就只剩 3px，看不出位置差异。
+ */
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 10px;
+  padding: 0 16px 12px 12px;
+  align-content: start;
+}
+
+.tpl-card {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+/*
+ * 版式示意的底：深色渐变而不是纯黑/纯白。
+ * 模板里的文字几乎全是白字（19 个样式里 15 个白/近白），
+ * 铺浅底就完全读不出来；铺纯黑又分不清"这张卡到底有没有内容"。
+ */
+.tpl-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  /* 圆角只有 4 / 8 两档（check-ui-spec 挨个量三份 CSS），别写 6px */
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(150deg, #3d4353 0%, #23262e 55%, #2e3340 100%);
+  box-shadow: inset 0 0 0 1px var(--wb-card);
+}
+
+.tpl-card:hover .tpl-thumb {
+  box-shadow: inset 0 0 0 1px var(--wb-faint);
+}
+
+.tpl-card.is-busy .tpl-thumb {
+  opacity: 0.5;
+}
+
+/* 文字条：主标题实心、副标题淡一档，两条在卡上就分得出主次 */
+.tpl-bar {
+  position: absolute;
+  left: 22%;
+  width: 56%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.tpl-bar.is-sub {
+  left: 28%;
+  width: 44%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+/*
+ * 按样式族分五种观感。
+ * 只画一种白条的话，「字幕套」四张卡（bar / plain / accent / chapter）长得一模一样，
+ * 缩略图等于没起作用 —— 用户只能靠名字猜。颜色只用来区分"是不是带底色/是否强调"，
+ * 不追求与真实样式逐色对齐（那要读 19 个样式的参数，卡上也未必看得出来）。
+ */
+.tpl-bar.is-title {
+  height: 6px;
+}
+
+.tpl-bar.is-band {
+  height: 7px;
+  border-radius: 2px;
+  background: rgba(131, 114, 254, 0.9);
+}
+
+.tpl-bar.is-tag {
+  height: 6px;
+  background: rgba(20, 20, 28, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
+
+.tpl-bar.is-accent {
+  height: 6px;
+  background: rgba(255, 206, 84, 0.9);
+}
+
+/* 贴纸：空芯圆点（实心会被读成"一个色块"，不像贴纸） */
+.tpl-dot {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.tpl-name {
+  font-size: 12px;
+  color: var(--wb-text);
+}
+
+.tpl-sub {
+  font-size: 11px;
+  color: var(--wb-faint);
+}
+
+.tpl-tip {
+  margin: 0;
+  padding: 0 16px 16px 12px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--wb-faint);
+}
+
+/* ============================ 智能包装 ============================ */
+
+/*
+ * 分节标题（「风格」/「强度」/「组合」）。
+ * 用一条 11px 的字 + 右侧一句灰字说明，而不是做成可点的 tab ——
+ * 这一页一次只显示一节内容，tab 会让人以为切换会换掉下面的东西。
+ */
+.pack-sect {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 16px 6px 12px;
+}
+
+.pack-sect > span {
+  font-size: 12px;
+  color: var(--wb-text);
+}
+
+.pack-sect > em {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--wb-faint);
+}
+
+/*
+ * 风格 / 组合卡：2 列。
+ * 卡高固定 76px —— 四张卡的字样高度不一致（描边 / 发光），
+ * 不定高的话第二行会比第一行矮一截，看着像没对齐。
+ */
+.pack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 16px 12px 12px;
+}
+
+.pack-card {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  height: 76px;
+  padding: 8px 6px;
+  border: 0;
+  /* 圆角只有 4 / 8 两档（check-ui-spec 挨个量三份 CSS） */
+  border-radius: 8px;
+  background: var(--wb-card);
+  box-shadow: inset 0 0 0 1px transparent;
+  cursor: pointer;
+}
+
+.pack-card:hover {
+  box-shadow: inset 0 0 0 1px var(--wb-faint);
+}
+
+.pack-card.is-on {
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-card));
+}
+
+/* 字样用真实样式表的颜色 / 描边色（见 PackPanel：颜色是从 textStyles.json 读的） */
+.pack-sample {
+  font-size: 20px;
+  line-height: 1.1;
+  letter-spacing: 1px;
+}
+
+.pack-name {
+  font-size: 11px;
+  color: var(--wb-muted);
+}
+
+/*
+ * 画面组合的示意框：只画"框有多粗 / 什么颜色"，不画调色。
+ * 调色在 76px 的小方块里根本看不出来，硬画反而误导。
+ */
+.pack-frame {
+  display: block;
+  width: 46px;
+  height: 28px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #6b7280 0%, #374151 100%);
+}
+
+.pack-frame.is-clean {
+  box-shadow: inset 0 0 0 3px #f5f5f5;
+}
+
+.pack-frame.is-film {
+  box-shadow: inset 0 0 0 3px #d8c39a;
+}
+
+.pack-frame.is-cool {
+  box-shadow: inset 0 0 0 1px #7dd3fc;
+}
+
+.pack-frame.is-warm {
+  box-shadow: inset 0 0 0 2px #f3c999;
+}
+
+/* 强度三档：等分一排，选中态只换描边与字色，不换高度（换高度会抖） */
+.pack-levels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 16px 12px 12px;
+}
+
+.pack-lv {
+  height: 30px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--wb-card);
+  color: var(--wb-muted);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.pack-lv.is-on {
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-card));
+}
+
+.pack-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 12px 12px;
+}
+
+.pack-actions .btn.primary {
+  flex: 1;
+}
+
+/* 识别出来的关键词：让人一眼看到"它认了哪些词"，判错了也能自己对上 */
+.pack-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 16px 12px;
+}
+
+.pack-key {
+  padding: 2px 8px;
+  border-radius: 50%;
+  font-size: 11px;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-accent) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 55%, transparent);
+}
+
+.pack-key.is-more {
+  color: var(--wb-faint);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--wb-card);
+}
+
+/* ============================ 人物特效 ============================ */
+
+/*
+ * 预览里的跟随层。
+ *
+ * ⚠️ 必须用 backdrop-filter：给`.canvas-frame` 再加一条 filter 会顶掉挂在它上面的
+ *    调色（预览调色就住在同一条内联 filter 里），表现是"一开人物特效，调色全没了"。
+ * ⚠️ 形状是椭圆（border-radius: 50%）：人脸不是方的，方形打码会在四角露出角，
+ *    看起来像贴了一张纸。与素材里的 mask-ellipse.png 同一个形状。
+ */
+.canvas-face {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  /* 与成片里遮罩边缘的柔化对齐：导出侧给 mask 做了 boxblur=6，这里用一圈渐变近似 */
+  -webkit-mask-image: radial-gradient(closest-side, #000 88%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 88%, transparent 100%);
+}
+
+.canvas-face.is-blur {
+  backdrop-filter: blur(var(--face-blur, 12px));
+  -webkit-backdrop-filter: blur(var(--face-blur, 12px));
+}
+
+.canvas-face.is-bright {
+  /* 亮度加成与导出侧的 eq=brightness 同一条公式（0.04 + 0.16 × 强度） */
+  backdrop-filter: brightness(calc(1 + var(--face-lift, 0.1)));
+  -webkit-backdrop-filter: brightness(calc(1 + var(--face-lift, 0.1)));
+}
+
+.canvas-face.is-frame {
+  /* 描边不靠 backdrop，直接画环 + 外发光（与 frame-ellipse.png 的观感对齐） */
+  backdrop-filter: none;
+  box-shadow:
+    inset 0 0 0 2px #7c5cff,
+    0 0 10px rgba(124, 92, 255, 0.65);
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* 面板里的效果示意：三种小图，一眼看出差别（不画调色，小图里看不出来） */
+.ffx-card {
+  /* 与 .pack-card 同一套尺寸，只补一个更矮的示意区 */
+  height: 84px;
+}
+
+.ffx-card:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ffx-art {
+  display: block;
+  width: 40px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #d8dde6 0%, #8b93a3 100%);
+}
+
+/* 打码：条纹被糊掉（用重复条纹 + blur 表现"细节没了"） */
+.ffx-art.is-blur {
+  background:
+    repeating-linear-gradient(90deg, #e8edf5 0 3px, #6b7280 3px 6px);
+  filter: blur(2.2px);
+}
+
+/* 提亮：同一个亮块，只是更亮（不换成别的颜色，否则看不出"只是亮了"） */
+.ffx-art.is-bright {
+  background: linear-gradient(135deg, #fff6cf 0%, #f0c86a 100%);
+  box-shadow: 0 0 10px rgba(240, 200, 106, 0.55);
+}
+
+/* 描边：空心环 */
+.ffx-art.is-frame {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px #7c5cff;
+  border-radius: 50%;
+}
+
+/* 强度滑杆：与既有滑杆同一套变量，只调宽度让它撑满一格 */
+.pack-levels input[type='range'] {
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  accent-color: var(--wb-accent);
+  cursor: pointer;
+}
+
+.pack-levels input[type='range']:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 识别失败（没检测到人脸）用暖色提示，与"操作提示"区分开 */
+.tpl-tip.is-warn {
+  color: #f0b45a;
+}
+
+/* ─────────────────────────── 插件面板（本地素材包） ───────────────────────────
+ * 与「智能包装」「人物特效」同类：左栏一项 → 一个面板。
+ * 数值一律取 workbench.css 的量表：字号 11/12/13、圆角 4/8、控件高 28。
+ * ⚠️ 边框一律走 inset 阴影（全局 box-sizing:border-box 下真 border 会从定高控件里吃 2px）。
+ */
+.plug-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 16px 8px 8px;
+}
+
+.plug-head strong {
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--wb-text);
+}
+
+.plug-head .muted {
+  font-size: var(--fs-11);
+  color: var(--wb-faint);
+}
+
+/* 顶上的边界说明：不支持 .ofx 这件事必须写在用户点"导入"之前 */
+.plug-note {
+  margin: 0 16px 8px 8px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: var(--wb-bar);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  color: var(--wb-muted);
+  font-size: var(--fs-11);
+  line-height: 1.6;
+}
+
+.plug-note strong {
+  color: var(--wb-text);
+  font-weight: 500;
+}
+
+.plug-note code,
+.plug-tip code {
+  font-family: inherit;
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  background: var(--wb-deep);
+  color: var(--wb-text);
+}
+
+.plug-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 8px 8px;
+}
+
+.plug-actions-bar .muted {
+  font-size: var(--fs-11);
+  color: var(--wb-faint);
+}
+
+/* 列表不单独出滚动条：面板本身是滚动容器，套两层会出现"滚不动"的错觉 */
+.plug-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px 8px 8px;
+}
+
+.plug-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: var(--wb-bar);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+/* 停用不是隐藏：卡片还在，只是明显变暗 —— 用户要知道"它还在，只是关着" */
+.plug-card.is-off {
+  opacity: 0.5;
+}
+
+.plug-art {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--wb-deep);
+  color: var(--wb-faint);
+}
+
+.plug-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.plug-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plug-meta strong {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--wb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plug-meta .muted {
+  font-size: var(--fs-11);
+  color: var(--wb-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plug-card-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.plug-card-actions .link {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+
+.plug-card-actions .link:hover:not(:disabled) {
+  color: var(--wb-text);
+}
+
+.plug-card-actions .link.is-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.plug-card-actions .link:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.plug-skip {
+  margin: 0 16px 8px 8px;
+  font-size: var(--fs-11);
+  line-height: 1.6;
+  color: #f0b45a;
+}
+
+.plug-tip {
+  margin: 4px 16px 12px 8px;
+  font-size: var(--fs-11);
+  line-height: 1.6;
+  color: var(--wb-faint);
+}
+
+.plug-tip strong {
+  color: var(--wb-muted);
+  font-weight: 500;
 }

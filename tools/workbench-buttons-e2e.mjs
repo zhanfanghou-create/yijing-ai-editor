@@ -64,7 +64,7 @@ const EDITOR_SIZE = [1920, 1032]
  * 与在线素材（stock）两个入口，那两类能力要么不在本机、要么要联网，
  * 剩下的归到「媒体文件」下的左栏节点里。改一头必须改另一头。
  */
-const TABS = ['media', 'audio', 'text', 'effect', 'transition', 'subtitle', 'filter', 'adjust']
+const TABS = ['media', 'audio', 'text', 'sticker', 'effect', 'transition', 'subtitle', 'filter', 'adjust', 'template', 'packaging', 'plugin']
 
 /** 外壳分区（与"面板内"互补，两边不重不漏地覆盖工作台全部按钮） */
 const SHELL_ZONES = ['winbtns', 'topbar', 'tabsrow', 'timeline']

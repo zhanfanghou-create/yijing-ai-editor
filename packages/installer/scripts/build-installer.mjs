@@ -2,7 +2,7 @@
 /**
  * 一键出安装包：
  *   1) 构建桌面客户端渲染层      (vite build  -> packages/desktop/dist-renderer)
- *   2) 打包客户端免安装目录      (electron-builder --dir -> packages/desktop/dist-win/win-unpacked)
+ *   2) 打包客户端免安装目录      (electron-builder --dir -> packages/desktop/dist-app/win-unpacked)
  *   3) 压缩为主程序数据包        (payload/app.7z)
  *   4) 构建安装器渲染层          (vite build  -> packages/installer/dist-renderer)
  *   5) 生成安装器单文件 exe      (electron-builder portable -> packages/installer/dist-installer)
@@ -179,7 +179,10 @@ if (!skipApp) {
   requireFile(path.join(desktopRoot, 'dist-renderer', 'index.html'), '客户端渲染层产物')
 
   step(2, '打包客户端免安装目录（electron-builder --dir）')
-  const appOut = resolveOutputDir(desktopRoot, appOutArg || 'dist-win', '--app-out', appOutArg)
+  /* 默认产物目录跟 desktop/electron-builder.yml 的 `directories.output` 保持一致。
+     2026-10-31 从 dist-win 改成 dist-app：本机 dist-win/win-unpacked/resources/app.asar
+     长期被某个进程独占，打包清旧产物那步必失败（详见 electron-builder.yml 里的注释）。 */
+  const appOut = resolveOutputDir(desktopRoot, appOutArg || 'dist-app', '--app-out', appOutArg)
   run(
     NODE,
     [BUILDER, '--config', 'electron-builder.yml', '--win', 'dir', '--x64', '-c.directories.output=' + appOut],
