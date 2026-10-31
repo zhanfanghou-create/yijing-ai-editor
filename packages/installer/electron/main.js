@@ -9,9 +9,13 @@ const { spawn } = require('node:child_process')
 const { APP_NAME, APP_EXE, REG_KEY, APP_ID } = require('./product')
 const { verifyPayload, payloadRoot, archiveSizeMB } = require('./payload')
 const { runInstall, freeSpaceGB } = require('./install')
+const silent = require('./silent')
 const win = require('./win-integration')
 
 const isDev = process.env.NODE_ENV === 'development'
+
+/** 智能体无人值守安装：带 --silent 就完全不开窗口，装完写结果文件并退出 */
+const silentOpts = silent.parseSilentArgs(process.argv.slice(1))
 
 let mainWindow = null
 let installing = false
@@ -277,6 +281,71 @@ function registerIpc() {
   ipcMain.handle('installer:quit', async () => app.quit())
 }
 
+// ---------------------------------------------------------------- 静默安装
+
+/** 安装完成后拉起主程序（只有显式给 --launch 才做） */
+async function launchInstalled(installDir) {
+  try {
+    if (process.platform === 'win32') {
+      const exe = path.join(installDir, APP_EXE)
+      if (!fs.existsSync(exe)) return false
+      spawn(exe, [], { detached: true, stdio: 'ignore', cwd: installDir }).unref()
+      return true
+    }
+    spawn('open', [installDir], { detached: true, stdio: 'ignore' }).unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 无人值守跑完整个安装流程。
+ * 结果一律落到 `--result`（默认 %TEMP%\yijing-install-result.json）：
+ * GUI 子系统下 stdout 不连通，退出码只能表达成败，详情得靠这个文件。
+ */
+async function runSilentInstall() {
+  const started = Date.now()
+  const logs = []
+  const version = app.getVersion()
+  let target = silentOpts.targetPath
+  try {
+    if (!target) target = (await findExistingInstallDir()) || defaultInstallDir()
+  } catch {
+    target = target || defaultInstallDir()
+  }
+  const base = { silent: true, version, targetPath: target, resultFile: silentOpts.resultFile }
+  const elapsed = () => Math.round((Date.now() - started) / 100) / 10
+
+  try {
+    const check = verifyPayload()
+    if (!check.ok) throw new Error(check.error)
+    logs.push(`info: 安装包校验通过（${check.archiveMB.toFixed(1)} MB）`)
+    await runInstall(
+      silent.installOptions({ ...silentOpts, targetPath: target }, version),
+      (p) => logs.push(`[${p.percent}%] ${p.label}`),
+      (l) => logs.push(`${l.level}: ${l.text}`)
+    )
+    const launched = silentOpts.launch ? await launchInstalled(target) : false
+    silent.writeResult(silentOpts.resultFile, {
+      ok: true,
+      code: 0,
+      ...base,
+      exe: path.join(target, APP_EXE),
+      launched,
+      shortcuts: silentOpts.shortcuts,
+      registered: silentOpts.register,
+      seconds: elapsed(),
+      logs: logs.slice(-60)
+    })
+    app.exit(0)
+  } catch (e) {
+    const reason = String((e && e.message) || e)
+    silent.writeResult(silentOpts.resultFile, { ok: false, code: 3, ...base, reason, seconds: elapsed(), logs: logs.slice(-60) })
+    app.exit(3)
+  }
+}
+
 // ---------------------------------------------------------------- 生命周期
 
 process.on('uncaughtException', (err) => {
@@ -288,7 +357,19 @@ process.on('unhandledRejection', (reason) => {
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
-  app.quit()
+  // 静默模式下别静默退出：调用方在等结果文件，留一份「有实例在跑」的说明。
+  if (silentOpts.silent) {
+    silent.writeResult(silentOpts.resultFile, {
+      ok: false,
+      code: 4,
+      silent: true,
+      reason: '已有安装器实例在运行',
+      resultFile: silentOpts.resultFile
+    })
+    app.exit(4)
+  } else {
+    app.quit()
+  }
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -298,6 +379,12 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
+    if (silentOpts.silent) {
+      // 无人值守：不开窗口、不建 dock，直接跑安装
+      if (process.platform === 'darwin' && app.dock) app.dock.hide()
+      runSilentInstall()
+      return
+    }
     // 启动即自检 payload，把问题提前暴露在「欢迎」页而不是安装到一半才失败
     const check = verifyPayload()
     if (!check.ok) console.error('[安装器] payload 自检失败：', check.error)

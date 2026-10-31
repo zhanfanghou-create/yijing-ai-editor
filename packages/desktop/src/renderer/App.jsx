@@ -823,6 +823,18 @@ export default function App() {
         }
       }
       setCreatedAt(restoredCreatedAt || new Date().toISOString())
+
+      /**
+       * 智能体唤起（`--open-draft <id>`）：主进程把目标草稿写进 currentDraftId，
+       * 上面的恢复逻辑已经把内容装好；这里只差"切到编辑器"。
+       * 标记是**一次性**的：消费完立刻清掉，否则下次普通启动也会被拽进编辑器。
+       */
+      const openEditorOnce = await getSetting('_openEditorOnce', '')
+      if (alive && openEditorOnce) {
+        setPage('editor')
+        setSetting('_openEditorOnce', '')
+      }
+
       setBooted(true)
       restoreDoneRef.current = true
     })()
@@ -1046,6 +1058,21 @@ export default function App() {
     },
     [toast]
   )
+
+  /**
+   * 智能体再次唤起：主进程收到 `--open-draft <id>` 的第二个实例时发事件，
+   * 这里复用同一个 handleOpenDraft（状态恢复只有一份实现）。
+   * 冷启动那条走「当前草稿」设置，不需要在这里处理。
+   */
+  useEffect(() => {
+    if (!window.yjai?.onOpenDraft) return undefined
+    const off = window.yjai.onOpenDraft((id) => {
+      if (id) handleOpenDraft({ id })
+    })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [handleOpenDraft])
 
   /**
    * 导入素材包：主进程解开并落成**新草稿**，这里再把它打开。

@@ -150,31 +150,35 @@ async function runInstall(opts, onProgress, onLog) {
   report(93, 'shortcut', '快捷方式处理完成')
 
   // ---------------------------------------------------------- 5. 系统登记
-  report(94, 'register', '写入卸载登记')
-  try {
-    const uninst = win.writeUninstaller(target)
-    log('info', `卸载器已生成：${uninst}`)
-  } catch (e) {
-    log('warn', `卸载器生成失败：${e.message}`)
-  }
-  try {
-    await win.writeUninstallRegistry(target, opts.version)
-    log('info', '卸载登记写入完成')
-  } catch (e) {
-    log('warn', `卸载登记写入失败：${e.message}`)
-  }
-  if (opts.autoStart) {
+  // `register:false` 只有静默安装会用到（E2E 装到临时目录时不污染注册表/开始菜单）
+  const doRegister = opts.register !== false
+  report(doRegister ? 94 : 98, 'register', doRegister ? '写入卸载登记' : '跳过系统登记')
+  if (doRegister) {
     try {
-      await win.setAutoStart(target, true)
-      log('info', '已设置为开机自启')
+      const uninst = win.writeUninstaller(target)
+      log('info', `卸载器已生成：${uninst}`)
     } catch (e) {
-      log('warn', `开机自启设置失败：${e.message}`)
+      log('warn', `卸载器生成失败：${e.message}`)
     }
-  } else {
     try {
-      await win.setAutoStart(target, false)
-    } catch {
-      /* 无旧记录，忽略 */
+      await win.writeUninstallRegistry(target, opts.version)
+      log('info', '卸载登记写入完成')
+    } catch (e) {
+      log('warn', `卸载登记写入失败：${e.message}`)
+    }
+    if (opts.autoStart) {
+      try {
+        await win.setAutoStart(target, true)
+        log('info', '已设置为开机自启')
+      } catch (e) {
+        log('warn', `开机自启设置失败：${e.message}`)
+      }
+    } else {
+      try {
+        await win.setAutoStart(target, false)
+      } catch {
+        /* 无旧记录，忽略 */
+      }
     }
   }
   report(98, 'register', '系统登记完成')

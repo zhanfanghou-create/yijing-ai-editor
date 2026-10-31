@@ -32,6 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { EXPECTED_TOOLS } from './mcp-tools-list.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -41,20 +42,7 @@ const MAIN = path.join(APP, 'src', 'main')
 const require = createRequire(import.meta.url)
 
 /** 真实仓库断言的条数。改动断言必须同步改这里 + scripts/verify.mjs 的 expected。 */
-export const TOTAL_ASSERTIONS = 18
-
-/** 预期工具表：少一个 = 少一项能力；多一个 = agent 会去调半成品。 */
-export const EXPECTED_TOOLS = [
-  'yijing_list_drafts',
-  'yijing_read_draft',
-  'yijing_create_draft',
-  'yijing_probe_media',
-  'yijing_add_clips',
-  'yijing_add_subtitles',
-  'yijing_update_clip',
-  'yijing_delete_clip',
-  'yijing_export_video'
-]
+export const TOTAL_ASSERTIONS = 23
 
 /* --------------------------------------------------- 纯函数（可被自证复用） */
 
@@ -176,7 +164,7 @@ export function registrationGuarded(indexText) {
 
 /* ------------------------------------------------------------------ 主流程 */
 
-function main() {
+async function main() {
   const selftest = process.argv.includes('--selftest')
   let pass = 0
   let fail = 0
@@ -229,6 +217,7 @@ function main() {
     drafts: path.join(MAIN, 'drafts.js'),
     media: path.join(MAIN, 'media.js'),
     register: path.join(MAIN, 'mcp-register.js'),
+    ops: path.join(MAIN, 'mcp-ops.js'),
     index: path.join(MAIN, 'index.js')
   }
   for (const [k, p] of Object.entries(files)) {
@@ -241,7 +230,7 @@ function main() {
   const toolSetOk =
     toolNames.length === EXPECTED_TOOLS.length && EXPECTED_TOOLS.every((n) => toolNames.includes(n))
   check(
-    '2. 工具表恰好 9 个且名字齐全',
+    `2. 工具表恰好 ${EXPECTED_TOOLS.length} 个且名字齐全（静态扫描）`,
     toolSetOk,
     `实际 ${toolNames.length} 个：${toolNames.join(', ')}`
   )
@@ -336,9 +325,148 @@ function main() {
     registrationGuarded(indexText) ? '有守卫' : '缺守卫：E2E/取证会把用户 %APPDATA%\\yegin\\mcp.json 冲坏'
   )
 
+  /* ---------------- 运行期：工具表真的能加载、真的有 handler ---------------- */
+  const tmpProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'yjai-mcprun-'))
+  process.env.YIJAI_USER_DATA = tmpProfile
+  let serverMod = null
+  try {
+    serverMod = require(files.server)
+  } catch (e) {
+    serverMod = null
+  }
+  if (!serverMod || !serverMod.TOOLS) {
+    check('15. mcp-server.js 可被 require 且导出工具表（运行期）', false, 'require 失败')
+    check('16. mcp-ops.js 被打包白名单覆盖（漏了就是「装机才崩」）', false, '上文已失败')
+    check('17. 工具 handler 真能跑通（yijing_status）', false, '上文已失败')
+  } else {
+    const runtime = Object.keys(serverMod.TOOLS)
+    const same = runtime.length === EXPECTED_TOOLS.length && EXPECTED_TOOLS.every((n) => runtime.includes(n))
+    const hasHandlers = runtime.every((n) => typeof serverMod.TOOLS[n].handler === 'function')
+    check('15. 运行期工具表与清单逐字一致，且每个都有 handler', same && hasHandlers, `运行期 ${runtime.length} 个`)
+    const opsRel = path.relative(APP, files.ops).replace(/\\/g, '/')
+    check('16. mcp-ops.js 被打包白名单覆盖（漏了就是「装机才崩」）', isCovered(opsRel, patterns), opsRel)
+    try {
+      const out = await serverMod.callTool('yijing_status', {})
+      const text = out && out.content && out.content[0] ? out.content[0].text : ''
+      const parsed = JSON.parse(text)
+      check('17. 工具 handler 真能跑通（yijing_status 返回环境）', parsed.server === 'yijing-editor' && typeof parsed.draftCount === 'number', `drafts=${parsed.draftCount}`)
+    } catch (e) {
+      check('17. 工具 handler 真能跑通（yijing_status 返回环境）', false, String((e && e.message) || e).slice(0, 120))
+    }
+    /* 18. handler 读的参数必须在 inputSchema.properties 里声明过。
+       为什么单开一条：`yijing_open_app` 曾经是 `additionalProperties: false` 且一个属性
+       都没声明 —— handler 明明读 `args.draftId`，但调用方（镜枢）按 schema 校验后
+       **根本传不进去**，表现是"让它打开草稿，它只把软件拉起来停在首页"。
+       本地直调 handler 完全正常，所以只有这条静态契约能拦住。
+
+       ⚠️ 第一版写成「扫 handler 源码里的 args.xxx」是**假绿**：本文件的 handler 几乎全是
+       `(args) => ops.xxx(args)` 这种**透传**，源码里一个 `args.` 都没有，于是全部返回空集、
+       恒判通过（把 draftId 声明删掉照样绿，已实测）。所以透传必须再跟一层：
+       取 `ops.<name>` 的形参解构表 —— 那才是真正读参数的地方。 */
+    const keysOf = (list) =>
+      list
+        .split(',')
+        .map((s) => s.split(/[:=]/)[0].trim())
+        .filter((n) => /^[A-Za-z_$][\w$]*$/.test(n))
+    const opsSrc = fs.readFileSync(files.ops, 'utf8')
+    /** 从 `function xxx(...)` 开始截到下一个顶层成员为止（够用：ops 里都是扁平的） */
+    const windowFrom = (text, idx) => {
+      const rest = text.slice(idx)
+      const end = rest.slice(1).search(/\n {2}(?:ops\.[A-Za-z_$]|async function |function |const )/)
+      return end < 0 ? rest : rest.slice(0, end + 1)
+    }
+    /** 收集某个形参被读到的所有键：`a.x` 与 `const { x, y } = a` 两种写法都收 */
+    const keysFromVar = (src, name) => {
+      const keys = new Set()
+      const re = new RegExp(`\\b${name}\\s*\\.\\s*([A-Za-z_$][\\w$]*)`, 'g')
+      let m
+      while ((m = re.exec(src))) keys.add(m[1])
+      const re2 = new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${name}\\b`, 'g')
+      while ((m = re2.exec(src))) keysOf(m[1]).forEach((k) => keys.add(k))
+      return [...keys]
+    }
+    /**
+     * ops 层某个函数的参数键。三种写法都得认（本项目三种都有）：
+     *   `ops.x = ({ a, b }) => ...`        形参直接解构
+     *   `ops.x = (args = {}) => ...`       函数体里读 args.a
+     *   `ops.x = someFn`                   别名，真身 `async function someFn(args)` 体里解构
+     */
+    const opsParamKeys = (name) => {
+      const assign = new RegExp(`\\.\\s*${name}\\s*=\\s*`).exec(opsSrc)
+      if (!assign) return null
+      const at = assign.index
+      const win = windowFrom(opsSrc, at)
+      const destr = /^\.[^\n=]*=\s*(?:async\s*)?\(?\s*\{([^}]*)\}/.exec(win)
+      if (destr) return keysOf(destr[1])
+      const named = /^\.[^\n=]*=\s*(?:async\s*)?\(?\s*([A-Za-z_$][\w$]*)\s*=?[^)]*\)?\s*=>/.exec(win)
+      if (named) {
+        const k = keysFromVar(win, named[1])
+        if (k.length) return k
+      }
+      /* 别名：ops.x = someFn */
+      const alias = /=\s*([A-Za-z_$][\w$]*)\s*\n/.exec(win) || /=\s*([A-Za-z_$][\w$]*)\s*$/.exec(win.trimEnd())
+      if (alias) {
+        const real = new RegExp(`(?:async\\s+)?function\\s+${alias[1]}\\s*\\(\\s*([A-Za-z_$][\\w$]*)`).exec(opsSrc)
+        if (real) {
+          const idx = opsSrc.indexOf(real[0])
+          return keysFromVar(windowFrom(opsSrc, idx), real[1])
+        }
+      }
+      return null
+    }
+    /** @returns {{keys:string[], unknown:boolean}} unknown=有参数但静态认不出形参名 */
+    const paramKeys = (fn) => {
+      const src = String(fn)
+      const cut = src.indexOf('=>')
+      const head = cut >= 0 ? src.slice(0, cut) : src
+      const destr = head.match(/\{([^}]*)\}/)
+      if (destr) return { keys: keysOf(destr[1]), unknown: false }
+      const one = head.match(/\(\s*([A-Za-z_$][\w$]*)\s*\)/)
+      if (!one) return { keys: [], unknown: false }
+      const name = one[1]
+      const used = keysFromVar(src, name)
+      if (used.length) return { keys: used, unknown: false }
+      const pass = new RegExp(`ops\\.([A-Za-z_$][\\w$]*)\\s*\\(\\s*${name}\\s*\\)`).exec(src)
+      if (pass) {
+        const k = opsParamKeys(pass[1])
+        return k ? { keys: k, unknown: false } : { keys: [], unknown: true }
+      }
+      return { keys: [], unknown: false }
+    }
+    const undeclared = []
+    const unknown = []
+    let inspected = 0
+    for (const n of Object.keys(serverMod.TOOLS)) {
+      const t = serverMod.TOOLS[n]
+      const props = Object.keys((t.inputSchema && t.inputSchema.properties) || {})
+      const info = paramKeys(t.handler)
+      if (info.unknown) unknown.push(n)
+      if (info.keys.length) inspected++
+      for (const k of info.keys) if (!props.includes(k)) undeclared.push(`${n}.${k}`)
+    }
+    /* inspected 是防空转判据：全都没提取到就说明提取器坏了，不能当通过 */
+    check(
+      '18. 每个工具 handler 读的参数都在 inputSchema 里声明（否则调用方按 schema 传不进来）',
+      undeclared.length === 0 && unknown.length === 0 && inspected >= 6,
+      undeclared.length
+        ? `未声明：${undeclared.join(', ')}`
+        : unknown.length
+          ? `认不出形参：${unknown.join(', ')}`
+          : `${inspected} 个工具的参数已核对`
+    )
+  }
+  try {
+    fs.rmSync(tmpProfile, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+
   console.log(`\nMCP_BRIDGE_STATS total=${pass + fail} pass=${pass} fail=${fail}`)
   console.log(fail ? 'MCP_BRIDGE_FAILED' : 'MCP_BRIDGE_OK')
   process.exitCode = fail ? 1 : 0
 }
 
-main()
+main().catch((e) => {
+  console.error('[check-mcp-bridge] 自身异常：', e && e.stack ? e.stack : e)
+  process.exitCode = 2
+})

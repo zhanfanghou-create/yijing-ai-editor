@@ -70,6 +70,18 @@ function outputSizeFor(baseW, baseH, key) {
   const w = Math.max(2, Math.round(Number(baseW) || 1920))
   const h = Math.max(2, Math.round(Number(baseH) || 1080))
   const ratio = aspectRatioOf(key)
+  const even = (n) => Math.max(2, Math.floor(n / 2) * 2)
+  /**
+   * 已经是这个比例了就不要"再裁一次"。
+   *
+   * 面板会把算好的尺寸（例如 720P + 9:16 = 404×720）连同 aspect 一起发给导出侧，
+   * 导出侧再拿它当基准算一遍 —— 由于偶数取整，404/720 = 0.5611 与 9/16 有 1px 的差，
+   * 第二遍会再裁掉 2px，成片变成 404×718：面板写着 404×720、文件却是 404×718。
+   * 容差 1.5px：真换比例时误差是几十上百像素，不会被这条误判。
+   */
+  if (Math.abs(w - h * ratio) <= 1.5 || Math.abs(h - w / ratio) <= 1.5) {
+    return { width: even(w), height: even(h) }
+  }
   let outW = w
   let outH = h
   if (w / h > ratio) {
@@ -80,10 +92,7 @@ function outputSizeFor(baseW, baseH, key) {
     outH = Math.round(w / ratio)
   }
   // 向下取偶数：宁可小 1px，也不要让 ffmpeg 在编码那一步挂掉
-  return {
-    width: Math.max(2, Math.floor(outW / 2) * 2),
-    height: Math.max(2, Math.floor(outH / 2) * 2)
-  }
+  return { width: even(outW), height: even(outH) }
 }
 
 module.exports = {

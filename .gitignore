@@ -10,6 +10,10 @@ dist-win*/
 dist-check/
 # 打包正式输出（2026-10-31 从 dist-win 改名，绕开被独占的旧目录）
 dist-app/
+# 跨仓库协作台（与镜枢互提开发目的，见 COLLAB.md）。
+# 不入库的原因：里面是对面提交过来的内容与回执，属于工作区状态，不是本仓库的产物。
+# 契约本身在 COLLAB.md（入 git），所以路径丢了也能从契约里找回来。
+_collab/
 dist-installer*/
 release/
 _site/

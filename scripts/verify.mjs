@@ -2540,7 +2540,7 @@ const GATES = [
   },
   {
     id: 'mcp-bridge',
-    name: '契约·MCP 桥（镜枢 ↔ 剪辑软件：9 工具 · stdout 纯洁 · 自动注册 · 打包覆盖）',
+    name: '契约·MCP 桥（镜枢 ↔ 剪辑软件：28 工具 · stdout 纯洁 · 自动注册 · 打包覆盖）',
     argv: [NODE, 'tools/check-mcp-bridge.mjs'],
     // 稳定数字 18。这道闸盯的是"坏掉都不报错"的一整组东西：
     //   · 四个文件在不在、工具表是不是**恰好**那 9 个（少一个 agent 就少一项能力）；
@@ -2554,7 +2554,13 @@ const GATES = [
     //   · 第 14 条：**隔离运行不写用户全局配置**。E2E/取证都带 `--user-data-dir=<临时>`，
     //     但 `appData` 仍是真实 `%APPDATA%` —— 没守卫时一次全量 verify 就会把用户
     //     真实的 `%APPDATA%\yegin\mcp.json` 冲成 `Temp/yjai-e2e/.insp-fx-*`（实测踩过）。
-    expected: 18,
+    // 22 = 18 + 文件表多一条（mcp-ops.js）+ 运行期三条（工具表逐字一致 / ops 被打包覆盖 /
+    //      handler 真跑一次 yijing_status）。静态扫描看不见"工具表能加载吗"，只有运行期能。
+    // 23 = 再加一条契约：handler 读的参数必须在 inputSchema 里声明过。
+    //      `yijing_open_app` 曾经 additionalProperties:false 却一个属性都没声明 ——
+    //      handler 读 args.draftId，调用方按 schema 校验后根本传不进去，
+    //      本地直调正常、只有真 agent 调才"打不开草稿"。这条只能静态契约拦住。
+    expected: 23,
     marker: /MCP_BRIDGE_OK/,
     count: /MCP_BRIDGE_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -2573,6 +2579,67 @@ const GATES = [
     expected: 8,
     marker: /MCP_BRIDGE_SELFTEST_OK/,
     count: /MCP_BRIDGE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'mcp-agent-e2e',
+    name: '真机·智能体全流程（只靠 MCP 工具调用建草稿→多轨→调色字幕特效→导出→ffprobe+像素核验）',
+    argv: [NODE, 'tools/mcp-agent-e2e.mjs'],
+    // 稳定数字 25。这道闸回答的是"agent 到底能不能把片子做出来"：
+    //   · 按镜枢的方式拉起 stdio server（不是直接调内部函数），全程只发 JSON-RPC；
+    //   · 判据读消费端：成片用 ffprobe 读规格/音轨，抽帧算 max|r-g| 证明 mono 真的进了成片，
+    //     底部亮像素证明字幕真的烧进画面（"返回 ok"不算证据）；
+    //   · 最后一条是硬断言「25 条全跑到底」—— 中途抛错时前面只记了几条，
+    //     没有这一条会打印 total=9 却仍 _OK。
+    expected: 25,
+    marker: /MCP_AGENT_OK/,
+    count: /MCP_AGENT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'app-cli-e2e',
+    name: '真机·智能体唤起（--open-draft 冷启动进编辑器 / 第二个实例切草稿 / 不带参数不改行为）',
+    argv: [NODE, 'tools/app-cli-e2e.mjs'],
+    // 稳定数字 10。镜枢的用法是"建完草稿 → 打开给你看"，这条链只有两个坏法，
+    // 而且都不报错：参数没读到（停在首页，用户以为 agent 没干活）、读到了但没恢复内容
+    // （名字对、时间线空）。所以判据读 DOM（页签 / 工程名 / 片段数）。
+    // 第二轮专门钉 `second-instance`：Chromium 会把 `--open-draft` 的**值挪到 argv 末尾**，
+    // 按"下一个参数"读会得到空串 —— 表现是再唤起一次只把窗口拉到前面。
+    expected: 10,
+    marker: /APP_CLI_OK/,
+    count: /APP_CLI_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'installer-silent',
+    name: '自证·安装器静默参数（--silent / 目录两种写法 / 三个开关 / 结果文件原子写）',
+    argv: [NODE, 'tools/installer-silent-selftest.mjs'],
+    // 稳定数字 14。判据是"参数 → 安装选项"的映射：解析错了的表现是
+    // "双击还弹窗"或"装到默认目录去了"，两者都不会报错。
+    expected: 14,
+    marker: /INSTALLER_SILENT_OK/,
+    count: /INSTALLER_SILENT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'mcp-manifest',
+    name: '契约·MCP 工具清单真源（packages/desktop/mcp-tools.json 与运行期工具表逐字一致）',
+    argv: [NODE, 'tools/gen-mcp-manifest.mjs', '--check'],
+    // 稳定数字 5。为什么需要这份 JSON：镜枢仓库里内置了「艺镜AI剪辑」集成卡片
+    // （`builtin/mcp/yijing-editor/integration.json` 的 `toolCount`）与一条硬断言。
+    // 这边加工具、对面看不到，数字就会长期对不上，而双方的单测都发现不了。
+    // 清单从**运行期** TOOLS 生成（不读源码文本），所以手改 JSON 一定会被这条判红。
+    expected: 5,
+    marker: /MCP_MANIFEST_OK/,
+    count: /MCP_MANIFEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'mcp-install-e2e',
+    name: '真机·智能体装软件并唤起（故意继承 ELECTRON_RUN_AS_NODE=1，装到临时目录再打开）',
+    argv: [NODE, 'tools/mcp-install-e2e.mjs'],
+    // 稳定数字 11。这道闸补的是"第一公里"：另外三道分头验了参数映射、剪片全流程、
+    // 直接拉 exe 开草稿，**唯独没人验过"agent 装完能不能打开"**。
+    // ⚠️ 前置：先 `npm run installer:build` 出安装包；缺包会直接判红并给出命令
+    //    （宁可红得明白，也不要跳过 —— 跳过就是"装不上却全绿"）。
+    expected: 11,
+    marker: /MCP_INSTALL_OK/,
+    count: /MCP_INSTALL_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
 ]
 

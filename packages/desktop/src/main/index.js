@@ -1400,6 +1400,40 @@ function sanitizeOutName(raw) {
 
 /* -------------------------------- 启动 -------------------------------- */
 
+/**
+ * 命令行唤起：`--open-draft <id>` —— 智能体装完软件后直接打开它刚建的草稿。
+ *
+ * ⚠️ 第二次启动时**参数会被 Chromium 重排**（实测 2026-10-31）：
+ *    传进去的是 `--open-draft dp2`，`second-instance` 里收到的却是
+ *    `[... , '--open-draft', '--allow-file-access-from-files', ..., '<app>/index.js', 'dp2']`
+ *    —— 开关还在原位，**值被挪到了最后**。只按"下一个参数就是值"读会得到空串，
+ *    表现是"agent 再唤起一次，窗口只被拉到前面、草稿没换"。
+ *    所以拿不到相邻值时，退回到"末尾那个不像开关、也不是脚本路径的 token"。
+ *
+ * 也接受 `--open-draft=<id>`（单个 token，不受重排影响）。
+ */
+function cliOpenDraft(argv = process.argv) {
+  const list = (Array.isArray(argv) ? argv : []).map((v) => String(v || ''))
+  const idLike = (v) => /^[A-Za-z0-9_-]{1,64}$/.test(String(v || ''))
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i]
+    if (a.startsWith('--open-draft=')) {
+      const v = a.slice('--open-draft='.length).trim()
+      return idLike(v) ? v : ''
+    }
+    if (a !== '--open-draft') continue
+    const next = String(list[i + 1] || '').trim()
+    if (next && !next.startsWith('-')) return idLike(next) ? next : ''
+    /* 值被重排到了末尾：跳过开关与脚本路径，取最后一个像 id 的 token */
+    const tail = list.filter((t) => t && !t.startsWith('-') && !/\.(c?js|mjs)$/i.test(t))
+    for (let k = tail.length - 1; k >= 0; k--) {
+      if (idLike(tail[k])) return tail[k]
+    }
+    return ''
+  }
+  return ''
+}
+
 // 单实例：第二次启动直接把已有窗口拉到前面，不再开一个
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -1429,14 +1463,37 @@ if (!gotLock) {
    */
   app.setAppUserModelId('com.yijing.aieditor')
 
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
     }
+    /* 第二次启动带了 draft id（智能体重复唤起）⇒ 让已有窗口切过去 */
+    const wanted = cliOpenDraft(argv || [])
+    if (wanted && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app:open-draft', wanted)
+    }
   })
 
   app.whenReady().then(() => {
+    /**
+     * `--open-draft <id>`：把目标草稿写进「当前草稿」设置，再交给既有的启动恢复逻辑打开。
+     * 走设置而不是新加一条渲染层分支 —— 打开草稿的状态恢复（时间线/素材/比例/播放头）
+     * 只有一份实现，多一条路径就多一处会漏字段。
+     */
+    const bootDraft = cliOpenDraft()
+    if (bootDraft) {
+      try {
+        const s = readSettings()
+        s.currentDraftId = bootDraft
+        /* 启动恢复只负责"把草稿装进工作区"，不会切页面（平时启动停在首页）。
+           智能体要求的是"打开它"，所以留一个一次性标记，由渲染层消费后清掉。 */
+        s._openEditorOnce = 1
+        writeSettings(s)
+      } catch (e) {
+        console.warn('[CLI] 写入待打开草稿失败：', e && e.message)
+      }
+    }
     registerMediaProtocol()
     registerIpc()
     createWindow()

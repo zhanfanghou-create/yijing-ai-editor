@@ -13,6 +13,23 @@ contextBridge.exposeInMainWorld('yjai', {
   /** 重启应用（硬件加速这类启动期开关改完只能重启生效） */
   restart: () => ipcRenderer.invoke('app:restart'),
 
+  /**
+   * 智能体再次唤起（第二个实例带 `--open-draft <id>`）时，主进程会让当前窗口切过去。
+   * 返回取消订阅函数；cb 抛错不影响后续事件。
+   */
+  onOpenDraft: (cb) => {
+    if (typeof cb !== 'function') return () => {}
+    const handler = (_event, id) => {
+      try {
+        cb(String(id || ''))
+      } catch {
+        /* 渲染层自己的异常不该把监听器带崩 */
+      }
+    }
+    ipcRenderer.on('app:open-draft', handler)
+    return () => ipcRenderer.removeListener('app:open-draft', handler)
+  },
+
   settings: {
     get: (key) => ipcRenderer.invoke('settings:get', key),
     set: (key, value) => ipcRenderer.invoke('settings:set', key, value)
