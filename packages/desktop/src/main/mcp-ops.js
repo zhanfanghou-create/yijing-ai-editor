@@ -36,6 +36,7 @@ const subtitle = require('../shared/subtitle.js')
 const templates = require('../shared/templates.js')
 const packaging = require('../shared/packaging.js')
 const compound = require('../shared/compound.js')
+const layerMod = require('../shared/layers.js')
 const multicam = require('../shared/multicam.js')
 const region = require('../shared/region.js')
 const facefx = require('../shared/facefx.js')
@@ -76,7 +77,8 @@ const PATCHABLE = [
   'opacity', 'scale', 'posX', 'posY', 'rotate', 'fadeIn', 'fadeOut',
   'adjust', 'beauty', 'curves', 'wheels', 'hslBands', 'warp', 'crop', 'effects',
   'textStyle', 'textSize', 'textScale', 'textColor', 'textAnchor', 'textOffset',
-  'textAnim', 'keyframes', 'pip', 'border', 'face', 'faceTrack', 'pack', 'group', 'url', 'path'
+  'textAnim', 'keyframes', 'pip', 'border', 'face', 'faceTrack', 'pack', 'group', 'url', 'path',
+  'enabled'
 ]
 
 function fail(msg) {
@@ -260,6 +262,12 @@ function normalizePatch(patch, ctx = {}) {
       }
       case 'group':
         out.group = raw === null ? '' : String(raw)
+        break
+      /* 「停用片段」（时间线右键 V）：字段早就存在于草稿里（片子上会显示「已停用」角标、
+         导出时不出片），但之前 MCP 写不进去 —— 界面上有、agent 做不到。
+         注意别和 `delete` 混：停用是可逆的，片段还在时间线上占位。 */
+      case 'enabled':
+        out.enabled = Boolean(raw)
         break
       case 'pack':
       case 'url':
@@ -850,6 +858,21 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
       const target = finite(at, 0)
       clip.start = Math.max(0, target)
       return { summary: saveDraft(draft.id, draft.name, draft.data), clip }
+    }
+
+    /* 「上移一层 / 下移一层」（叠加轨的画中画层叠顺序）。
+       ⚠️ 走界面同一个 `shared/layers.js:moveLayer` —— 它返回的是**整轨重排后的补丁数组**，
+       不是"把这一段的 z 加一"。自己改单个 z 会造成两段 z 相同，
+       预览按 DOM、导出按 overlay 链，两边排序不一致就出现「预览谁在上面、成片反过来」。 */
+    if (opKey === 'layer') {
+      const dir = name === 'down' || to === -1 || to === 'down' ? -1 : 1
+      const patches = layerMod.moveLayer(clips, clipId, dir)
+      if (!patches.length) fail(`片段 ${clipId} 已经在${dir > 0 ? '最上' : '最下'}层，或不在叠加轨上`)
+      for (const p of patches) {
+        const i = clips.findIndex((c) => c && c.id === p.id)
+        if (i >= 0) clips[i] = { ...clips[i], z: p.z }
+      }
+      return { summary: saveDraft(draft.id, draft.name, draft.data), moved: dir > 0 ? 'up' : 'down', changed: patches.length }
     }
 
     fail(`不支持的 op：${opKey}（move/split/trim/duplicate/group/ungroup/compound/expand/multicam/cut/region-copy/region-delete/region-trim/reorder）`)

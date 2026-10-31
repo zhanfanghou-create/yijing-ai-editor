@@ -2584,13 +2584,15 @@ const GATES = [
     id: 'mcp-agent-e2e',
     name: '真机·智能体全流程（只靠 MCP 工具调用建草稿→多轨→调色字幕特效→导出→ffprobe+像素核验）',
     argv: [NODE, 'tools/mcp-agent-e2e.mjs'],
-    // 稳定数字 25。这道闸回答的是"agent 到底能不能把片子做出来"：
+    // 稳定数字 27。这道闸回答的是"agent 到底能不能把片子做出来"：
     //   · 按镜枢的方式拉起 stdio server（不是直接调内部函数），全程只发 JSON-RPC；
     //   · 判据读消费端：成片用 ffprobe 读规格/音轨，抽帧算 max|r-g| 证明 mono 真的进了成片，
     //     底部亮像素证明字幕真的烧进画面（"返回 ok"不算证据）；
-    //   · 最后一条是硬断言「25 条全跑到底」—— 中途抛错时前面只记了几条，
+    //   · 最后一条是硬断言「27 条全跑到底」—— 中途抛错时前面只记了几条，
     //     没有这一条会打印 total=9 却仍 _OK。
-    expected: 25,
+    //   25/26 是 2026-10-31 补的两条：停用片段（enabled）与叠加轨层级（layer）。
+    //   两者都是界面右键菜单里有的动作，此前 MCP 写不进去（"界面上有、agent 做不到"）。
+    expected: 27,
     marker: /MCP_AGENT_OK/,
     count: /MCP_AGENT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -2616,6 +2618,20 @@ const GATES = [
     expected: 14,
     marker: /INSTALLER_SILENT_OK/,
     count: /INSTALLER_SILENT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'dual-channel',
+    name: '契约·双通道对等（界面 92 个入口 ↔ 28 个 MCP 工具双向覆盖，缺口必须登记）',
+    argv: [NODE, 'tools/check-dual-channel.mjs'],
+    // 稳定数字 9。Jason 的硬指标：每项功能都要①人在界面上能独立做完 ②agent 只靠 MCP
+    // 能全自动做完。这条闸门**自动枚举**界面入口（带 title 的按钮 / 时间线右键项 /
+    // 侧栏页签 / 顶栏菜单），再与 tools/dual-channel-map.json 对表：
+    //   反向漏 = 界面上有、agent 做不到（或反之），都判红；
+    //   锚点写错 = 表格说谎，也判红；
+    //   expectedGaps 里留着已补好的条目 = 登记过期，同样判红（否则表会绿着烂掉）。
+    expected: 9,
+    marker: /DUAL_CHANNEL_OK/,
+    count: /DUAL_CHANNEL_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
     id: 'mcp-manifest',

@@ -268,7 +268,7 @@ const TOOLS = {
 
   yijing_update_clip: {
     ...S(
-      '改一个片段的任何属性 —— 位置/缩放/旋转/透明度/速度/音量/淡入淡出、滤镜与强度、转场、画面特效、调色（adjust/curves/wheels/hslBands）、变形（warp/crop）、高级效果 effects（圆角/蒙版/抠像/描边/阴影/混合模式）、文字样式与动画、关键帧、画中画、边框、人物特效。只传要改的字段；字段名写错会**报错**，不会静默无效。',
+      '改一个片段的任何属性 —— 位置/缩放/旋转/透明度/速度/音量/淡入淡出、滤镜与强度、转场、画面特效、调色（adjust/curves/wheels/hslBands）、变形（warp/crop）、高级效果 effects（圆角/蒙版/抠像/描边/阴影/混合模式）、文字样式与动画、关键帧、画中画、边框、人物特效、停用（enabled:false，可逆，片段仍占位）。只传要改的字段；字段名写错会**报错**，不会静默无效。',
       {
         draftId: str('草稿 id'),
         clipId: str('片段 id'),
@@ -293,16 +293,16 @@ const TOOLS = {
 
   yijing_timeline_op: {
     ...S(
-      '时间线结构操作。op：move（换轨/挪时间）、split（at 处切开）、trim（from/to 掐头去尾）、duplicate（复制到自身之后）、group/ungroup（组合）、compound（合成复合片段）/expand（拆开）、multicam（多机位）/cut（切机位）、region-copy/region-paste/region-delete/region-trim（时间区域操作）。',
+      '时间线结构操作。op：move（换轨/挪时间）、split（at 处切开）、trim（from/to 掐头去尾）、duplicate（复制到自身之后）、group/ungroup（组合）、compound（合成复合片段）/expand（拆开）、multicam（多机位）/cut（切机位）、region-copy/region-paste/region-delete/region-trim（时间区域操作）、reorder（挪到某个时间点）、layer（叠加轨上移/下移一层，to 或 name 给 up/down）。',
       {
         draftId: str('草稿 id'),
-        op: str('move/split/trim/duplicate/group/ungroup/compound/expand/multicam/cut/region-copy/region-paste/region-delete/region-trim'),
+        op: str('move/split/trim/duplicate/group/ungroup/compound/expand/multicam/cut/region-copy/region-paste/region-delete/region-trim/reorder/layer'),
         clipId: str('目标片段 id'),
         clipIds: { type: 'array', items: { type: 'string' }, description: '批量操作的片段 id' },
-        at: num('时间点（秒）：split 的切点 / cut 的位置 / paste 的落点'),
+        at: num('时间点（秒）：split 的切点 / cut 的位置 / paste 的落点 / reorder 的新起点'),
         from: num('起始：trim 的新开头 / region 的起点 / cut 的机位号'),
-        to: num('结束：trim 的新结尾 / region 的终点（秒）'),
-        name: str('名字（组合标签 / 复合片段名）'),
+        to: num('结束：trim 的新结尾 / region 的终点（秒）/ layer 的方向（1 上移，-1 下移）'),
+        name: str('名字（组合标签 / 复合片段名 / layer 的方向 up|down）'),
         mode: str('region-delete 的 mode：ripple（默认，后面内容左移）/ gap（留空）')
       },
       ['draftId', 'op']

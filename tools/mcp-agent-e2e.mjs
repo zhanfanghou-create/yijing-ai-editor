@@ -36,7 +36,7 @@ const require = createRequire(import.meta.url)
 const ASPECT = require(path.join(ROOT, 'packages', 'desktop', 'src', 'shared', 'aspect.js'))
 
 /** 断言的条数（改动断言必须同步 scripts/verify.mjs 的 expected） */
-export const TOTAL_ASSERTIONS = 25
+export const TOTAL_ASSERTIONS = 27
 
 const ffmpegBin = () => process.env.FFMPEG_PATH || 'ffmpeg'
 const ffprobeBin = () => {
@@ -413,6 +413,46 @@ async function main() {
     /* 24. 删除 */
     const del = await client.tool('yijing_delete_clips', { draftId, clipIds: [stickerClip.id] })
     record('24. delete_clips 生效', del.removed >= 1, `removed=${del.removed}`)
+
+    /* 25. 停用片段（enabled）—— 界面上右键「停用片段」的等价物。
+       要点：① 写进去要真读得回来（false 不是"没这个字段"）；② 片段**仍在时间线**上
+       （不是被删掉）—— 这两条分开判，才不会把"删掉了"当成"停用了"。 */
+    const disabled = await client.tool('yijing_update_clip', { draftId, clipId: split.left, patch: { enabled: false } })
+    const afterDisable = await client.tool('yijing_read_draft', { draftId })
+    const leftNow = (afterDisable.data.clips || []).find((c) => c.id === split.left)
+    record(
+      '25. update_clip 能停用片段（enabled:false 读得回来，且片段没被删）',
+      disabled.ok !== false && Boolean(leftNow) && leftNow.enabled === false,
+      leftNow ? `enabled=${leftNow.enabled} 仍在轨=${leftNow.track}` : '片段不见了（被误删）'
+    )
+
+    /* 26. 层级（layer）—— 叠加轨的画中画上下层。加两枚贴纸再上移，判据读**整轨 z 序列**，
+       不读单段（moveLayer 返回的是整轨重排补丁，只改一个 z 会让两段撞号）。 */
+    const twoKeys = (cat.stickers || []).map((s) => s.key).slice(0, 2)
+    const s2 = await client.tool('yijing_add_sticker', { draftId, stickerKeys: [twoKeys[0]], start: 0, duration: 1 })
+    const s3 = await client.tool('yijing_add_sticker', { draftId, stickerKeys: [twoKeys[1] || twoKeys[0]], start: 0.2, duration: 1 })
+    const idLow = s2.added && s2.added[0] && s2.added[0].id
+    const idHigh = s3.added && s3.added[0] && s3.added[0].id
+    const beforeLayer = await client.tool('yijing_read_draft', { draftId })
+    const zOf = (doc, id) => {
+      const c = (doc.data.clips || []).find((x) => x.id === id)
+      return c ? Number(c.z || 0) : NaN
+    }
+    const lowBefore = zOf(beforeLayer, idLow)
+    await client.tool('yijing_timeline_op', { draftId, op: 'layer', clipId: idLow, to: 1 })
+    const afterLayer = await client.tool('yijing_read_draft', { draftId })
+    const lowAfter = zOf(afterLayer, idLow)
+    const highAfter = zOf(afterLayer, idHigh)
+    const overlayZ = (afterLayer.data.clips || [])
+      .filter((c) => c && c.track === 'overlay')
+      .map((c) => Number(c.z || 0))
+      .sort((a, b) => a - b)
+    const zUnique = new Set(overlayZ).size === overlayZ.length
+    record(
+      '26. timeline_op layer 上移一层（z 真的变了，且叠加轨 z 不撞号）',
+      Number.isFinite(lowBefore) && Number.isFinite(lowAfter) && lowAfter > lowBefore && lowAfter > highAfter && zUnique,
+      `z ${lowBefore}→${lowAfter}（另一枚 ${highAfter}）· 叠加轨 z=[${overlayZ.join(',')}]`
+    )
 
     realDone = true
   } catch (e) {
