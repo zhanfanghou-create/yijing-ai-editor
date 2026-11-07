@@ -35,9 +35,12 @@ const require = createRequire(import.meta.url)
    9:16 是"短边守恒地展开"（720p → 720×1280），不是在 1280×720 里裁出一块竖屏内接矩形
    —— 后者会得到 404×720，短边只有 404，等于偷偷降了两档分辨率 */
 const ASPECT = require(path.join(ROOT, 'packages', 'desktop', 'src', 'shared', 'aspect.js'))
+/* 档位基准也读同一份、不在这里硬编码：期望尺寸要由「档位 + 画面比例」现算，
+   否则档位一调，断言还在验旧数字，看着是绿的其实什么都没验。 */
+const RATE = require(path.join(ROOT, 'packages', 'desktop', 'src', 'shared', 'exportRate.js'))
 
 /** 断言的条数（改动断言必须同步 scripts/verify.mjs 的 expected） */
-export const TOTAL_ASSERTIONS = 31
+export const TOTAL_ASSERTIONS = 32
 
 const ffmpegBin = () => process.env.FFMPEG_PATH || 'ffmpeg'
 const ffprobeBin = () => {
@@ -516,6 +519,37 @@ async function main() {
          找不到字体说明这台机器环境不对，应该红出来，而不是让它长得像通过。 */
       record('30. import_font 复制落盘且列表查得到（只写设置或只复制都会坏）', false, '本机找不到任何 ttf，无法验证字体导入')
     }
+
+    /* 31. 4K 竖屏：档位描述的是「像素量级」，换比例时短边守恒展开（4K 竖屏 = 2160×3840），
+       不是在大框里裁一块竖屏内接矩形（那样短边只剩 1214，界面写着 4K、文件能播、谁都不报错）。
+       ⚠️ 这条只为最高档而存在：短边上限（2160）只在 4K 才被触发，720p/1080p 永远走不到那条分支，
+       所以前面那些导出断言**不可能**替它兜底。它同时是给镜枢的保证：
+       传 resolution:"4k" 拿到的是真 4K 短边，不是"档位名对了、像素被偷偷砍半"。 */
+    const out4k = path.join(outDir, 'stage3-4k.mp4')
+    await client.tool('yijing_export_video', {
+      draftId,
+      outPath: out4k,
+      resolution: '4k',
+      aspect: '9:16',
+      codec: 'h264',
+      quality: 70
+    })
+    const info4k = probeFile(out4k)
+    const v4k = info4k && (info4k.streams || []).find((s) => s.codec_type === 'video')
+    /**
+     * 期望值**不能**用 `ASPECT.outputSizeFor` 现算 —— 那是拿被测代码验证被测代码：
+     * 换算逻辑一旦被改坏，期望值会跟着一起坏，两边相等照样绿。负对照实测过这条路：
+     * 注入旧的裁内接语义后，现算的期望值是 1214×2160、成片是 1214×2158，
+     * 只因为两遍偶数取整差了 2px 才红 —— 差 2px 纯属运气，不是判据。
+     * 所以这里用**客观规格**：4K 短边恒为 2160（exportRate.MAX_SHORT_SIDE 是唯一真源），
+     * 竖屏长边 = 短边 × 16/9。这两个数跟实现怎么写没关系，实现错了就一定对不上。
+     */
+    const want4k = { width: RATE.MAX_SHORT_SIDE, height: (RATE.MAX_SHORT_SIDE * 16) / 9 }
+    record(
+      `31. 4K 竖屏成片 ${want4k.width}x${want4k.height}（短边守恒展开，不是在大框里裁内接）`,
+      Boolean(v4k) && v4k.width === want4k.width && v4k.height === want4k.height,
+      v4k ? `实际 ${v4k.width}x${v4k.height}` : '读不到成片'
+    )
 
     realDone = true
   } catch (e) {

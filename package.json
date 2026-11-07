@@ -1,7 +1,7 @@
 {
   "name": "yijing-ai-editor",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "YiJing AI Editor / 艺镜剪辑 — 纯本地的开源视频剪辑客户端（Electron + React + 本机 ffmpeg）",
   "license": "MIT",
   "workspaces": [
