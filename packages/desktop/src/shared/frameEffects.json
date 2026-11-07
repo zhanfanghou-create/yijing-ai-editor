@@ -9,9 +9,22 @@
     "  不需要联网、不需要下载素材、也不需要等导出。",
     "  将来要接别的特效来源，作为**同一个特效列表的另一个来源**追加即可。",
     "",
-    "kind 只有两种，这是被一条硬约束逼出来的（不是偷懒）：",
+    "kind 有四类，每一类都由一条硬约束逼出来（不是偷懒）：",
     "  · transform → 挂 .canvas-frame 本身（画面位移/缩放）",
     "  · overlay   → 挂 .canvas-fx 覆盖层（叠在画面上的闪光/故障/扫描线/漏光/暗角）",
+    "  · pack      → 挂 .canvas-fx 覆盖层，但里面放的是**素材包里的真素材**（逐帧序列）",
+    "  · warp      → 整幅画面逐像素重映射（鱼眼）。预览挂 .canvas-content 的 `filter: url(#…)`，",
+    "                导出走 ffmpeg 的 lenscorrection",
+    "  · none      → 无特效",
+    "",
+    "  pack 类为什么存在：泡泡 / 满屏问号 / 法阵 / 雨丝 这些**不是调色也不是光效**，",
+    "  CSS 渐变和 ffmpeg 滤镜都画不出来。上一版把它们全退化成同一个暖光扫过 ——",
+    "  用户点 20 张不同的卡看到同一个东西，而所有静态判据全绿（图与键确实一一对应）。",
+    "  现在它们指向 `resources/fxpacks/overlay-fx.yjpack` 里的帧序列：",
+    "  预览用包内的雪碧图 + CSS steps 步进，导出把同一批 PNG 叠上去，两边是同一批像素。",
+    "  ⚠️ `pack` 字段 = 包内效果 key，**必须与包 manifest 里的一致**；",
+    "     包没装时卡片仍显示（它来自静态表），但点了不会有画面变化 ——",
+    "     所以 `check-fx-packs` 会同时钉「表里的 key 都在包里」和「包里的 key 都在表里」。",
     "",
     "  ⚠️ **没有 filter 类**。原因：预览的调色也是写在 .canvas-frame 的 `filter` 上的",
     "  （Stage.jsx 的 previewStyle），而 CSS 动画的优先级**高于内联样式** ——",
@@ -19,6 +32,11 @@
     "  用户看到的是「加了滤镜又加了特效，结果滤镜没了」，而且没有任何报错。",
     "  所以闪光/故障/扫描这类需要改像素的效果一律改走覆盖层（半透明色 + 混合模式），",
     "  由 check-frame-effects 闸门用静态契约钉住：@keyframes 里不许出现 filter 动 .canvas-frame。",
+    "",
+    "  ✅ 但「改像素」不等于只能调亮/压暗：柔化、黑白、褪色、颗粒这几种，",
+    "  用覆盖层自己的 `backdrop-filter` 做（模糊/灰度/棕褐都是 backdrop-filter 支持的函数）。",
+    "  backdrop-filter 改的是**这个覆盖元素背后的像素**，不碰 .canvas-frame 的 `filter` 属性，",
+    "  所以调色不会被顶掉 —— 这条是验证过的，不是推断（见 PITFALLS 26.1）。",
     "",
     "durationMs 是动画一轮的时长；循环次数由 CSS 决定（全部 infinite），",
     "因为特效在参考里也是持续作用的，不是播一次就停。"
@@ -79,6 +97,138 @@
       "kind": "overlay",
       "durationMs": 2600,
       "hint": "四角压暗并缓慢呼吸，视线更聚焦"
+    },
+    {
+      "key": "fx-blur",
+      "label": "柔化虚化",
+      "kind": "overlay",
+      "hint": "整幅画面变柔，适合回忆、梦境，或遮掉不想让人看清的细节"
+    },
+    {
+      "key": "fx-mono",
+      "label": "黑白影调",
+      "kind": "overlay",
+      "hint": "抽掉颜色只留明暗，纪实与年代感"
+    },
+    {
+      "key": "fx-vintage",
+      "label": "复古胶片",
+      "kind": "overlay",
+      "hint": "偏黄褪色、对比略收，老胶片洗出来的观感"
+    },
+    {
+      "key": "fx-noise",
+      "label": "胶片颗粒",
+      "kind": "overlay",
+      "durationMs": 600,
+      "hint": "满屏细颗粒滚动，模拟胶片颗粒与监控噪点"
+    },
+    {
+      "key": "fx-glow",
+      "label": "柔光光晕",
+      "kind": "overlay",
+      "durationMs": 3000,
+      "hint": "画面泛起一层柔光并缓慢呼吸，梦幻、回忆、逆光氛围"
+    },
+    {
+      "key": "fx-fire",
+      "label": "火光跳动",
+      "kind": "overlay",
+      "durationMs": 520,
+      "hint": "暖橙色从画面下缘跳动，炉火、烛光、爆炸余温"
+    },
+    {
+      "key": "fx-cold",
+      "label": "冷调雾气",
+      "kind": "overlay",
+      "durationMs": 3600,
+      "hint": "冷青色调叠一层雾，雨雪、清晨、寒意"
+    },
+    {
+      "key": "fm-bubble",
+      "label": "泡泡",
+      "kind": "pack",
+      "pack": "fm-bubble",
+      "durationMs": 3000,
+      "hint": "肥皂泡从下往上浮，清爽、童话、派对氛围"
+    },
+    {
+      "key": "fm-question",
+      "label": "满屏问号",
+      "kind": "pack",
+      "pack": "fm-question",
+      "durationMs": 3000,
+      "hint": "问号在画面里飘浮，表示疑惑、离谱、搞不懂"
+    },
+    {
+      "key": "fm-heart",
+      "label": "爱心漂浮",
+      "kind": "pack",
+      "pack": "fm-heart",
+      "durationMs": 3000,
+      "hint": "粉红爱心缓缓上浮，浪漫、心动、甜蜜"
+    },
+    {
+      "key": "fm-flower",
+      "label": "繁花环绕",
+      "kind": "pack",
+      "pack": "fm-flower",
+      "durationMs": 3000,
+      "hint": "一圈花沿着画面边缘慢转，中间留空不挡人"
+    },
+    {
+      "key": "fm-particle",
+      "label": "微粒尘埃",
+      "kind": "pack",
+      "pack": "fm-particle",
+      "durationMs": 3000,
+      "hint": "空气里的细小亮尘缓慢漂浮，回忆、唯美、灵魂出窍"
+    },
+    {
+      "key": "fm-mandala",
+      "label": "法阵光环",
+      "kind": "pack",
+      "pack": "fm-mandala",
+      "durationMs": 3000,
+      "hint": "金色同心圆法阵缓慢旋转，奇幻、施法、时空门"
+    },
+    {
+      "key": "fm-moon",
+      "label": "月亮呼吸",
+      "kind": "pack",
+      "pack": "fm-moon",
+      "durationMs": 3000,
+      "hint": "右上角一弯月牙，月色由亮转暗再亮起，夜晚、思乡"
+    },
+    {
+      "key": "fm-thumbsup",
+      "label": "点赞上浮",
+      "kind": "pack",
+      "pack": "fm-thumbsup",
+      "durationMs": 3000,
+      "hint": "金色大拇指往上飘，好评、夸赞、社交反馈"
+    },
+    {
+      "key": "fm-rain",
+      "label": "雨丝",
+      "kind": "pack",
+      "pack": "fm-rain",
+      "durationMs": 3000,
+      "hint": "斜向雨丝下落，底部起一层湿冷雾气，凄凉、离别、阴雨"
+    },
+    {
+      "key": "fm-focus",
+      "label": "焦点取景框",
+      "kind": "pack",
+      "pack": "fm-focus",
+      "durationMs": 3000,
+      "hint": "四角取景框呼吸 + 一条扫描线，像相机在对焦"
+    },
+    {
+      "key": "fx-fisheye",
+      "label": "鱼眼镜头",
+      "kind": "warp",
+      "hint": "整幅画面桶形外扩，边缘轻微拉伸，广角/运动相机/搞怪的观感"
     }
   ]
 }

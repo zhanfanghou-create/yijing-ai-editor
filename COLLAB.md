@@ -60,7 +60,14 @@
 - 服务端：`packages/desktop/src/main/mcp-server.js`
 - 能力层：`packages/desktop/src/main/mcp-ops.js`
 - 工具清单真源：`tools/mcp-tools-list.mjs` 的 `EXPECTED_TOOLS`（**唯一一份**，别处只能引用）
-- 当前：**28 个工具**，`SERVER_VERSION = 1.1.0`
+- 当前：**37 个工具**，`SERVER_VERSION = 1.3.0`（1.3.0 新增 `yijing_tts`：本机配音，把文字读成人声落成一条音频片段；`yijing_denoise_audio`：本机 AI 语音降噪，压掉环境噪声后生成一条音频片段）
+  - 2026-11-03 补了 5 个（**工具面变化，对侧 `integration.json` 的 `toolCount` 要跟**）：
+    `yijing_remove_media`（删素材，**连带删引用它的片段**）· `yijing_import_font` · `yijing_list_fonts`
+    （本机字体，与界面同一份复制/命名规则）· `yijing_detect_beats`（抽包络找重音，可顺带写速度曲线）
+    · `yijing_unpack_draft`（打开 `.yjpack` 解成**新草稿**，不覆盖同名工程）。
+    这五项此前只登记在 `tools/dual-channel-map.json` 的 `expectedGaps` 里（"界面上有、agent 做不到"），
+    现已补齐并从缺口清单删除 —— 剩下的唯一已登记缺口是**智能抠像**（推理只在渲染层的
+    MediaPipe 里，而 MCP server 是独立 spawn 的纯 Node 进程，拿不到 Canvas/WebGL）。
 
 对面需要知道的三个契约：
 
@@ -105,7 +112,12 @@ from / to        谁提给谁
 
 | 编号 | 标题 | 状态 |
 |---|---|---|
-| `to-yegin/2026-10-31-001-tool-surface-28.md` | 工具面 9 → 28，且 schema 全面补齐 | 待对面回执 |
+| `to-yegin/2026-10-31-001-tool-surface-28.md` | 工具面 9 → 28，且 schema 全面补齐 | **已被 002 合并**（数字直接跳到 37） |
+| `to-yegin/2026-11-02-001-tool-surface-30-speech.md` | 工具面 28 → 30（新增本机语音转字幕 + 本机模型安装） | **已被 002 合并** |
+| `to-yegin/2026-11-03-002-task-apply-toolcount-37.md` | **任务单**：`toolCount` 28 → 37（含 summary/hint/playbook 三段文案），一次到位 | **✅ 已由我方代执行（Jason 授权）**：37 已落盘、对面测试 18/18；待对面 `git pull` 确认 + 补回执 |
+
+> 002 是当前**唯一需要对面动手**的一条：只改 `integration.json` 一个文件的四段文本 +
+> 跑一条测试 + 写回执。前两条不必再逐步改数字。
 
 ---
 

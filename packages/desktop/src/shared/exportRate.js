@@ -45,15 +45,38 @@ const RATES = [
 const FPS_MIN = 1
 const FPS_MAX = 120
 
-/** 六档分辨率（与参考客户端的 480P / 720P / 1080P / 2K / 4K / 8K 对齐） */
+/**
+ * 五档分辨率。上限钉在 **4K**（本产品的支持口径）。
+ *
+ * ⚠️ 参考客户端还有 8K 一档，这里故意不给：8K 的单帧 RGBA 是 132MB，
+ *    一次导出要同时挂着几路帧缓冲与遮罩 PNG —— 本机实测一张 8K 静帧能导出来，
+ *    但对真实素材是"选了就开始等，等到最后可能还给 OOM 干掉"。
+ *    给一个「按下去多半失败、失败还得等十分钟才知道」的档位，比没有这一档更糟。
+ *
+ * ⚠️ 已经存过 8K 的草稿/接口调用不许静默掉到 1080P（那是连降两档、用户毫无察觉）：
+ *    `LEGACY_RESOLUTIONS` 把 8k 映射到 4k，同档位的旧值仍然落在"最高档"。
+ */
 const RESOLUTIONS = [
   { id: '480p', width: 854, height: 480 },
   { id: '720p', width: 1280, height: 720 },
   { id: '1080p', width: 1920, height: 1080 },
   { id: '2k', width: 2560, height: 1440 },
-  { id: '4k', width: 3840, height: 2160 },
-  { id: '8k', width: 7680, height: 4320 }
+  { id: '4k', width: 3840, height: 2160 }
 ]
+
+/** 已下架的档位 → 现在落在哪一档（旧草稿、旧 MCP 请求、旧分享包都会带这些值） */
+const LEGACY_RESOLUTIONS = { '8k': '4k' }
+
+/**
+ * 支持的最高像素档：**短边 2160**（4K 的短边）。
+ *
+ * 为什么按短边而不是"3840×2160 的像素总数"：
+ *   · 按总像素卡，4K + 2:1 会被算成 4320×2160（9.33M > 8.29M）而被压回 3840×1920，
+ *     用户明明选了 4K、成片短边却只有 1920；
+ *   · 按短边卡，"4K"在竖屏就是 2160×3840、在 2:1 就是 4320×2160，短边恒定 2160，
+ *     与 `outputSizeFor` 的短边守恒是同一套口径。
+ */
+const MAX_SHORT_SIDE = 2160
 
 const DEFAULT_RATE = '30'
 const DEFAULT_RESOLUTION = '1080p'
@@ -98,25 +121,51 @@ function readRate(value) {
 
 /**
  * 分辨率 id → { id, width, height }。未知 id 退回 1080P（不许把 undefined 传给渲染）。
- * ⚠️ 这里的宽高是**基准画布**（16:9 那一档），实际输出尺寸还要按画面比例裁
+ * ⚠️ 这里的宽高是**基准画布**（16:9 那一档），实际输出尺寸还要按画面比例展开
  *    （见 shared/aspect.js 的 outputSizeFor）：选 16:9 时 1080P 是 1920×1080，
- *    选 9:16 时是 1080×1920。
+ *    选 9:16 时是 1080×1920（短边守恒）。
  */
 function readResolution(value) {
   const raw = String(value === undefined || value === null ? '' : value).trim().toLowerCase()
-  const hit = RESOLUTIONS.find((item) => item.id === raw)
+  const id = LEGACY_RESOLUTIONS[raw] || raw
+  const hit = RESOLUTIONS.find((item) => item.id === id)
   const picked = hit || RESOLUTIONS.find((item) => item.id === DEFAULT_RESOLUTION)
   return { id: picked.id, width: picked.width, height: picked.height }
+}
+
+/**
+ * 把任意宽高夹到"最高 4K"（短边 ≤ 2160），保持宽高比。
+ *
+ * 为什么需要它：分辨率档位不是唯一的入口 —— MCP 工具可以直接传 `width/height`，
+ * 旧草稿里也可能存着当年 8K 档算出来的尺寸。没有这一道，"最高 4K"就只是
+ * 下拉框里的一句承诺：绕开下拉就能把渲染拖进 OOM。
+ *
+ * @param {number} width
+ * @param {number} height
+ * @returns {{width:number, height:number, clamped:boolean}}
+ */
+function clampSize(width, height) {
+  const w = Math.max(2, Math.round(Number(width) || 0))
+  const h = Math.max(2, Math.round(Number(height) || 0))
+  const shortSide = Math.min(w, h)
+  /* 向下取偶数：宁小 1px 也不让 ffmpeg 在 yuv420p 那一步挂掉 */
+  const even = (n) => Math.max(2, Math.floor(n / 2) * 2)
+  if (shortSide <= MAX_SHORT_SIDE) return { width: even(w), height: even(h), clamped: false }
+  const k = MAX_SHORT_SIDE / shortSide
+  return { width: even(w * k), height: even(h * k), clamped: true }
 }
 
 module.exports = {
   RATES,
   RESOLUTIONS,
+  LEGACY_RESOLUTIONS,
+  MAX_SHORT_SIDE,
   FPS_MIN,
   FPS_MAX,
   DEFAULT_RATE,
   DEFAULT_RESOLUTION,
   rateArg,
   readRate,
-  readResolution
+  readResolution,
+  clampSize
 }

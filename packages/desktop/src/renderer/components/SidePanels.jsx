@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconInfo, IconMic, IconPlugin, IconPlus, IconSearch, IconSparkle, IconTrash, IconWand } from '../icons.jsx'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconInfo, IconMic, IconPlugin, IconPlus, IconRefresh, IconSearch, IconSparkle, IconTrash, IconWand } from '../icons.jsx'
 import { isDesktop } from '../platform.js'
 /* 内置边框库：清单进程内缓存，预览层（Stage.jsx）用的是同一份 */
 import { borderCatalog, ensureBorderCatalog, resetBorderCatalog } from '../borderCatalog.js'
@@ -17,6 +17,8 @@ import {
 } from '../../shared/packaging.js'
 /* 人物特效的效果表（与导出侧同一份：name/hint/kind 都在这里） */
 import { FX_LIST } from '../../shared/facefx.js'
+/* 抠像的阈值与采样帧率（与主进程同一份 —— 两边各写一个就会出现"界面说抠到了、工具说没有"） */
+import { MATTE_FPS, MATTE_MIN_COVERAGE } from '../../shared/matte.js'
 import { Slider, timecode, useToast } from '../ui.jsx'
 import { ART_FAMILIES } from '../artSet.js'
 import {
@@ -107,10 +109,23 @@ export default function SidePanels(props) {
     onSplitEvenly,
     onCloseGaps,
     onClearTextTrack,
-    /* 字幕文件的进出与语音分句（只挂在「字幕 → 字幕模板」页） */
+    /* 字幕文件的进出、语音分句与 AI 识别（只挂在「字幕 → 字幕模板」页） */
     onImportSubtitle,
     onExportSubtitle,
     onAutoSegment,
+    /* AI 识别字幕 + 当前识别任务（`{ busy, done, total }`）。
+       进度住在 App 里：切页签会让本面板卸载，进度条不该跟着消失。 */
+    onRecognizeSubtitles,
+    speechJob = null,
+    /* 识别档位：`speechModels` 是主进程报上来的模型清单（含 ready），
+       `speechModel` 是用户选的那一档。两样都从 App 透传，
+       面板自己不查 —— 一查就会有"面板显示还有这个模型、点了却说没装"的错位。 */
+    speechModels = null,
+    speechModel = '',
+    onPickSpeechModel,
+    /* AI 配音：把文字读成人声落成音频片段（本机合成）。ttsJob = `{ busy, error }` */
+    onSpeakText,
+    ttsJob = null,
     onImport,
     onSetBackdrop,
     /* 当前预览底图（素材 → 背景选的那张）。导出面板要用它把背景也渲进成片。 */
@@ -159,24 +174,37 @@ export default function SidePanels(props) {
         projectName={projectName}
         backdrop={backdrop}
         aspect={props.aspect || DEFAULT_ASPECT}
+        /* 分辨率档与比例一样是草稿属性，必须**显式透传**：
+           漏了这一行，面板会退回自己的本地 state —— 下拉能选 4K、画面也对，
+           但草稿里存的还是 1080p，重启就丢（"我以为一直选着 4K"）。
+           App.jsx 的 draft-params 闸门就是靠这条通路判"重启后还是 4K"。 */
+        resolution={props.resolution}
+        onResolution={props.onResolution}
         range={range}
         playhead={playhead}
       />
     )
   }
-  if (mode === 'text') return <TextPanel onAddTextClip={onAddTextClip} clips={clips} onClearTextTrack={onClearTextTrack} />
+  if (mode === 'text') return <TextPanel onAddTextClip={onAddTextClip} />
   /* 「文字 → 花字」与「字幕 → 字幕模板」共用样式页，靠 textStyleGroup 区分：
      null = 显示全部字幕样式（字幕模板），数字 = 花字的第 N 组。 */
   if (mode === 'text-style') {
     return (
       <StylePanel
         clips={clips}
+        selectedClip={selectedClip}
         onAddTextClip={onAddTextClip}
-        onClearTextTrack={onClearTextTrack}
         group={textStyleGroup}
         onImportSubtitle={onImportSubtitle}
         onExportSubtitle={onExportSubtitle}
         onAutoSegment={onAutoSegment}
+        onRecognizeSubtitles={onRecognizeSubtitles}
+        speechJob={speechJob}
+        speechModels={speechModels}
+        speechModel={speechModel}
+        onPickSpeechModel={onPickSpeechModel}
+        onSpeakText={onSpeakText}
+        ttsJob={ttsJob}
       />
     )
   }
@@ -191,6 +219,12 @@ export default function SidePanels(props) {
     )
   }
   if (mode === 'stock') return <StockPanel assets={assets} onAddToTimeline={onAddToTimeline} />
+  /* 智能抠像：本机人像分割，产物是一条透明素材（图片 PNG / 视频 WebM-alpha） */
+  if (mode === 'matte') {
+    return (
+      <MattePanel selectedClip={selectedClip} activeClip={activeClip} onAddAsset={onAddAsset} />
+    )
+  }
   /* 内置贴纸库（随包离线，140 枚 + 用户插件）：点一枚就加到叠加轨。
      key 跟着 packsVersion 走 —— 插件装完必须重挂载，否则读的还是旧清单。 */
   if (mode === 'sticker') {
@@ -464,47 +498,11 @@ function StyleGrid({ items, picked, onPick, sizeKey, testid }) {
   )
 }
 
-/** 字幕轨现状 —— 文字页与字幕页都要看，抽出来免得两处各写一份 */
-function TextTrackSummary({ clips, onClearTextTrack }) {
-  const textClips = clips.filter((clip) => clip.track === 'text')
-  return (
-    <>
-      <div className="section-title" style={{ marginTop: 16 }}>
-        <span>字幕轨</span>
-        <span>{textClips.length} 段</span>
-      </div>
-      {textClips.length ? (
-        <>
-          <div className="list">
-            {textClips.map((clip) => (
-              <div className="list-item" key={clip.id}>
-                <div className="grow">
-                  <strong>{clip.text || clip.name}</strong>
-                  <small>
-                    {timecode(clip.start, false)} 起 · {Number(clip.duration).toFixed(1)}s ·{' '}
-                    {textStyleDef(clip.textStyle).label}
-                  </small>
-                </div>
-              </div>
-            ))}
-          </div>
-          <button className="btn block" type="button" style={{ marginTop: 10 }} onClick={onClearTextTrack}>
-            <IconTrash size={14} />
-            清空字幕轨
-          </button>
-        </>
-      ) : (
-        <div className="empty">字幕轨还是空的。点上面的样式就能加第一段。</div>
-      )}
-    </>
-  )
-}
-
 /**
  * 「文字」页 —— 文字模板：点一下**新增**一段文字，并停在它上面。
  * 卡片 100×100、间距 16 取自参考 PropertyPanel_TextStyle.qml（itemWidth/itemHeight: 100）。
  */
-function TextPanel({ clips, onAddTextClip, onClearTextTrack }) {
+function TextPanel({ onAddTextClip }) {
   const [picked, setPicked] = useState('')
   const items = titleStyles()
   const pick = (def) => {
@@ -529,8 +527,9 @@ function TextPanel({ clips, onAddTextClip, onClearTextTrack }) {
       </div>
 
       <StyleGrid items={items} picked={picked} onPick={pick} sizeKey="title" testid="text" />
-
-      <TextTrackSummary clips={clips} onClearTextTrack={onClearTextTrack} />
+      {/* ⚠️ 这一页**不再**挂「字幕轨」清单：2026-11-02 起它独立成右栏一枚页签
+          （`Inspector.jsx` 的 CAPTION_TAB）。左栏只管"往轨上加东西"，
+          轨上现有什么在右栏看 —— 同一份清单摆在两页底部，加完一条还得滚到底核对。 */}
     </Shell>
   )
 }
@@ -550,7 +549,24 @@ function TextPanel({ clips, onAddTextClip, onClearTextTrack }) {
  * `group` 为 null 时是字幕模板（全部 subtitle 样式）；为数字时是花字的第 N 组
  * （参考那页的分组：热门 / 基础 / 纹理 / 发光 / 黄色 / 蓝色 / 红色 / 绿色）。
  */
-function StylePanel({ clips, onAddTextClip, onClearTextTrack, group, onImportSubtitle, onExportSubtitle, onAutoSegment }) {
+function StylePanel({
+  clips,
+  selectedClip = null,
+  onAddTextClip,
+  group,
+  onImportSubtitle,
+  onExportSubtitle,
+  onAutoSegment,
+  onRecognizeSubtitles,
+  speechJob = null,
+  /* 识别档位（轻量 / 多语种）—— 与 App 里的偏好同一个值 */
+  speechModels = null,
+  speechModel = '',
+  onPickSpeechModel,
+  /* AI 配音：点「AI 配音」把文字读成人声落成音频片段（本机合成，文字不出本机） */
+  onSpeakText,
+  ttsJob = null
+}) {
   const isArt = Number.isFinite(group)
   const [picked, setPicked] = useState('')
   const items = isArt ? textStylesOfGroup(group) : subtitleStyles()
@@ -573,16 +589,25 @@ function StylePanel({ clips, onAddTextClip, onClearTextTrack, group, onImportSub
         <StyleGrid items={items} picked={picked} onPick={pick} sizeKey="subtitle" testid={isArt ? 'text-art' : 'subtitle-style'} />
       )}
 
-      <TextTrackSummary clips={clips} onClearTextTrack={onClearTextTrack} />
+      {/* 字幕轨清单已挪到右栏「字幕轨」页（见 Inspector 的 CAPTION_TAB），
+          这一页只留"选样式"与下面的字幕文件三件事。 */}
 
       {/* 字幕文件与语音分句只属于「字幕 → 字幕模板」这一页（`group === null`）。
           花字页共用同一个组件，摆在这里会让"给标题换样子"的人看到一堆导出按钮。 */}
       {isArt ? null : (
         <SubtitleTools
           clips={clips}
+          selectedClip={selectedClip}
           onImportSubtitle={onImportSubtitle}
           onExportSubtitle={onExportSubtitle}
           onAutoSegment={onAutoSegment}
+          onRecognizeSubtitles={onRecognizeSubtitles}
+          speechJob={speechJob}
+          speechModels={speechModels}
+          speechModel={speechModel}
+          onPickSpeechModel={onPickSpeechModel}
+          onSpeakText={onSpeakText}
+          ttsJob={ttsJob}
         />
       )}
     </Shell>
@@ -590,20 +615,149 @@ function StylePanel({ clips, onAddTextClip, onClearTextTrack, group, onImportSub
 }
 
 /**
- * 字幕文件三件：导入 / 导出 / 按语音分句。
+ * 字幕的来源与出口：AI 识别 / 按语音分句 / 导入 / 导出。
  *
- * 为什么这三件事要放在一起：它们解决的是同一个问题的三个方向 ——
- * 字幕**从哪来**（外部 srt / 语音分句）、**到哪去**（导出 srt 带走）。
- * 少了第三件，用户剪完想发到别的平台就没有出口。
+ * 为什么这四件事放在一起：它们解决的是同一个问题的两个方向 ——
+ * 字幕**从哪来**（本机识别、语音分句、外部 srt）、**到哪去**（导出 srt 带走）。
+ * 少了最后一件，用户剪完想发到别的平台就没有出口。
  *
- * ⚠️ 这三颗按钮**必须写清"做了什么、没做什么"**：开源版不带语音识别模型，
- *    「按语音分句」切的是**时间轴**，文字要用户自己填。按钮上写"智能字幕"、
- *    点完却只得到一堆空白段，比没有这个按钮更糟。
+ * ⚠️ 「AI 识别字幕」与「按语音自动分句」**必须并排摆、各自写清差别**：
+ *    一个会出文字（要下模型），一个只切时间轴（不用模型）。只留一个的话，
+ *    要么用户以为"分句"能出字（点了得到一堆空白），要么在没有模型时以为整个功能坏了。
+ *    这也是 2026-11-03 之前本项目一直没敢摆"智能字幕"按钮的原因。
  */
-function SubtitleTools({ clips, onImportSubtitle, onExportSubtitle, onAutoSegment }) {
+function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle, onAutoSegment, onRecognizeSubtitles, speechJob, speechModels, speechModel, onPickSpeechModel, onSpeakText, ttsJob }) {
   const count = clips.filter((clip) => clip.track === 'text').length
+  const busy = Boolean(speechJob && speechJob.busy)
+  const percent = busy && speechJob.total ? Math.min(100, Math.round((speechJob.done / speechJob.total) * 100)) : 0
+
+  /* 档位 = 已登记的两个识别模型（轻量中文 / 多语种）。
+     没选过就取"第一个装好的那个" —— 与主进程 speech.status().defaultModel 同一套优先级，
+     否则界面显示 A、实际跑 B，用户会以为选了不生效。 */
+  const rows = Array.isArray(speechModels) ? speechModels : []
+  const installed = rows.filter((row) => row && row.ready)
+  const activeModel =
+    (speechModel && rows.some((row) => row.id === speechModel) ? speechModel : '') ||
+    (installed[0] && installed[0].id) ||
+    (rows[0] && rows[0].id) ||
+    ''
+
+  /* 配音的输入与参数住在面板本地：切页签丢掉没关系（还没生成的东西不算数据），
+     但**生成中的任务住在 App 里** —— 否则切走就看不到进度，回来还以为没生成。 */
+  const [sayText, setSayText] = useState('')
+  const [saySpeed, setSaySpeed] = useState(1)
+  const ttsBusy = Boolean(ttsJob && ttsJob.busy)
+  const selectedText = selectedClip && selectedClip.track === 'text' ? String(selectedClip.text || '') : ''
+  const chars = sayText.trim().length
   return (
     <>
+      <div className="section-title" style={{ marginTop: 16 }}>
+        <span>AI 识别字幕</span>
+        {busy ? <span data-sub-ai-counter>{`${speechJob.done} / ${speechJob.total}`}</span> : null}
+      </div>
+      <button
+        className="btn block primary"
+        type="button"
+        data-sub-ai
+        disabled={busy}
+        onClick={() => onRecognizeSubtitles?.()}
+        title="把选中片段里的说话内容转成字幕（本机模型，不上传任何素材）"
+      >
+        {busy ? <IconRefresh size={14} /> : <IconMic size={14} />}
+        {busy ? `正在识别 ${percent}%` : 'AI 识别字幕'}
+      </button>
+      {busy ? (
+        <div className="wb-speech-bar" data-sub-ai-progress={percent} aria-hidden="true">
+          <i style={{ width: `${percent}%` }} />
+        </div>
+      ) : (
+        <>
+          <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
+            按口型逐句出文字，识别完可以直接在时间线上改。第一次用会引导你下载语音识别模型
+            （78MB 起，装完永久离线可用）。
+          </div>
+          {/* 档位：轻量版出得快、多语种版更准（还能认粤语/日语/英语混说）。
+              没装的档位照样列出来但不可选 —— 只列能用的，用户就永远不知道还有更好的那档。 */}
+          {rows.length ? (
+            <label className="row" style={{ gap: 8, marginTop: 8, alignItems: 'center' }}>
+              <span className="wb-muted-sm" style={{ flex: '0 0 auto' }}>识别档位</span>
+              <select
+                className="input grow"
+                data-sub-model
+                value={activeModel}
+                disabled={busy}
+                onChange={(event) => onPickSpeechModel?.(event.target.value)}
+                title="轻量版快、多语种版更准；两档都在本机跑，素材不出本机"
+              >
+                {rows.map((row) => (
+                  <option key={row.id} value={row.id} disabled={!row.ready}>
+                    {row.name}
+                    {row.ready ? '' : '（未安装）'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </>
+      )}
+
+      <div className="section-title" style={{ marginTop: 16 }}>
+        <span>AI 配音</span>
+        {ttsBusy ? <span data-tts-counter>合成中</span> : null}
+      </div>
+      <textarea
+        className="input"
+        rows={3}
+        data-tts-text
+        value={sayText}
+        placeholder="把文字读成人声，生成一条配音音轨"
+        onChange={(event) => setSayText(event.target.value)}
+        style={{ resize: 'vertical', lineHeight: 1.6 }}
+      />
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button
+          className="btn"
+          type="button"
+          data-tts-pick
+          disabled={!selectedText}
+          title={selectedText ? '把选中字幕的正文填进来' : '先在时间线上选中一条字幕'}
+          onClick={() => setSayText(selectedText)}
+        >
+          用选中字幕
+        </button>
+        <select
+          className="input"
+          data-tts-speed
+          value={saySpeed}
+          onChange={(event) => setSaySpeed(Number(event.target.value) || 1)}
+          style={{ width: 92 }}
+          title="语速"
+        >
+          <option value={0.8}>0.8×</option>
+          <option value={1}>1.0×</option>
+          <option value={1.2}>1.2×</option>
+          <option value={1.5}>1.5×</option>
+        </select>
+        <button
+          className="btn grow primary"
+          type="button"
+          data-tts-run
+          disabled={ttsBusy || !chars}
+          onClick={() => onSpeakText?.({ text: sayText, speed: saySpeed })}
+          title="把文字读成人声（本机合成，不上传文字）"
+        >
+          {ttsBusy ? <IconRefresh size={14} /> : <IconSparkle size={14} />}
+          {ttsBusy ? '合成中' : '生成配音'}
+        </button>
+      </div>
+      <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }} data-tts-hint>
+        {ttsJob && ttsJob.error
+          ? ttsJob.error
+          : chars
+            ? `${chars} 字 · 生成在本机完成（声音不会上传）。第一次用会引导你下载音色包（131MB）。`
+            : '配音在本机合成，文字与声音都不出本机。第一次用会引导你下载音色包。'}
+      </div>
+
       <div className="section-title" style={{ marginTop: 16 }}>
         <span>字幕文件</span>
       </div>
@@ -629,14 +783,15 @@ function SubtitleTools({ clips, onImportSubtitle, onExportSubtitle, onAutoSegmen
         type="button"
         style={{ marginTop: 8 }}
         data-sub-vad
+        disabled={busy}
         onClick={() => onAutoSegment?.()}
       >
         <IconMic size={14} />
         按语音自动分句
       </button>
       <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
-        导入支持 SRT / VTT / LRC / ASS。「按语音分句」在选中的视频片段上分析音量，
-        按“有人说话的区间”切出空白字幕段（文字需要你自己填 —— 本机版不带语音识别模型）。
+        导入支持 SRT / VTT / LRC / ASS。「按语音分句」只按"有人说话的区间"切段落、
+        **不出文字**（它不用模型，也不联网）；要文字请用上面的 AI 识别。
       </div>
     </>
   )
@@ -653,7 +808,25 @@ function SubtitleTools({ clips, onImportSubtitle, onExportSubtitle, onAutoSegmen
 function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
+  const [dnBusy, setDnBusy] = useState(false)
+  /* 降噪模型的安装状态：`{ ready, runtimeOk, model:{size} }`。
+     面板一进来就查一次 —— 用户点按钮之前就该看到"还差一个 0.5MB 的模型"，
+     而不是点了才被告知。 */
+  const [dnState, setDnState] = useState(null)
   const cut = selectedClip || activeClip || null
+
+  const refreshDn = useCallback(async () => {
+    try {
+      const st = await window.yjai?.speech?.denoiseStatus?.()
+      setDnState(st && st.ok ? st : null)
+    } catch {
+      setDnState(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshDn()
+  }, [refreshDn])
 
   const run = async () => {
     if (!cut) {
@@ -695,6 +868,87 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
     }
   }
 
+  /**
+   * AI 降噪：把这一段的人声处理干净，落成一条新音轨（与「提取音轨」同一个心智：
+   * 都是"从这段里提出能用的声音"，产物进素材库，由用户决定铺到哪）。
+   *
+   * 为什么不做成片段上的一个开关：降噪模型只吃 16kHz，成片要 48kHz，
+   * 中间必然有一次重采样。做成开关的话**预览听到的是原声、成片却是处理过的**，
+   * 而这正是本项目明令禁止的"预览与成片不一致"。落成音轨则听得到、看得见、可撤回。
+   */
+  const runDenoise = async () => {
+    if (!cut) {
+      toast.bad('先在时间线上选中一个片段')
+      return
+    }
+    if (!isDesktop || !window.yjai?.speech?.denoise) {
+      toast.bad('AI 降噪需要桌面端（本机推理）')
+      return
+    }
+    setDnBusy(true)
+    try {
+      let st = dnState
+      if (!st || !st.ready) {
+        if (st && st.runtimeOk === false) {
+          toast.bad('语音运行时还没装：到「设置 → AI 模型」里装上运行时再来')
+          return
+        }
+        /* 只有 0.5MB，就地下载比"请去设置页点一下"少两步操作 */
+        toast('正在下载降噪模型（0.5MB）…')
+        const dl = await window.yjai.models.download('speech-denoiser')
+        if (!dl || !dl.ok) {
+          toast.bad(dl?.error || '降噪模型下载失败')
+          return
+        }
+        st = await window.yjai.speech.denoiseStatus()
+        setDnState(st && st.ok ? st : null)
+      }
+
+      toast('正在降噪…')
+      const res = await window.yjai.speech.denoise({
+        url: cut.url || '',
+        path: cut.path || '',
+        /* 只处理这一段在源文件里的区间：整文件处理会让"只用了 3 秒"也跑满 10 分钟 */
+        offset: Number(cut.offset) || 0,
+        duration: Number(cut.duration) || 0
+      })
+      if (!res?.ok) {
+        const reason = res?.reason || 'crash'
+        if (reason === 'model-missing' || reason === 'runtime-missing') {
+          setDnState(null)
+          toast.bad(res.error || '降噪模型还没装好')
+          return
+        }
+        toast.bad(res?.error || '降噪失败')
+        return
+      }
+
+      let url = ''
+      try {
+        url = (await window.yjai.media.url(res.path)) || ''
+      } catch {
+        /* 同提取音频：没有播放地址也要先把素材留下 */
+      }
+      onAddAsset?.({
+        id: `asset_denoise_${Date.now().toString(36)}`,
+        name: `${cut.name || '片段'} · 降噪`,
+        kind: 'audio',
+        url,
+        path: res.path,
+        source: 'local',
+        duration: res.duration || cut.duration || 0,
+        createdAt: new Date().toISOString()
+      })
+      /* 报出实测降噪量：这是"真的处理了"的唯一证据。只报"已完成"的话，
+         用户听到变化不明显时无从判断是没生效还是素材本来就干净。 */
+      toast.good(`已降噪（噪声压低约 ${Math.max(0, Number(res.reducedDb) || 0)} dB），已放进素材库`)
+    } catch (error) {
+      toast.bad(String(error?.message || error))
+    } finally {
+      setDnBusy(false)
+    }
+  }
+
   return (
     <Shell>
       <div className="section-title">
@@ -719,6 +973,392 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
         </div>
       ) : (
         <div className="empty">先在时间线上选中一个片段（或把播放头放到它上面）再提取。</div>
+      )}
+
+      <div className="section-title" style={{ marginTop: 16 }}>
+        <span>AI 语音降噪</span>
+      </div>
+      <div className="notice">
+        <IconInfo size={14} />
+        <span>压掉环境噪声、风噪、键盘声，让人声更清楚。本机推理、素材不出本机；处理 1 分钟音频约 3 秒。</span>
+      </div>
+      <div className="list">
+        <div className="list-item">
+          <div className="grow">
+            <strong>{cut ? cut.name : '未选中片段'}</strong>
+            <small>
+              {dnState && dnState.ready
+                ? '降噪模型已就绪 · 会生成一条新音轨'
+                : dnState && dnState.runtimeOk === false
+                  ? '还缺语音运行时（设置 → AI 模型）'
+                  : '第一次用会就地下载 0.5MB 降噪模型'}
+            </small>
+          </div>
+          <button
+            className="btn"
+            type="button"
+            disabled={dnBusy || !cut}
+            onClick={runDenoise}
+            data-ai-denoise
+            title="把这一段的人声处理干净，生成一条新音轨放进素材库"
+          >
+            {dnBusy ? <IconRefresh size={14} /> : <IconSparkle size={14} />}
+            {dnBusy ? '处理中…' : dnState && dnState.ready ? 'AI 降噪' : '降噪（含 0.5MB 模型）'}
+          </button>
+        </div>
+      </div>
+      <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
+        降噪在 16kHz 下进行（模型的工作采样率），处理完自动升到 48kHz 立体声。
+        素材本身很干净时开了会显得发闷 —— 它适合"噪声大到听不清词"的素材。
+      </div>
+    </Shell>
+  )
+}
+
+/* ------------------------------- 智能抠像 ------------------------------- */
+
+/**
+ * 智能抠像：把主体从背景里分出来，产出**一条能叠的透明素材**。
+ *
+ * 为什么产物是"新素材"而不是片段上的开关（与 AI 降噪同一个判断）：
+ *   抠像要逐帧跑推理，预览里逐帧做等于把播放拖成幻灯片。做成开关的话，
+ *   要么预览卡、要么预览不抠而成片抠 —— 后者违反了本项目的"预览即成片"。
+ *   落成素材则：预览播的就是抠好的那条，成片叠的也是它，两边天然一致。
+ *
+ * 为什么视频要逐帧写盘再编码，而不是在渲染层直接录：
+ *   MediaRecorder 对 alpha 通道的支持随 Chromium 版本漂移（同一个 API 有时出
+ *   alpha、有时出黑底），而黑底叠上去看起来"就是抠失败了"。走 PNG 序列 + ffmpeg
+ *   的 VP9-alpha 是确定的：`-auto-alt-ref 0` 写死，产物能不能透明可以按字节验。
+ *
+ * ⚠️ 画面里没人时模型**不报错**，给一份全零遮罩 —— 直接乘上去就是整张透明。
+ *    所以这里先看 `coverage`，抠不到主体就明说"这个画面里没找到人"，
+ *    不往素材库里塞一张空图（用户会以为是软件坏了）。
+ */
+function MattePanel({ selectedClip, activeClip, onAddAsset }) {
+  const toast = useToast()
+  const cut = selectedClip || activeClip || null
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(null)
+  const [softness, setSoftness] = useState(50)
+  /* 视频抠像的背景：'blur' = 原画面虚化，其余是纯色。
+     为什么视频必须选一个背景（不能留空）：ffmpeg 编不出 Chromium 能播的
+     带 alpha 视频，所以产物是"已经合好背景的 mp4"——留空就等于产出黑底。 */
+  const [bg, setBg] = useState('blur')
+  const [modelReady, setModelReady] = useState(null)
+  const [last, setLast] = useState(null)
+  const cancelRef = useRef(false)
+
+  /* 模型装没装：只影响按钮文案，不影响能不能点。
+     不熟的用户看到"含 0.25MB 模型"就知道点下去会发生什么，比跳设置页少两步。 */
+  useEffect(() => {
+    let alive = true
+    const read = async () => {
+      try {
+        const st = await window.yjai?.matte?.model?.()
+        if (alive) setModelReady(Boolean(st && st.ready))
+      } catch {
+        if (alive) setModelReady(false)
+      }
+    }
+    read()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const isImage = Boolean(cut && (cut.kind === 'image' || /\.(png|jpe?g|webp|bmp|gif)$/i.test(cut.path || '')))
+
+  /** 模型没装就地下载（0.25MB，比"请去设置页点一下"少两步） */
+  const ensureModel = async () => {
+    try {
+      const st = await window.yjai.matte.model()
+      if (st && st.ready) return true
+      toast('正在下载抠像模型（0.25MB）…')
+      const dl = await window.yjai.models.download('matte-person')
+      if (!dl || !dl.ok) {
+        toast.bad(dl?.error || '抠像模型下载失败')
+        return false
+      }
+      setModelReady(true)
+      return true
+    } catch (error) {
+      toast.bad(String(error?.message || error))
+      return false
+    }
+  }
+
+  const run = async () => {
+    if (!cut) {
+      toast.bad('先在时间线上选中一个图片或视频片段')
+      return
+    }
+    if (!isDesktop || !window.yjai?.matte?.save) {
+      toast.bad('智能抠像需要桌面端（本机推理）')
+      return
+    }
+    if (!(await ensureModel())) return
+
+    setBusy(true)
+    setLast(null)
+    cancelRef.current = false
+    try {
+      const srcUrl = cut.url || (cut.path ? await window.yjai.media.url(cut.path) : '')
+      if (!srcUrl) {
+        toast.bad('这个片段没有可读取的文件')
+        return
+      }
+      const { matteOne, matteVideo } = await import('../matte.js')
+
+      if (isImage) {
+        const img = new Image()
+        /* yjai-media:// 是跨源协议，不声明 crossOrigin 的话 canvas 会被污染，
+           `toDataURL` 直接抛 SecurityError（而且是在 drawImage 之后才炸）。 */
+        img.crossOrigin = 'anonymous'
+        img.src = srcUrl
+        await img.decode()
+        const out = await matteOne(img, img.naturalWidth, img.naturalHeight, { softness })
+        if (out.coverage < MATTE_MIN_COVERAGE) {
+          toast.bad('这个画面里没找到人，抠不出主体（人像模型只认人）')
+          return
+        }
+        const dataUrl = out.canvas.toDataURL('image/png')
+        const saved = await window.yjai.matte.save({
+          base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
+          ext: 'png'
+        })
+        if (!saved || !saved.ok) {
+          toast.bad(saved?.error || '保存失败')
+          return
+        }
+        onAddAsset?.({
+          id: `asset_matte_${Date.now().toString(36)}`,
+          name: `${cut.name || '画面'} · 抠像`,
+          kind: 'image',
+          url: saved.url || '',
+          path: saved.path,
+          source: 'local',
+          duration: 0,
+          createdAt: new Date().toISOString()
+        })
+        setLast({ kind: 'image', coverage: out.coverage, ms: out.ms, bytes: saved.bytes })
+        toast.good(`已抠像（主体占 ${Math.round(out.coverage * 100)}%），放进素材库了`)
+        return
+      }
+
+      /* ---- 视频：逐帧抠 → 序列帧 → 编码成透明视频 ---- */
+      const video = document.createElement('video')
+      video.crossOrigin = 'anonymous'
+      video.muted = true
+      video.playsInline = true
+      video.preload = 'auto'
+      video.src = srcUrl
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('视频加载超时')), 30000)
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            clearTimeout(timer)
+            resolve()
+          },
+          { once: true }
+        )
+        video.addEventListener(
+          'error',
+          () => {
+            clearTimeout(timer)
+            reject(new Error('视频打不开（格式可能不支持）'))
+          },
+          { once: true }
+        )
+      })
+
+      /* 时长取片段自己的，不信 video.duration：MediaRecorder 产出的 webm
+         头里没有 duration，读出来是 Infinity，会让循环算不出 total。 */
+      const duration = Math.max(0.1, Number(cut.duration) || Number(video.duration) || 0)
+      if (!Number.isFinite(duration) || duration <= 0.1) {
+        toast.bad('这段视频的时长读不出来，先把它拖到时间线上再试')
+        return
+      }
+
+      const seqId = Math.random().toString(36).slice(2, 10)
+      setProgress({ done: 0, total: Math.max(1, Math.ceil(duration * MATTE_FPS)) })
+
+      const res = await matteVideo(video, {
+        fps: MATTE_FPS,
+        start: 0,
+        duration,
+        softness,
+        bg: bg === 'blur' ? { mode: 'blur' } : { mode: 'color', color: bg },
+        onFrame: async ({ base64, index }) => {
+          if (cancelRef.current) return
+          await window.yjai.matte.seqFrame({ seqId, index, base64 })
+        },
+        onProgress: (p) => setProgress({ done: p.done, total: p.total })
+      })
+
+      if (cancelRef.current) {
+        toast('已取消')
+        return
+      }
+      if (!res.frames || res.truncated) {
+        toast.bad('这段画面里没找到人，抠不出主体（人像模型只认人）')
+        return
+      }
+
+      toast('正在合成透明视频…')
+      const enc = await window.yjai.matte.encode({
+        seqId,
+        fps: MATTE_FPS,
+        duration: res.frames / MATTE_FPS
+      })
+      if (!enc || !enc.ok) {
+        toast.bad(enc?.error || '合成透明视频失败')
+        return
+      }
+      onAddAsset?.({
+        id: `asset_matte_${Date.now().toString(36)}`,
+        name: `${cut.name || '片段'} · 抠像`,
+        kind: 'video',
+        url: enc.url || '',
+        path: enc.path,
+        source: 'local',
+        duration: enc.duration || res.frames / MATTE_FPS,
+        createdAt: new Date().toISOString()
+      })
+      setLast({ kind: 'video', frames: res.frames, coverage: res.coverage, ms: res.ms, bytes: enc.bytes })
+      toast.good(`已抠出 ${res.frames} 帧，换好背景的视频在素材库里了`)
+    } catch (error) {
+      toast.bad(String(error?.message || error))
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  return (
+    <Shell>
+      <div className="section-title">
+        <span>智能抠像</span>
+      </div>
+      <div className="notice">
+        <IconInfo size={14} />
+        <span>
+          把人和背景分开，产出一条背景透明的素材，可以叠到任何画面上。本机推理、素材不出本机。
+          人像模型只认人 —— 宠物、商品这类主体它抠不出来。
+        </span>
+      </div>
+
+      {cut ? (
+        <>
+          <div className="list">
+            <div className="list-item">
+              <div className="grow">
+                <strong>{cut.name}</strong>
+                <small>
+                  {isImage ? '图片 · 出一张透明 PNG' : `视频 · ${timecode(cut.duration || 0, false)}`}
+                  {modelReady === false ? ' · 首次会下载 0.25MB 模型' : ''}
+                </small>
+              </div>
+              <button
+                className="btn"
+                type="button"
+                disabled={busy}
+                onClick={run}
+                data-matte-run
+                title="把人抠出来，背景变透明"
+              >
+                {busy ? <IconRefresh size={14} /> : <IconSparkle size={14} />}
+                {busy
+                  ? progress
+                    ? `${Math.min(100, Math.round((progress.done / Math.max(1, progress.total)) * 100))}%`
+                    : '准备中…'
+                  : modelReady === false
+                    ? '抠像（含 0.25MB 模型）'
+                    : '开始抠像'}
+              </button>
+            </div>
+          </div>
+
+          {busy && !isImage ? (
+            <div style={{ marginTop: 10 }}>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  cancelRef.current = true
+                }}
+                data-matte-cancel
+              >
+                取消
+              </button>
+            </div>
+          ) : null}
+
+          <div className="pack-sect" style={{ marginTop: 14 }}>
+            <span>边缘</span>
+            <em>{Math.round(softness)}%</em>
+          </div>
+          <div className="pack-levels">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              value={softness}
+              data-matte-softness
+              disabled={busy}
+              onChange={(e) => setSoftness(Number(e.target.value))}
+            />
+          </div>
+          <div className="wb-muted-sm" style={{ marginTop: 4, lineHeight: 1.6 }}>
+            往左是羽化（头发丝更自然），往右是硬边（边缘更干脆）。
+          </div>
+
+          {/* 背景只对视频有意义：图片产出的是透明 PNG（能直接叠），
+              而视频装不下透明通道，必须把背景烘进去 —— 这个差别要在界面上说清，
+              否则用户会以为"图片能叠、视频却不能"是软件坏了。 */}
+          {!isImage ? (
+            <>
+              <div className="pack-sect" style={{ marginTop: 14 }}>
+                <span>换成什么背景</span>
+              </div>
+              <div className="wb-chiprow" data-matte-bg-group>
+                {[
+                  { key: 'blur', label: '原画面虚化' },
+                  { key: '#000000', label: '黑' },
+                  { key: '#ffffff', label: '白' },
+                  { key: '#0f7b3f', label: '绿' },
+                  { key: '#1414c8', label: '蓝' }
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`chip ${bg === item.key ? 'on' : ''}`}
+                    data-matte-bg={item.key}
+                    aria-pressed={bg === item.key}
+                    disabled={busy}
+                    onClick={() => setBg(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
+                视频文件装不下透明通道，所以抠完会把背景换掉再交给你（预览看到的就是最终效果）。
+                想叠在别的画面上，用图片抠像拿透明 PNG。
+              </div>
+            </>
+          ) : null}
+
+          {last ? (
+            <div className="wb-muted-sm" data-matte-last style={{ marginTop: 10, lineHeight: 1.6 }}>
+              上次：{last.kind === 'image' ? '1 张图' : `${last.frames} 帧`} · 主体占{' '}
+              {Math.round((last.coverage || 0) * 100)}% · 用时 {(last.ms / 1000).toFixed(1)} 秒
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="empty">先在时间线上选中一个图片或视频片段，再抠像。</div>
       )}
     </Shell>
   )
@@ -2049,9 +2689,10 @@ function FilterPanel({ selectedClip, activeClip, onPatchClip, material }) {
  * 调节改的是片段自己的五个数值（shared/adjust.js），右栏「调整」页的滑杆就是它们的镜像。
  * 所以这里点一个预设，右栏滑杆会**当场跟着动** —— 两处读的是同一个 `clip.adjust`。
  *
- * 缩略图是**真算出来的**：用同一组参数换算成 CSS `brightness/contrast/saturate`
- * 加一层按色温取色的内阴影，张张不同、且与点下去的画面方向一致
- * （暖调卡片看着就暖）。不是随便找张图凑数。
+ * 缩略图是**真算出来的**：把这一条的五个参数按 shared/adjust.js 的同一组公式
+ * （channelGains / contrastFactor / saturationFactor）作用在一张固定的取景底片上，
+ * 与「滤镜」用的是同一张底片、同一套画法 —— 所以两张页签的卡看起来是同一部片子
+ * 的不同调法，暖调卡片看着就暖、硬朗卡片看着就硬，点下去画面往同一个方向走。
  */
 function AdjustPanel({ selectedClip, activeClip, onPatchClip, material }) {
   const toast = useToast()
@@ -2084,30 +2725,6 @@ function AdjustPanel({ selectedClip, activeClip, onPatchClip, material }) {
      那正是本项目一直在清的那类"看着有、实际没接"的按钮。 */
   const touched = Boolean(current) && ADJUST_PARAMS.some((item) => Math.abs(current[item.key]) > 0.01)
 
-  /* 预览渲染：把 ±100 的参数折成 CSS 的倍率。分母取 120~200 —— 一档就顶到纯白/全灰
-     会让十六张卡长得一样，而分母太大（250+）又看不出差别（实测 1.02 的 brightness
-     在缩略图上完全分辨不出）。方向与 shared/adjust.js 的增益一致：
-     亮度↑=更亮、对比↑=更硬、饱和↑=更艳、色温↑=更暖（正）更冷（负）。 */
-  const previewStyle = (adjust) => {
-    const bright = 1 + (adjust.bright || 0) / 150
-    const contrast = 1 + (adjust.contrast || 0) / 110
-    const saturate = 1 + (adjust.saturate || 0) / 90
-    const temp = adjust.temp || 0
-    return {
-      /* 一块"假风景"：天空 → 地面 + 左上高光。有明暗层次才看得出对比度与亮度差，
-         纯色渐变上这些参数变化几乎不可见（对比度对纯色毫无作用）。 */
-      backgroundImage:
-        'radial-gradient(circle at 30% 26%, rgba(255, 246, 220, 0.85) 0%, rgba(255, 246, 220, 0) 44%), linear-gradient(168deg, #93aec6 0%, #cbd6d9 40%, #8d9a72 68%, #3d4738 100%)',
-      filter: `brightness(${bright.toFixed(3)}) contrast(${contrast.toFixed(3)}) saturate(${saturate.toFixed(3)})`,
-      boxShadow:
-        temp > 0
-          ? `inset 0 0 0 999px rgba(255, 150, 40, ${(temp / 260).toFixed(3)})`
-          : temp < 0
-            ? `inset 0 0 0 999px rgba(40, 140, 255, ${(-temp / 260).toFixed(3)})`
-            : 'none'
-    }
-  }
-
   return (
     <Shell>
       <div className="mat-group-row">
@@ -2138,7 +2755,9 @@ function AdjustPanel({ selectedClip, activeClip, onPatchClip, material }) {
               onClick={() => apply(item)}
             >
               <span className="look-preview is-photo">
-                <span className="look-adjust-art" style={previewStyle(item.adjust)} />
+                {materialThumb(item.thumb) ? (
+                  <img src={materialThumb(item.thumb)} alt="" draggable={false} />
+                ) : null}
               </span>
               <span className="look-name">{item.zh}</span>
             </button>
@@ -2377,9 +2996,24 @@ function RecordPanel({ onImport }) {
 
 /* ------------------------------- 导出 ------------------------------- */
 
-function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASPECT, range = null, playhead = 0 }) {
+function ExportPanel({
+  clips,
+  projectName,
+  backdrop = null,
+  aspect = DEFAULT_ASPECT,
+  /* 分辨率档是**草稿属性**（App 持有并落进草稿），面板只是它的编辑入口。
+     只存在面板的 useState 里时：关掉面板再打开就回 1080p，用户以为一直选着 4K，
+     而每次导出都在出 1080p —— 面板与成片都不报错，只能逐帧量像素才发现。 */
+  resolution: resolutionProp,
+  onResolution,
+  range = null,
+  playhead = 0
+}) {
   const toast = useToast()
-  const [resolution, setResolution] = useState(EXPORT_RATE.DEFAULT_RESOLUTION)
+  /* 兜底副本：只在父层没传时用（单独渲染面板的测试夹具）。真机上永远是受控的 */
+  const [resolutionLocal, setResolutionLocal] = useState(EXPORT_RATE.DEFAULT_RESOLUTION)
+  const resolution = resolutionProp === undefined ? resolutionLocal : resolutionProp
+  const setResolution = onResolution || setResolutionLocal
   /* 帧率存的是**数值**（29.97 就是 29.97，不是 30）：封面取帧按它算帧对齐 */
   const [fps, setFps] = useState(EXPORT_RATE.readRate(EXPORT_RATE.DEFAULT_RATE).fps)
   const [quality, setQuality] = useState(80)
@@ -2399,6 +3033,18 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
   const [failure, setFailure] = useState('')
   /* 封面图：默认**关**。多导出一张图是附加产物，默认生成会让人以为哪里冒出了多余文件 */
   const [coverOn, setCoverOn] = useState(false)
+  /**
+   * 面板分两屏。
+   *
+   * ⚠️ 2026-11-02 Jason：「导出弹窗显示内容太多太乱了优化一下」。
+   *   改前是一列平铺 11 个控件 + 7 行键值表 + 3 段说明，首屏根本看不到「导出成片」——
+   *   而那是这个面板唯一的目的。现在：
+   *     · 顶部一行摘要（时长 / 尺寸 / 帧率 / 容器 / 段数 / 区间）替掉那两张键值表；
+   *     · 「基本」只留每次都可能改的：分辨率 · 帧率 · 画质 · 输出范围；
+   *     · 「高级」放定好就不动的：编码格式 · 视频编码 · 码率控制 · 响度 · 封面图。
+   *   两屏是**同一份状态**（切来切去不会丢设置），不是两个表单。
+   */
+  const [seg, setSeg] = useState('basic')
 
   /** 成片时长必须走与渲染同一份结算：转场会让成片变短，直接累加 start+duration 会虚高 */
   const duration = resolveTotalDuration(clips)
@@ -2611,6 +3257,12 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
           denoise: clip.denoise ?? 0,
           stabilize: clip.stabilize ?? 0,
           audioDenoise: clip.audioDenoise ?? 0,
+          /* 人声增强 + 变声（同样是导出阶段）。这两个字段 2026-11-02 之前**根本没进载荷**：
+             检查器里滑杆拖了、变声 chip 点了、预览照旧（预览本来就不做），
+             成片也照旧 —— 三处都不报错，只有 export-contract 的"导出读了渲染层没发"
+             那条静态契约能抓到。别删这两行。 */
+          voiceBoost: clip.voiceBoost ?? 0,
+          voiceFx: clip.voiceFx || 'none',
           /* 倒放：导出侧拼 ffmpeg 的 reverse / areverse（预览靠 sourceTimeAt 反向取帧）。
              载荷里少带这一个布尔 = 面板上开关亮了、成片照旧正放。 */
           reverse: clip.reverse === true,
@@ -2725,70 +3377,143 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
 
   return (
     <Shell kicker="EXPORT" title="导出">
-      <div className="kv-list" style={{ marginBottom: 14 }}>
-        <div>
-          <span>片段数</span>
-          <strong>{clips.length}</strong>
-        </div>
-        <div>
-          <span>{activeRange ? '成片时长（仅区域）' : '成片时长'}</span>
-          <strong data-export-duration={Number(outDuration.toFixed(3))}>{timecode(outDuration, false)}</strong>
-        </div>
+      {/* 摘要条：一行说完"这条成片是什么"。
+          ⚠️ 从前的两张键值表共 7 行（片段数 / 时长 / 区间 / 转场占用 / 渲染引擎 /
+             画面比例 / 输出尺寸），把真正的操作项一路压到首屏之外 —— 而「导出成片」
+             才是这个面板唯一的目的。
+          ⚠️ `data-export-duration` / `data-export-range` 是 region-e2e 的判据锚点，
+             换版式也必须留在**始终可见**的位置（它们原来在那张表里）。 */}
+      <div className="export-summary" data-export-summary="1">
+        <b data-export-duration={Number(outDuration.toFixed(3))} title={activeRange ? '成片时长（仅时间区域）' : '成片时长'}>
+          {timecode(outDuration, false)}
+        </b>
+        <i aria-hidden="true">·</i>
+        <span title="按当前画面比例从基准分辨率裁出的实际输出尺寸">
+          <em data-export-aspect={aspect}>{aspectOf(aspect).label}</em> {sizeOut.width}×{sizeOut.height}
+        </span>
+        <i aria-hidden="true">·</i>
+        <span>{EXPORT_RATE.readRate(fps).id} fps</span>
+        <i aria-hidden="true">·</i>
+        <span>{codecInfo.containerLabel}</span>
+        <i aria-hidden="true">·</i>
+        <span>{clips.length} 段</span>
         {activeRange ? (
-          <div>
-            <span>导出区间</span>
-            <strong className="mono" data-export-range={`${activeRange.start}-${activeRange.end}`}>
-              {timecode(activeRange.start, false)} – {timecode(activeRange.end, false)}
-            </strong>
-          </div>
+          <>
+            <i aria-hidden="true">·</i>
+            <span className="mono" data-export-range={`${activeRange.start}-${activeRange.end}`} title="导出区间（成片内从 0 起算）">
+              {timecode(activeRange.start, false)}–{timecode(activeRange.end, false)}
+            </span>
+          </>
         ) : null}
         {savedByTransitions > 0.01 ? (
-          <div>
-            <span>转场占用</span>
-            <strong style={{ color: 'var(--warn, #e8b04b)' }}>-{savedByTransitions.toFixed(2)}s</strong>
+          <>
+            <i aria-hidden="true">·</i>
+            <span title="转场重叠吃掉的时长 —— 成片比片段总长略短就是因为这个">转场 -{savedByTransitions.toFixed(2)}s</span>
+          </>
+        ) : null}
+        <span
+          className={`export-engine ${ready ? '' : 'bad'}`}
+          title={
+            ffmpeg === null
+              ? '正在探测本机 ffmpeg…'
+              : ready
+                ? 'ffmpeg 已就绪，可以直接出片'
+                : '未检测到 ffmpeg —— 现在只能导出工程文件'
+          }
+        >
+          {ffmpeg === null ? '检测中…' : ready ? 'ffmpeg 就绪' : '无 ffmpeg'}
+        </span>
+      </div>
+
+      {/* 两屏切换：只换"看得见什么"，不换状态 —— 切来切去设置都还在。 */}
+      <div className="export-seg" role="tablist" aria-label="导出设置分组">
+        {[
+          ['basic', '基本', '每次导出都可能要改的：尺寸、帧率、画质、输出范围'],
+          ['advanced', '高级', '定好就不动的：编码格式、视频编码、码率控制、响度统一、封面图']
+        ].map(([key, label, tip]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            title={tip}
+            aria-selected={seg === key}
+            data-export-seg={key}
+            className={seg === key ? 'on' : ''}
+            onClick={() => setSeg(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="export-grid">
+        <label className="field">
+          <span>输出分辨率</span>
+          <select
+            className="select"
+            value={resSpec.id}
+            data-export-resolution="1"
+            onChange={(event) => setResolution(event.target.value)}
+          >
+            {EXPORT_RATE.RESOLUTIONS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.width} × {item.height}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/* 4K 不是"点了就等一会儿"：同一段素材耗时约为 1080P 的 3~5 倍，
+            而进度条只会显示"正在导出"—— 用户分不清是机器慢还是卡死了。
+            在选中的那一刻先说清楚，比导到一半弹一句"请耐心等待"有用。 */}
+        {resSpec.id === '4k' ? (
+          <div className="notice" data-export-4k-hint="1" style={{ gridColumn: '1 / -1' }}>
+            4K 导出较慢（约 1080P 的 3~5 倍）；素材本身不足 4K 时是放大插值，不会更清晰。
           </div>
         ) : null}
-        <div>
-          <span>渲染引擎</span>
-          <strong style={{ color: ready ? undefined : 'var(--warn, #e8b04b)' }}>
-            {ffmpeg === null ? '检测中…' : ready ? 'ffmpeg 已就绪' : '未检测到 ffmpeg'}
-          </strong>
-        </div>
+
+        {/*
+          帧率：**档位**，不是滑杆。
+          以前是 `min=24 max=60 step=6` 的滑杆，能落到的只有 24/30/36/42/48/54/60 ——
+          25 与 50（PAL / 国内电视台 / 大量商用素材）和 29.97 / 59.94（NTSC 母版）
+          一个都选不出来，而 36/42/48 又是不存在的交付规格。选错只能导出后重转一次，
+          重转必掉帧。七档与参考客户端一致，理由与整数比换算见 shared/exportRate.js。
+          ⚠️ 与分辨率并排两列：它们是同一类事（"出多大的片"），分成两行只是白占高度。
+        */}
+        <label className="field">
+          <span>帧率</span>
+          <select
+            className="select"
+            value={EXPORT_RATE.readRate(fps).id}
+            data-export-fps="1"
+            onChange={(event) => setFps(EXPORT_RATE.readRate(event.target.value).fps)}
+          >
+            {EXPORT_RATE.RATES.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id} fps
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <label className="field">
-        <span>输出分辨率</span>
-        <select
-          className="select"
-          value={resSpec.id}
-          data-export-resolution="1"
-          onChange={(event) => setResolution(event.target.value)}
-        >
-          {EXPORT_RATE.RESOLUTIONS.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.width} × {item.height}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {/*
-        成片形状：与预览里选的那个比例**同一个值**，在这里**只读**地摆出来。
-        ⚠️ 必须显示出来：比例决定成片是横是竖，用户在这里看不到，
-        只能导出完打开才发现"我明明切了竖屏"—— 那时已经渲完了。
-      */}
-      <div className="kv-list" style={{ marginTop: 10, marginBottom: 2 }}>
-        <div>
-          <span>画面比例</span>
-          <strong data-export-aspect={aspect}>{aspectOf(aspect).label}</strong>
-        </div>
-        <div>
-          <span>输出尺寸</span>
-          <strong className="mono">
-            {sizeOut.width} × {sizeOut.height}
-          </strong>
-        </div>
-      </div>
+      {/* 画质：基本页只留这一条滑杆 —— 「码率控制」那个二选一留在高级页，
+          但当前模式对应的滑杆在这儿，因为它才是"这次导多大"的那一个数。 */}
+      {codecInfo.variableQuality ? (
+        bitrateMode === 'bitrate' ? (
+          <Slider
+            label="目标码率"
+            suffix=" kbps"
+            min={1000}
+            max={60000}
+            step={500}
+            value={bitrate}
+            onChange={setBitrate}
+          />
+        ) : (
+          <Slider label="画质" suffix="%" min={30} max={100} step={5} value={quality} onChange={setQuality} />
+        )
+      ) : null}
 
       {/* 时间区域：只有当前真的框了区间才出现（没框的时候摆一个灰开关毫无意义） */}
       {range ? (
@@ -2819,6 +3544,12 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
         </div>
       ) : null}
 
+      {/* ================= 高级 =================
+          下面这一整段（封面图 / 编码格式 / 视频编码 / 码率控制 / 响度统一）
+          都是「定好一次就不动」的设置。摆在基本页只是把首屏占满、
+          把「导出成片」挤到看不见的地方。 */}
+      {seg === 'advanced' ? (
+        <>
       {/*
         封面图：把成片里的某一帧另存一张图，用来当发布平台的缩略图。
         取帧位置就是**当前播放头**（用户在预览里盯着的那一帧），不用他再挑一次；
@@ -2863,29 +3594,6 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
           </div>
         ) : null}
       </div>
-
-      {/*
-        帧率：**档位**，不是滑杆。
-        以前是 `min=24 max=60 step=6` 的滑杆，能落到的只有 24/30/36/42/48/54/60 ——
-        25 与 50（PAL / 国内电视台 / 大量商用素材）和 29.97 / 59.94（NTSC 母版）
-        一个都选不出来，而 36/42/48 又是不存在的交付规格。选错只能导出后重转一次，
-        重转必掉帧。七档与参考客户端一致，理由与整数比换算见 shared/exportRate.js。
-      */}
-      <label className="field">
-        <span>帧率</span>
-        <select
-          className="select"
-          value={EXPORT_RATE.readRate(fps).id}
-          data-export-fps="1"
-          onChange={(event) => setFps(EXPORT_RATE.readRate(event.target.value).fps)}
-        >
-          {EXPORT_RATE.RATES.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.id} fps
-            </option>
-          ))}
-        </select>
-      </label>
 
       {/*
         编码格式：决定**容器**（MP4 / MOV）、**色深**（8 / 10 位）与**是否留 Alpha**。
@@ -2950,42 +3658,34 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
         所以直接收起来并说明，而不是留在那儿"能点、点了没用"。
       */}
       {codecInfo.variableQuality ? (
-        <>
-      <div className="field">
-        <span>码率控制</span>
-        <div className="wb-chiprow" data-export-bitrate-mode="1">
-          {[
-            ['quality', '画质优先'],
-            ['bitrate', '码率优先']
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={`chip ${bitrateMode === key ? 'on' : ''}`}
-              data-export-bitrate-btn={key}
-              aria-pressed={bitrateMode === key}
-              onClick={() => setBitrateMode(key)}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="field">
+          <span>码率控制</span>
+          <div className="wb-chiprow" data-export-bitrate-mode="1">
+            {[
+              ['quality', '画质优先'],
+              ['bitrate', '码率优先']
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`chip ${bitrateMode === key ? 'on' : ''}`}
+                data-export-bitrate-btn={key}
+                aria-pressed={bitrateMode === key}
+                onClick={() => setBitrateMode(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* 滑杆本身在「基本」页（画质是每次导出都要看一眼的数），
+              这里只解释两种模式的区别 —— 换模式后回基本页，滑杆会跟着换成
+              「画质 %」或「目标码率 kbps」，所以不能在这里再放一条滑杆。 */}
+          <p className="hint" style={{ marginTop: 6 }}>
+            {bitrateMode === 'bitrate'
+              ? '按目标码率编码（准 CBR）：文件大小可预估，画面简单处会白白浪费码率。'
+              : '按画质档编码（CRF / CQ）：同一档在不同画面上体积不同，复杂画面自动多给码率 —— 一般选这个。'}
+          </p>
         </div>
-      </div>
-
-      {bitrateMode === 'bitrate' ? (
-        <Slider
-          label="目标码率"
-          suffix=" kbps"
-          min={1000}
-          max={60000}
-          step={500}
-          value={bitrate}
-          onChange={setBitrate}
-        />
-      ) : (
-        <Slider label="画质" suffix="%" min={30} max={100} step={5} value={quality} onChange={setQuality} />
-      )}
-        </>
       ) : (
         /* ProRes 的质量由 profile 决定，没有 crf/码率可调。留一组点了没反应的滑杆
            比不摆更糟 —— 用户会以为"调了画质"，实际什么都没变。 */
@@ -3013,7 +3713,11 @@ function ExportPanel({ clips, projectName, backdrop = null, aspect = DEFAULT_ASP
       <p className="hint" style={{ marginTop: -4 }}>
         响度统一在混音完成后统一整条音轨的响度（不同素材音量差很大时最有用），只影响导出。
       </p>
+        </>
+      ) : null}
 
+      {/* 输出文件 + 导出/取消 + 工程文件：**始终可见**，不跟着分屏走 ——
+          这是这个面板的目的，翻到哪一屏都得按得到。 */}
       <label className="field">
         <span>输出文件</span>
         <div style={{ display: 'flex', gap: 8 }}>

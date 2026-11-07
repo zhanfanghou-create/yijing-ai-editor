@@ -16,8 +16,8 @@
  * 两边的换算口径（顺序也必须一致，否则同一组参数两侧画面不同）：
  *   1. 磨皮      → CSS `blur()`        / ffmpeg `smartblur`
  *   2. 各通道增益 → CSS `feColorMatrix`/ ffmpeg `colorchannelmixer`（对角增益，逐字对应）
- *   3. 对比度    → CSS `contrast()`    / ffmpeg `eq=contrast`
- *   4. 饱和度    → CSS `saturate()`    / ffmpeg `eq=saturation`
+ *   3. 对比度    → CSS `contrast()`    / ffmpeg `lutrgb`（逐通道写同一条仿射）
+ *   4. 饱和度    → CSS `saturate()`    / ffmpeg `colorchannelmixer`（同一个亮度加权矩阵）
  * 「亮度 / 美白 / 色温 / 色调」都折进第 2 步的通道增益里 —— 这样 CSS 与 ffmpeg
  * 用的就是同一个乘数，而不是"一边加、一边乘"这种永远对不上的近似。
  */
@@ -245,12 +245,36 @@ function ffmpegFilterFor(adjust, beauty, round = round4, width = 1920) {
 
   const c = contrastFactor(a)
   const s = saturationFactor(a)
-  const eqParts = []
-  if (Math.abs(c - 1) > 1e-4) eqParts.push(`contrast=${round(c, 4)}`)
-  if (Math.abs(s - 1) > 1e-4) eqParts.push(`saturation=${round(s, 4)}`)
-  if (eqParts.length) parts.push(`eq=${eqParts.join(':')}`)
+  /* ⚠️ 不用 `eq=contrast:saturation`：eq 在 YUV 平面上算，CSS 的 contrast()/saturate()
+     是 sRGB 上的仿射与亮度加权矩阵。实测同一组参数在饱和 +40 时相差 6~12 ΔE
+     （"面板上很艳、成片发闷"就是这么来的，而且不抛错）。
+     对比度用 lutrgb 写同一条仿射，饱和度用 colorchannelmixer 写同一个矩阵。 */
+  if (Math.abs(c - 1) > 1e-4) {
+    const expr = `clip((val-127.5)*${round(c, 4)}+127.5,0,255)`
+    parts.push(`lutrgb=r='${expr}':g='${expr}':b='${expr}'`)
+  }
+  if (Math.abs(s - 1) > 1e-4) {
+    const m = saturateMatrix(s).map((row) => row.map((v) => round(v, 4)))
+    parts.push(
+      `colorchannelmixer=rr=${m[0][0]}:rg=${m[0][1]}:rb=${m[0][2]}` +
+        `:gr=${m[1][0]}:gg=${m[1][1]}:gb=${m[1][2]}` +
+        `:br=${m[2][0]}:bg=${m[2][1]}:bb=${m[2][2]}`
+    )
+  }
 
   return parts.join(',')
+}
+
+/**
+ * CSS `saturate(s)` 的矩阵（SVG feColorMatrix type="saturate" 规范式）。
+ * 与 src/main/looks.js 的同名函数是同一个式子 —— 两处都改才行（一个是调节、一个是滤镜）。
+ */
+function saturateMatrix(s) {
+  return [
+    [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s],
+    [0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s],
+    [0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s]
+  ]
 }
 
 module.exports = {

@@ -1,6 +1,6 @@
 {
   "name": "@yijing/installer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "艺镜AI剪辑 · 安装引导程序（Electron + React）",
   "author": "艺镜 AI 团队",

@@ -1,0 +1,22 @@
+sherpa-onnx 运行时（随包二进制）
+==================================
+
+本目录下的文件来自 k2-fsa/sherpa-onnx（v2.0.1 的 Windows x64 N-API 构建）：
+  sherpa-onnx.node                  推理插件本体
+  sherpa-onnx-c-api.dll             C 接口
+  sherpa-onnx-cxx-api.dll           C++ 接口
+  onnxruntime.dll                   ONNX Runtime（微软，MIT）
+  onnxruntime_providers_shared.dll  ONNX Runtime 的 provider 共享库
+
+sherpa-onnx 许可证：Apache License 2.0
+  https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE
+
+onnxruntime 许可证：MIT
+  https://github.com/microsoft/onnxruntime/blob/main/LICENSE
+
+下载地址（按单文件直出，与 tools/fetch-speech.mjs 一致）：
+  https://cdn.jsdelivr.net/npm/sherpa-onnx-win-x64@2.0.1/<文件名>
+
+⚠️ 语音识别**模型**（.onnx 权重）不在本目录：
+   它们由用户在「设置 → AI 模型」里下载，落到 <用户数据>/models/speech-*，
+   或者由打包者放进去。模型体积 78MB 起，不适合默认随包。

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ASPECTS, aspectRatioOf, normalizeAspect, outputSizeFor } from '../../shared/aspect.js'
+/* 分辨率档位（草稿参数那一屏要按档位算输出尺寸，与导出面板读同一份表） */
+import { readResolution } from '../../shared/exportRate.js'
 import {
   ADJUST_PARAMS,
   BEAUTY_PARAMS,
@@ -67,8 +69,8 @@ import {
 } from '../../shared/effects.js'
 /* 自由裁剪框：换算全在 shared/crop.js，导出侧读的是同一个字段 */
 import { CROP_RATIOS, cropRectFor, readCrop } from '../../shared/crop.js'
-/* 音量包络与导出阶段的降噪（真源 shared/audio.js） */
-import { readVolumeKf } from '../../shared/audio.js'
+/* 音量包络与导出阶段的音频处理（真源 shared/audio.js） */
+import { VOICE_CHANGES, readVolumeKf } from '../../shared/audio.js'
 /* 多机位：右栏要读机位表/切换点/取声方式（纯函数，与展开时同一份真源） */
 import { angleIndexAt, anglesOf, audioOf, cutsOf, multicamSpan } from '../../shared/multicam.js'
 import { KIND_LABEL } from '../assets.js'
@@ -166,6 +168,16 @@ export function inspectorTabsFor(clip) {
     { key: 'adjust', label: '调整' }
   ]
 }
+
+/**
+ * 右栏的**轨级**页签：「字幕轨」。它不属于 `inspectorTabsFor(clip)` ——
+ * 那一组是"选中某个片段之后，这个片段能调什么"，必须跟着轨道类型变；
+ * 而字幕轨是**整条轨的清单**，不依赖选中谁，所以单独一枚、固定排在「信息」后面。
+ *
+ * ⚠️ 顺序由 App 拼：`信息` → `字幕轨` → `inspectorTabsFor(片段)`。
+ *    字幕轨在第二枚，是因为它是"整条轨"这一级，比"这条片段的画面/音频"更外一层。
+ */
+export const CAPTION_TAB = { key: 'captions', label: '字幕轨' }
 
 /** 常用倍速：剪辑里最常用的就是"慢一半 / 原速 / 快一倍" */
 const SPEED_PRESETS = [0.5, 1, 2]
@@ -1740,6 +1752,67 @@ function ClipInspector({
           </Section>
         ) : null}
 
+        {/* ---------------- 人声增强（导出阶段） ----------------
+            和降噪是两件事，顺序也不能反：降噪先削底噪，增强再压动态 + 提亮音色。
+            反过来的话压缩器会把底噪一起抬起来，听感是"更吵了但人声没更清楚"。 */}
+        {active === 'audio' && !containerClip ? (
+          <Section
+            title="人声增强"
+            hook="voiceboost"
+            dirty={numOf(clip.voiceBoost, 0) > 0}
+            resetHint="关闭增强"
+            onReset={() => patch({ voiceBoost: 0 })}
+          >
+            <Slider
+              label="强度"
+              suffix="%"
+              min={0}
+              max={100}
+              value={Math.round(numOf(clip.voiceBoost, 0))}
+              onChange={(value) => patch({ voiceBoost: value })}
+            />
+            <p className="wb-insphint">
+              削掉 85Hz 以下的隆隆声、提亮 2.8kHz 的辅音、再把忽大忽小压平。
+              <b>导出时应用</b>。建议先降噪再加增强。
+            </p>
+          </Section>
+        ) : null}
+
+        {/* ---------------- 变声（导出阶段） ---------------- */}
+        {active === 'audio' && !containerClip ? (
+          <Section
+            title="变声"
+            hook="voicechange"
+            dirty={String(clip.voiceFx || 'none') !== 'none'}
+            resetHint="回到原声"
+            onReset={() => patch({ voiceFx: 'none' })}
+          >
+            <div className="wb-chiprow" data-voicefx="1">
+              {VOICE_CHANGES.map((item) => {
+                const on = String(clip.voiceFx || 'none') === item.key
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`chip ${on ? 'on' : ''}`}
+                    data-voicefx-pick={item.key}
+                    /* 判据用 aria-pressed，不判类名 —— 类名会在换样式时静默失配 */
+                    aria-pressed={on}
+                    title={`把这段声音变成「${item.label}」`}
+                    onClick={() => patch({ voiceFx: item.key })}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="wb-insphint">
+              花栗鼠 / 低沉的音高与时长分开算：变调之后会把时长拉回原样，片段不会缩水。
+              <b>导出时应用</b> —— 预览听的是原声。
+            </p>
+          </Section>
+        ) : null}
+
         {/* ---------------- 立体声平衡（导出阶段） ----------------
             ⚠️ 预览里做不了：`<audio>` 只有一个 volume，没法按声道分增益。
                真要做只能把每个媒体元素接进 WebAudio（MediaElementSource 每个元素
@@ -2049,7 +2122,13 @@ function ClipInspector({
               onReset={() => patch({ filter: 'none', filterIntensity: 1 })}
             >
               <div className="wb-lookgrid" data-lookgrid="1">
-                {FILTERS.map((item) => (
+                {/* 只列 featured（那批人工挑过的常用调色）＋当前片段正在用的那个。
+                    为什么不列全部：2026-11-03 起「滤镜」页是"一卡一键"，
+                    looks.json 里有 500 多个键，全列出来这里的按钮会变成一片糊 ——
+                    这个区域是**给选中片段快速换调子**的，不是素材库。
+                    当前键即使不是 featured 也要补进来，否则用户从素材页选了某个滤镜、
+                    回到检查器看不到它选了什么。 */}
+                {FILTERS.filter((item) => item.featured || item.key === clip.filter).map((item) => (
                   <button
                     key={item.key}
                     type="button"
@@ -2467,6 +2546,76 @@ function gainToDb(gain) {
   return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`
 }
 
+/* --------------------------- 字幕轨（右栏独立一页） --------------------------- */
+
+/**
+ * 「字幕轨」页：整条字幕轨的清单。
+ *
+ * 2026-11-02 Jason：「字幕轨单独放到右侧窗口信息标签后面」。
+ * 在那之前这块清单挂在左栏「文字」「字幕」两页的**底部**：左栏是"往轨上加东西"的地方，
+ * 而"现在轨上有什么"却要在那里看；两份还各挂一次（同一个组件被调两遍）。
+ * 加完一条字幕想核对时间点，得先滚到左栏底部 —— 而左栏本来就不是看片的地方。
+ *
+ * 移到右栏独立一枚页签之后，两边的职责才分开：左栏只管"加"，右栏管"看与改"。
+ * 点一行 → 选中那一段并把播放头带到它的起点（由 App 落地，见 `onPickClip`），
+ * 于是"看清单 → 定位 → 改样式"不用再跨窗口来回。
+ *
+ * 判据是**片段数**（`data-caption-count`），不是"列表里有没有字" —— 空轨本来就不出行。
+ */
+function CaptionTrackPanel({ clips, selectedId, onPickClip, onClearTextTrack }) {
+  /* 按起点排序：轨道上肉眼看到的就是时间顺序，清单必须与它一致。
+     直接按数组顺序排会跟着"建的先后"走，剪辑后挪过位置的条目就跳到别处了。 */
+  const items = useMemo(
+    () => clips.filter((clip) => clip.track === 'text').sort((a, b) => a.start - b.start),
+    [clips]
+  )
+
+  return (
+    <section className="wb-caps" data-caption-track="1">
+      <div className="wb-caps-head">
+        <span className="wb-caps-count" data-caption-count={items.length}>
+          {items.length ? `${items.length} 段` : '空'}
+        </span>
+        <button
+          type="button"
+          className="wb-caps-clear"
+          data-caption-clear="1"
+          disabled={!items.length}
+          title={items.length ? '删掉字幕轨上的全部条目（视频与音频不动）' : '字幕轨已经是空的'}
+          onClick={() => onClearTextTrack && onClearTextTrack()}
+        >
+          <IconTrash size={12} />
+          清空
+        </button>
+      </div>
+
+      {items.length ? (
+        <div className="wb-caps-list">
+          {items.map((clip) => (
+            <button
+              key={clip.id}
+              type="button"
+              className={`wb-caps-row ${clip.id === selectedId ? 'on' : ''}`}
+              data-caption-row={clip.id}
+              onClick={() => onPickClip && onPickClip(clip)}
+            >
+              <span className="wb-caps-text">{clip.text || clip.name}</span>
+              <span className="wb-caps-meta">
+                {timecode(clip.start, false)} 起 · {`${Number(clip.duration).toFixed(1)}s`} ·{' '}
+                {textStyleDef(clip.textStyle).label}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="wb-caps-empty">
+          字幕轨是空的。在左侧「文字」或「字幕」页点一张样式卡，就会在播放头位置加一段。
+        </p>
+      )}
+    </section>
+  )
+}
+
 /* ------------------------------ 面板本体 ------------------------------ */
 
 /**
@@ -2476,6 +2625,8 @@ function gainToDb(gain) {
  *   1. 什么都没选 → 草稿参数（参考的这一屏给的是**草稿本身**的参数）
  *   2. 选中片段   → 检查器（按轨道给页签：画面 / 音频 / 变速 / 调整 / 字幕）
  *   3. 选中素材   → 素材属性 + 加入时间线
+ * 另外有一枚**轨级**页签「字幕轨」（见 `CAPTION_TAB`）：它不依赖选中谁，
+ * 选中任何东西时点进去都出整条字幕轨的清单。
  *
  * ⚠️ 草稿参数那一屏的四个 `data-*` 钩子（`data-draft-panel="1"` /
  *    `data-draft-resolution` / `data-draft-field` / `[data-draft-edit]`）被
@@ -2491,12 +2642,19 @@ export default function Inspector({
   onRemoveClip,
   onAddToTimeline,
   onPatchClip,
+  /* 「字幕轨」页要用的两件事：点一行 → 选中并定位（App 落地）、清空整条轨（App 落地）。
+     这里只负责画，不自己改片段表 —— 撤销历史、选中集合都在 App 那一份。 */
+  onPickClip,
+  onClearTextTrack,
   /* 草稿参数（无选中时那一屏）需要的真值：
      saveLocation=草稿实际落盘目录、aspect=当前比例（可改）、
      timelineName=当前时间线名（可改）。三者都来自 App，不在这里现编。 */
   saveLocation = '',
   aspect = '16:9',
   onAspect,
+  /* 输出分辨率档（草稿属性）。草稿参数那一屏要显示**这个项目**的交付尺寸，
+     不是写死的 1920×1080 —— 否则选了 4K 的草稿，信息面板还在说 1080P。 */
+  resolution = '1080p',
   timelineName = '时间线01',
   onTimelineNameChange,
   /**
@@ -2527,8 +2685,12 @@ export default function Inspector({
 
   const totalDuration = clips.reduce((max, item) => Math.max(max, item.start + item.duration), 0)
 
-  /** 分辨率由比例**算出来**（与导出的 ffmpeg 尺寸同一套 outputSizeFor），不是写死的 1920×1080 */
-  const output = outputSizeFor(1920, 1080, aspect)
+  /**
+   * 分辨率由**档位 + 比例**算出来（与导出的 ffmpeg 尺寸同一套 outputSizeFor），
+   * 不是写死的 1920×1080。档位是草稿属性（App 传下来），随草稿一起存。
+   */
+  const resSpec = readResolution(resolution)
+  const output = outputSizeFor(resSpec.width, resSpec.height, aspect)
   const editing = draftEditing
   /** 参考的「修改」是切换编辑态，不是另开一个弹窗；再点一次收起 */
   const editLabel = editing ? '完成' : '修改'
@@ -2538,11 +2700,25 @@ export default function Inspector({
       <div
         className="wb-info-body"
         title={
-          !asset && !clip
+          !asset && !clip && inspTab !== CAPTION_TAB.key
             ? '选中时间线上的片段或媒体库里的素材，这里会显示它的属性。生成的素材点“加入时间线”即可参与剪辑。'
             : undefined
         }
       >
+        {/* 「字幕轨」是**轨级**的一屏：选中什么都没关系，点进去就该看到整条轨。
+            所以它排在最前、且**独占**这一栏 —— 下面那些片段/素材的区块都不渲染，
+            否则会出现"清单下面还挂着一份草稿参数"这种两件事混一屏。
+            ⚠️ 用一个三元包住其余全部内容，而不是给每个区块各加一个 `!== 'captions'`：
+               后者漏一处就是"字幕轨页里冒出别的面板"，且新增区块时必然再漏。 */}
+        {inspTab === CAPTION_TAB.key ? (
+          <CaptionTrackPanel
+            clips={clips}
+            selectedId={clip ? clip.id : ''}
+            onPickClip={onPickClip}
+            onClearTextTrack={onClearTextTrack}
+          />
+        ) : (
+          <>
         {/* 参考的「信息」面板（空项目、什么都没选中时的一屏）：名字 / 创建时间 / 帧率 / 导入方式。
            ⚠️ 参考里这三种状态是**互斥**的（实测 2026-09-23 空项目 vs 草稿已开的两张截图）：
              空项目 → 信息；草稿已开、无选中 → 草稿参数；选中片段 → 检查器。
@@ -2740,7 +2916,9 @@ export default function Inspector({
           <>
             <div className="wb-field">
               <span>画布</span>
-              <strong>1920 × 1080</strong>
+              <strong data-canvas-size={`${output.width}×${output.height}`}>
+                {output.width} × {output.height}
+              </strong>
             </div>
 
             <div className="wb-field">
@@ -2838,6 +3016,8 @@ export default function Inspector({
             ) : null}
           </>
         ) : null}
+          </>
+        )}
       </div>
     </aside>
   )

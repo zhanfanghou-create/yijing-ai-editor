@@ -152,6 +152,10 @@ export const WB_TREE = {
           { key: 'stock-anim', label: '动画库', plain: true, kinds: ['other'] }
         ]
       },
+      /* 智能抠像：本机人像分割，把主体抠成透明素材（不联网）。
+         放在「智能剪辑」之前 —— 两者都是"让软件自己动手"的动作，
+         而抠像作用在**单个素材**上，比整轨的智能剪辑更靠前。 */
+      { key: 'matte', label: '智能抠像', Icon: IconWand, panel: 'matte' },
       /* 参考在这两项之间留了 9px（其余卡片行只有 4px），是分组分隔 */
       { key: 'smart', label: '智能剪辑', Icon: IconSmartCut, caret: true, gapBefore: true, panel: 'smart' }
     ]

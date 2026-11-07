@@ -32,6 +32,8 @@ const effects = require('../shared/effects.js')
 const textAnim = require('../shared/textAnim.js')
 const textOverrides = require('../shared/textOverrides.js')
 const speedMod = require('../shared/speed.js')
+/* 节拍检测（纯函数）：包络由 ffmpeg 抽，找重音就在这一个函数里 —— 界面与 MCP 共用 */
+const beatMod = require('../shared/beat.js')
 const subtitle = require('../shared/subtitle.js')
 const templates = require('../shared/templates.js')
 const packaging = require('../shared/packaging.js')
@@ -54,7 +56,14 @@ const media = require('./media')
 const stickersMod = require('./stickers')
 const bordersMod = require('./borders')
 const pluginsMod = require('./plugins')
+/* 字体入库：与界面 `font:pick` 共用同一份复制/命名规则（`main/fonts.js`） */
+const fontsMod = require('./fonts')
 const renderMod = require('./render')
+/* 语音识别与本地模型管理和界面**共用同一份实现**：models 是纯 Node（下载/校验/安装目录），
+   speech 也只依赖 models + render 的 ffmpeg 探测。MCP 侧不另写一份，
+   否则会出现「agent 认出两行、界面认出五行」这种谁也不报错的偏差。 */
+const modelsMod = require('./models')
+const speechMod = require('./speech')
 
 const FILTER_KEYS = looks.filters.map((f) => f.key)
 const TRANSITION_KEYS = looks.transitions.map((t) => t.key)
@@ -78,7 +87,9 @@ const PATCHABLE = [
   'adjust', 'beauty', 'curves', 'wheels', 'hslBands', 'warp', 'crop', 'effects',
   'textStyle', 'textSize', 'textScale', 'textColor', 'textAnchor', 'textOffset',
   'textAnim', 'keyframes', 'pip', 'border', 'face', 'faceTrack', 'pack', 'group', 'url', 'path',
-  'enabled'
+  'enabled',
+  /* 导出阶段的音频 / 画面修复参数（界面上是滑杆与按钮，agent 也要能调） */
+  'audioDenoise', 'voiceBoost', 'voiceFx', 'pan', 'denoise', 'stabilize'
 ]
 
 function fail(msg) {
@@ -269,6 +280,24 @@ function normalizePatch(patch, ctx = {}) {
       case 'enabled':
         out.enabled = Boolean(raw)
         break
+      /* 「导出阶段」的那批效果参数：界面上早就有滑杆与按钮，但 agent 写不进来 ——
+         界面能做到、agent 做不到，就是双通道对等上的一个缺口。
+         它们都只是**数字/枚举**，真正的换算在 shared/audio.js 里（与导出同一份真源），
+         这里只做范围校验，不重复实现一遍。 */
+      case 'audioDenoise':
+      case 'voiceBoost':
+        out[key] = clamp(finite(raw, 0), 0, 100)
+        break
+      case 'pan':
+        out.pan = clamp(finite(raw, 0), -100, 100)
+        break
+      case 'denoise':
+      case 'stabilize':
+        out[key] = clamp(finite(raw, 0), 0, 100)
+        break
+      case 'voiceFx':
+        out.voiceFx = pickEnum(raw, audioMod.VOICE_CHANGES.map((v) => v.key), '变声预设')
+        break
       case 'pack':
       case 'url':
       case 'path':
@@ -323,6 +352,8 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
   let idSeq = 0
   const nextId = (prefix) => `${prefix}_${Date.now().toString(36)}_${++idSeq}`
   const packDeps = { resourcesPath, mainDir }
+  /** 本地模型管理 / 语音识别的依赖：只认「本机安装目录」与「随包目录」两个位置 */
+  const modelDeps = () => ({ userData: userDataDir, resourcesPath })
 
   /* ---------------------------- 草稿读写 ---------------------------- */
 
@@ -363,6 +394,32 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     const i = draft.data.clips.findIndex((c) => c.id === clipId)
     if (i < 0) fail(`草稿里没有这个片段：${clipId}`)
     return i
+  }
+
+  /* ---------------------------- 设置读写 ---------------------------- */
+
+  /**
+   * `userData/settings.json` —— 与界面 `settings:get/set` 同一个文件。
+   *
+   * ⚠️ 两个进程都会写它（界面开着时用户改设置、MCP 这边导字体）。所以**每次读最新、
+   * 只改自己那一键、立刻写回**，绝不缓存整份对象 —— 缓存会让"界面刚改的硬件加速"
+   * 在 agent 导一次字体之后被旧值顶掉，而且用户完全看不出是谁改的。
+   */
+  const settingsPath = () => path.join(userDataDir, 'settings.json')
+
+  function readSettings() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function writeSettings(next) {
+    const file = settingsPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(next, null, 2), 'utf8')
   }
 
   /* ---------------------------- 素材目录 ---------------------------- */
@@ -473,6 +530,9 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     const found = renderMod.findFfmpeg()
     const stickerCount = (stickerCatalog().items || []).length
     const borderCount = (borderCatalog().items || []).length
+    /* 语音识别是否可用，要在「开始干活前调一次」的那个工具里就说清楚：
+       agent 不会预判"点了识别却没反应"，只有这里报了，它才会先去装模型。 */
+    const speechState = speechMod.status(modelDeps())
     return {
       server: 'yijing-editor',
       version: require('../../package.json').version,
@@ -487,6 +547,12 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
       templateCount: templates.TEMPLATES.length,
       pluginCount: pluginsMod.listPlugins({ userData: userDataDir }).length,
       codecs: CODEC_KEYS,
+      speech: {
+        ready: speechState.ready,
+        runtime: speechState.runtime.ok ? 'ok' : speechState.runtime.error,
+        defaultModel: speechState.defaultModel,
+        installed: speechState.models.filter((m) => m.ready).map((m) => m.id)
+      },
       ready: Boolean(found && found.ffmpeg)
     }
   }
@@ -497,7 +563,7 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
 
   ops.readDraft = ({ draftId }) => readDraft(draftId)
 
-  ops.createDraft = ({ name, aspect: aspectKey, playhead }) => {
+  ops.createDraft = ({ name, aspect: aspectKey, resolution, playhead }) => {
     const summary = store.save({
       name: name || '未命名项目',
       data: {
@@ -507,15 +573,19 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
         volume: 100,
         zoom: 1,
         aspect: aspect.normalizeAspect(aspectKey),
+        /* 分辨率档与比例同为草稿属性（界面上也能改）：agent 建 4K 草稿要走同一个字段，
+           否则"界面能选 4K、MCP 只能建 1080P"—— 双通道不对等。 */
+        resolution: exportRate.readResolution(resolution).id,
         createdAt: new Date().toISOString()
       }
     })
     return { draftId: summary.id, summary }
   }
 
-  ops.updateDraft = ({ draftId, name, aspect: aspectKey, playhead, volume, zoom }) => {
+  ops.updateDraft = ({ draftId, name, aspect: aspectKey, resolution, playhead, volume, zoom }) => {
     const draft = readDraft(draftId)
     if (aspectKey !== undefined) draft.data.aspect = aspect.normalizeAspect(aspectKey)
+    if (resolution !== undefined) draft.data.resolution = exportRate.readResolution(resolution).id
     if (playhead !== undefined) draft.data.playhead = Math.max(0, finite(playhead, 0))
     if (volume !== undefined) draft.data.volume = clamp(finite(volume, 100), 0, 200)
     if (zoom !== undefined) draft.data.zoom = clamp(finite(zoom, 1), 0.1, 20)
@@ -587,6 +657,84 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     }
     const summary = saveDraft(draft.id, draft.name, draft.data)
     return { summary, added, total: draft.data.assets.length }
+  }
+
+  /**
+   * 删除素材（界面上是左栏每条素材右侧的垃圾桶）。
+   *
+   * 语义与界面 `App.removeAsset` **一致**：摘掉素材，并**连带删掉所有引用它的片段**。
+   * 只删素材不删片段，草稿里就留下"片段还在、源文件没了"的行 —— 预览黑屏、
+   * 导出时那一整条链才报错，而且错误信息指向 ffmpeg 而不是"你删过素材"。
+   *
+   * 不删磁盘上的原文件：素材是用户自己的文件，界面上也从不删它。
+   */
+  ops.removeMedia = ({ draftId, assetId, assetIds = [] }) => {
+    const draft = readDraft(draftId)
+    const want = new Set(
+      [assetId, ...(Array.isArray(assetIds) ? assetIds : [assetIds])]
+        .filter(Boolean)
+        .map((item) => String(item))
+    )
+    if (!want.size) fail('要删哪个素材？给 assetId（取自 yijing_read_draft 的 assets）')
+
+    const known = new Set(draft.data.assets.map((item) => String(item.id)))
+    const notFound = [...want].filter((id) => !known.has(id))
+    if (notFound.length === want.size) fail(`草稿里没有这些素材：${notFound.join(', ')}`)
+
+    const beforeAssets = draft.data.assets.length
+    const beforeClips = draft.data.clips.length
+    draft.data.assets = draft.data.assets.filter((item) => !want.has(String(item.id)))
+    /* 片段靠 assetId 指回素材；比的是字符串，别拿对象引用 */
+    draft.data.clips = draft.data.clips.filter((clip) => !want.has(String(clip.assetId || '')))
+    const summary = saveDraft(draft.id, draft.name, draft.data)
+    return {
+      summary,
+      removedAssets: beforeAssets - draft.data.assets.length,
+      removedClips: beforeClips - draft.data.clips.length,
+      notFound,
+      assets: draft.data.assets.length,
+      clips: draft.data.clips.length
+    }
+  }
+
+  /**
+   * 导入字体（界面上是文字面板的「导入字体」按钮）。
+   *
+   * 两件事必须一起做，否则"导进去了但用不上"：
+   *   ① 文件复制进 `userData/fonts/`（`main/fonts.js`，与界面同一份实现）；
+   *   ② 记进 `settings.json` 的 `fonts` —— 界面启动时就是照这份列表注册 @font-face 的。
+   * 只做 ① 的话，agent 导的字体在界面上永远不出现；只做 ② 的话，重启就坏。
+   */
+  ops.importFont = ({ paths = [] }) => {
+    const list = (Array.isArray(paths) ? paths : [paths]).map((item) => String(item || '')).filter(Boolean)
+    if (!list.length) fail('要导入哪个字体？给 paths（.ttf / .otf / .ttc 的绝对路径）')
+
+    const imported = []
+    const rejected = []
+    for (const source of list) {
+      const font = fontsMod.importFontFile({ sourcePath: source, userDataDir })
+      if (font) imported.push({ id: font.id, name: font.name, path: font.path, bytes: font.bytes })
+      else rejected.push(source)
+    }
+    if (!imported.length) fail(`一个都没导进来（扩展名只认 .ttf / .otf / .ttc）：${rejected.join(', ')}`)
+
+    /* 与界面 `importFonts` 同一套合并规则：按 id 去重，后来的覆盖同 id 的旧条目 */
+    const settings = readSettings()
+    const merged = Array.isArray(settings.fonts) ? [...settings.fonts] : []
+    for (const font of imported) {
+      const hit = merged.findIndex((item) => item && item.id === font.id)
+      if (hit >= 0) merged[hit] = font
+      else merged.push(font)
+    }
+    writeSettings({ ...settings, fonts: merged })
+
+    return { imported, rejected, total: merged.length, dir: fontsMod.fontsDirOf(userDataDir) }
+  }
+
+  /** 已入库字体（磁盘为准，不回读设置 —— 设置里可能留着已被删掉的条目） */
+  ops.listFonts = () => {
+    const fonts = fontsMod.listFonts({ userDataDir })
+    return { fonts, total: fonts.length, dir: fontsMod.fontsDirOf(userDataDir) }
   }
 
   /* ---- 片段 ---- */
@@ -1130,6 +1278,382 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     return out
   }
 
+  /* ---- 本地模型（语音识别 / 人物特效的运行时与权重） ---- */
+
+  /** 模型表：**和设置页同一张**（group / kind / 缺哪些文件 都照原样给） */
+  function modelRows() {
+    return modelsMod.list(modelDeps()).map((row) => ({
+      id: row.id,
+      name: row.name,
+      purpose: row.purpose,
+      license: row.license,
+      group: row.group,
+      kind: row.kind,
+      source: row.source,
+      ready: row.source !== 'missing',
+      missing: row.missing,
+      size: row.size,
+      downloadable: row.downloadable
+    }))
+  }
+
+  /**
+   * 本地模型管理：查 / 装。
+   *
+   * ⚠️ 只做 list 与 download，**不做 remove**：删模型走界面（和插件同一个理由），
+   *    agent 没有"用户想把这块空间要回来"这个上下文，一删就是几十上百 MB 重下。
+   *
+   * ⚠️ 下载是**同步等待**的（78MB 约 1 分钟、239MB 约 3 分钟）：调用期间别重试，
+   *    重进会撞上 `.part` 半成品 —— 虽然体积校验能兜住，但白白多下一遍。
+   */
+  ops.models = async ({ action = 'list', id } = {}) => {
+    const act = String(action || 'list')
+    if (act === 'list') {
+      const rows = modelRows()
+      return {
+        models: rows,
+        ready: rows.filter((r) => r.ready).map((r) => r.id),
+        /* 直接给出"要装哪两个才能用语音转字幕"，省得 agent 自己推 */
+        speechPlan: ['speech-runtime', 'speech-paraformer']
+      }
+    }
+    if (act === 'download') {
+      const wanted = String(id || '').trim()
+      if (!wanted) fail('download 需要 id：先 action=list 看能装哪些')
+      const entry = modelsMod.byId(wanted)
+      if (!entry) fail(`没有这个模型：${wanted}`)
+      if (!entry.files.every((item) => Boolean(item.url))) fail(`${entry.name} 没有下载地址，只能从本机文件导入`)
+      const before = modelsMod.stateOf(entry, modelDeps())
+      if (before.source === 'local') return { id: wanted, installed: true, source: 'local', skipped: true }
+      const stamp = Date.now()
+      await modelsMod.download(entry, modelDeps(), () => {})
+      /* 下载完必须清一次识别器缓存：否则同一个进程里换了权重还在用老的（界面上是同一个坑） */
+      speechMod.resetCache()
+      const after = modelsMod.stateOf(entry, modelDeps())
+      if (after.source === 'missing') fail(`${entry.name} 装完仍然不完整，缺：${(after.missing || []).join(' / ')}`)
+      return { id: wanted, installed: true, source: after.source, elapsed: Date.now() - stamp, models: modelRows() }
+    }
+    fail(`不支持的模型动作：${act}（list / download）`)
+  }
+
+  /* ---- 配音（文字 → 人声，本机合成） ---- */
+
+  /**
+   * 把一段文字读成人声，落成音频片段。
+   *
+   * ⚠️ 与 `recognizeSubtitles` 是**反方向**的两件事：那边声音→文字，这边文字→声音。
+   *    共用同一个运行时，但用不同的模型文件（`kind` 分别是 model / voice）。
+   *
+   * ⚠️ 合成是同步阻塞的（一句话内部的音节是连续的，切不开）。500 字约 1~2 秒，
+   *    所以这里不加进度，直接把结果一次性返回。
+   */
+  ops.tts = async ({ draftId, text, voiceId, speed, sid, start, apply = true, name } = {}) => {
+    const body = String(text || '').trim()
+    if (!body) fail('text 是空的：要读什么？')
+    const deps = modelDeps()
+    const state = speechMod.voiceStatus(deps)
+    if (!state.runtime.ok) fail(`语音运行时还没装：${state.runtime.error}。先调 yijing_models（action=download, id=speech-runtime）`)
+    const voice = String(voiceId || '').trim() || state.defaultVoice
+    const row = state.voices.find((v) => v.id === voice)
+    if (!row) fail(`没有这个音色包：${voice}（可选：${state.voices.map((v) => v.id).join(' / ') || '无'}）`)
+    if (!row.ready) fail(`${row.name} 还没装好，先调 yijing_models（action=download, id=${voice}）`)
+
+    const res = speechMod.synthesize({ text: body, voiceId: voice, speed, sid }, deps)
+    if (!res.ok) fail(`合成失败：${res.error || res.reason || '未知原因'}`)
+
+    /* 不 apply 就只回文件路径：agent 可能只想先听听/自己决定放哪 */
+    if (!apply) {
+      return { ok: true, path: res.path, duration: res.duration, sampleRate: res.sampleRate, voice: res.voice, chars: res.chars }
+    }
+
+    const draft = readDraft(draftId)
+    /* 与界面同一条路：probeOne 会把文件登记成可预览的素材（拿到 yjai-media 地址与真实时长），
+       直接塞绝对路径的话，草稿里这一段在预览里是"加载不出来"的黑洞。 */
+    const asset = await probeOne(res.path)
+    const clip = buildClip(
+      {
+        track: 'audio',
+        kind: 'audio',
+        name: name || `配音 ${body.slice(0, 10)}`,
+        url: asset.url,
+        path: asset.path,
+        assetId: `a_${Buffer.from(asset.path).toString('base64url').slice(0, 12)}`,
+        start: Math.max(0, finite(start, 0)),
+        duration: Number(asset.duration) || res.duration,
+        sourceDuration: Number(asset.duration) || res.duration
+      },
+      nextId
+    )
+    draft.data.clips.push(clip)
+    if (!draft.data.assets.some((a) => a.path === asset.path)) {
+      draft.data.assets.push({ id: clip.assetId, path: asset.path, displayName: asset.displayName, kind: asset.kind, duration: asset.duration, url: asset.url })
+    }
+    const summary = saveDraft(draft.id, draft.name, draft.data)
+    return {
+      summary,
+      ok: true,
+      clip: { id: clip.id, start: clip.start, duration: clip.duration, name: clip.name },
+      voice: res.voice,
+      chars: res.chars,
+      elapsed: res.elapsed,
+      path: res.path
+    }
+  }
+
+  /* ---- AI 语音降噪（本机推理，素材不出本机） ---- */
+
+  /**
+   * 把一个片段里的人声降噪，落成一条音频片段。
+   *
+   * 与 `tts` 的产物位置一致（音频轨），但输入是**素材**而不是文字。
+   * 与 `recognizeSubtitles` 共用 `clip.offset/duration` 的取段语义 ——
+   * 三处都只处理"这一段在源文件里的区间"，整文件处理会让"只用了 3 秒"也跑满全片。
+   *
+   * `replace=true` 时顺手把原片段静音：这是"换成降噪版"最省事的形态，
+   * 否则用户得到两条音轨叠在一起，听起来是原声 + 降噪版混响。
+   */
+  ops.denoise = async ({ draftId, clipId, apply = true, replace = false, start, name } = {}) => {
+    const draft = readDraft(draftId)
+    const clip = draft.data.clips[clipIndex(draft, clipId)]
+    const source = clip.path || media.normalizeMediaPath(clip.url)
+    if (!source) fail('这个片段没有可解码的源文件（文字/形状片段没有声音可处理）')
+
+    const deps = modelDeps()
+    const st = speechMod.denoiseStatus(deps)
+    if (!st.ready) {
+      if (!st.runtimeOk) {
+        fail('语音运行时还没装：先调 yijing_models（action=download, id=speech-runtime），约 22MB')
+      }
+      fail('AI 降噪模型还没装（0.5MB）：先调 yijing_models（action=download, id=speech-denoiser）')
+    }
+
+    const res = await speechMod.denoise(
+      { sourcePath: source, offset: Number(clip.offset) || 0, duration: Number(clip.duration) || 0 },
+      deps
+    )
+    if (!res.ok) fail(`降噪失败：${res.error || res.reason || '未知原因'}`)
+
+    if (!apply) {
+      return { ok: true, path: res.path, duration: res.duration, reducedDb: res.reducedDb, elapsed: res.elapsed }
+    }
+
+    const asset = await probeOne(res.path)
+    const newClip = buildClip(
+      {
+        track: 'audio',
+        kind: 'audio',
+        name: name || `${clip.name || '片段'} · 降噪`,
+        url: asset.url,
+        path: asset.path,
+        assetId: `a_${Buffer.from(asset.path).toString('base64url').slice(0, 12)}`,
+        start: finite(start, clip.start),
+        duration: Number(asset.duration) || res.duration,
+        sourceDuration: Number(asset.duration) || res.duration
+      },
+      nextId
+    )
+    draft.data.clips.push(newClip)
+    if (!draft.data.assets.some((a) => a.path === asset.path)) {
+      draft.data.assets.push({
+        id: newClip.assetId,
+        path: asset.path,
+        displayName: asset.displayName,
+        kind: asset.kind,
+        duration: asset.duration,
+        url: asset.url
+      })
+    }
+    if (replace) {
+      /* 静音而不是删除：原片段还带着画面，删掉就把人切没了 */
+      const idx = clipIndex(draft, clipId)
+      draft.data.clips[idx] = { ...draft.data.clips[idx], muted: true }
+    }
+    const summary = saveDraft(draft.id, draft.name, draft.data)
+    return {
+      summary,
+      ok: true,
+      clip: { id: newClip.id, start: newClip.start, duration: newClip.duration, name: newClip.name },
+      reducedDb: res.reducedDb,
+      elapsed: res.elapsed,
+      path: res.path
+    }
+  }
+
+  /* ---- 语音转字幕（本机模型，素材不出本机） ---- */
+
+  /** 取音分析参数：与界面 `collectSpeechPeaks` 完全一致，否则分句位置会对不上 */
+  const SPEECH_PER = 0.1
+  const SPEECH_CHUNK = 30
+
+  /**
+   * 把某个片段里的说话内容认成字幕。
+   *
+   * ⚠️ 三个坐标系不能混：
+   *     clip.offset → **源文件**里的入点      （只用于取音）
+   *     clip.start  → 片段在**时间线**上的起点（写字幕时加它）
+   *     识别结果    → 相对**片段头**          （因为 peaks 与 wav 都从片段头开始取）
+   *   最终字幕时间 = clip.start + 识别结果.start。少加一次 clip.start 的表现是
+   *   "字幕全挤在 0 秒"，多加一次是"字幕往后串一整段"。
+   *
+   * ⚠️ 变速片段直接拒绝：识别出来的时间是源文件时间，时间线上是变速后的时间，
+   *   差一个倍率 —— 换算错就是整体偏移、越往后偏得越多，看起来像"识别不准"。
+   */
+  ops.recognizeSubtitles = async ({ draftId, clipId, style, apply = true, modelId } = {}) => {
+    const draft = readDraft(draftId)
+    const clip = draft.data.clips[clipIndex(draft, clipId)]
+    const source = clip.path || media.normalizeMediaPath(clip.url)
+    if (!source) fail('这个片段没有可解码的源文件（文字/形状片段没有声音可认）')
+    const speed = speedMod.clipSpeed(clip)
+    const hasCurve = Boolean(speedMod.readCurve(clip))
+    if (Math.abs(speed - 1) > 1e-6 || hasCurve) {
+      fail('变速片段不能直接识别字幕：先把速度改回 1×，认完再变速（否则字幕会整体偏移，越往后偏得越多）')
+    }
+    const offset = Math.max(0, Number(clip.offset) || 0)
+    const dur = Number(clip.duration) || 0
+    if (dur < 0.5) fail(`这一段只有 ${dur.toFixed(2)} 秒，太短了，没有可识别的内容`)
+    if (dur > 600) fail('一次最多识别 10 分钟：先用 yijing_timeline_op 把它切成几段')
+
+    const deps = modelDeps()
+    const state = speechMod.status(deps)
+    if (!state.runtime.ok) {
+      fail(
+        `语音识别运行时还没装：${state.runtime.error}。` +
+          '先调 yijing_models（action=download, id=speech-runtime），约 22MB'
+      )
+    }
+    const wanted = String(modelId || '').trim() || state.defaultModel
+    const model = state.models.find((row) => row.id === wanted)
+    if (!model) fail(`没有这个识别模型：${wanted}（可选：${state.models.map((m) => m.id).join(' / ')}）`)
+    if (!model.ready) fail(`${model.name} 还没装好，先调 yijing_models（action=download, id=${model.id}）`)
+
+    /* 1) 逐段取峰值 → 分句。与界面的 30 秒一批 / 0.1 秒一桶完全一致 */
+    const peaks = []
+    for (let at = 0; at < dur - 0.05; at += SPEECH_CHUNK) {
+      const span = Math.min(SPEECH_CHUNK, dur - at)
+      const buckets = Math.max(8, Math.round(span / SPEECH_PER))
+      const part = await renderMod.audioPeaks({ sourcePath: source, offset: offset + at, duration: span, buckets })
+      if (!part.ok) fail(`读音频失败：${part.error || part.reason || '未知原因'}`)
+      for (const value of part.peaks) peaks.push(value)
+    }
+    const segments = subtitle.vadSegments(peaks, { secondsPerBucket: SPEECH_PER, minDur: 0.35, maxDur: 8 })
+    if (!segments.length) {
+      return { ok: true, cues: [], added: 0, note: '这一段里没检测到说话声（可能没有人声，或全程音量一样平）' }
+    }
+
+    /* 2) 识别 */
+    const result = await speechMod.transcribe(
+      { sourcePath: source, offset, duration: dur, segments, modelId: model.id },
+      deps
+    )
+    if (!result.ok) fail(`识别失败：${result.error || result.reason || '未知原因'}`)
+
+    /* 3) 换回时间线坐标（识别结果相对片段头） */
+    const cues = result.segments.map((seg) => ({
+      start: Number((clip.start + seg.start).toFixed(3)),
+      end: Number((clip.start + Math.min(seg.end, dur)).toFixed(3)),
+      text: seg.text
+    }))
+
+    if (!apply) {
+      return { ok: true, model: result.model, cues, count: cues.length, empty: result.empty, elapsed: result.elapsed }
+    }
+
+    /* 4) 落成文字片段：和界面「AI 识别字幕」写出来的东西完全一样（sub-plain / 32 号） */
+    const created = []
+    for (const cue of cues) {
+      if (!cue.text) continue
+      const textClip = buildClip(
+        {
+          track: 'text',
+          kind: 'text',
+          text: cue.text,
+          textStyle: style || 'sub-plain',
+          textSize: 32,
+          start: Math.max(0, cue.start),
+          duration: Math.max(0.1, cue.end - cue.start),
+          name: cue.text.slice(0, 12)
+        },
+        nextId
+      )
+      created.push(textClip)
+      draft.data.clips.push(textClip)
+    }
+    const summary = saveDraft(draft.id, draft.name, draft.data)
+    return {
+      summary,
+      ok: true,
+      model: result.model,
+      added: created.length,
+      empty: result.empty,
+      elapsed: result.elapsed,
+      first: created.slice(0, 3).map((c) => ({ id: c.id, text: c.text, start: c.start, duration: c.duration }))
+    }
+  }
+
+  /* ---- 卡点（节拍检测） ---- */
+
+  /**
+   * 抽振幅包络找重音（界面上是速度面板的「按音频找节拍」按钮）。
+   *
+   * 三段与界面**逐步同源**，一处都不能自己写：
+   *   ① 包络来自 `render.audioPeaks`（和波形图是同一条 ffmpeg 抽 PCM 的链路）；
+   *   ② 找重音交给 `shared/beat.js` 的 `detectBeats`；
+   *   ③ 生成曲线用 `shared/speed.js` 的 `curveFromBeats` + `curvePatch`。
+   * 自己另写一套的后果是"agent 卡的点和界面卡的点不一样"，而两边都不会报错。
+   *
+   * ⚠️ 包络是**源时间**：带倍速的片段要除回倍速才是"片段内秒数"（界面同一句注释）。
+   */
+  ops.detectBeats = async ({ draftId, clipId, sensitivity, apply = false, fast, slow, hold } = {}) => {
+    const draft = readDraft(draftId)
+    const index = clipIndex(draft, clipId)
+    const clip = draft.data.clips[index]
+    const asset = draft.data.assets.find((item) => String(item.id) === String(clip.assetId || ''))
+    const sourcePath = asset && asset.path ? asset.path : ''
+    if (!sourcePath) fail(`这个片段没有可分析的音频（${clipId} 没有关联素材文件，比如文字/字幕片段）`)
+    if (clip.kind === 'image') fail('这是图片片段，没有音轨可分析')
+
+    const speed = Math.max(0.01, Number(clip.speed) || 1)
+    const span = Math.max(0.2, (Number(clip.duration) || 0) * speed)
+    const buckets = Math.min(6000, Math.max(120, Math.round(span * 60)))
+    const peaks = await renderMod.audioPeaks({
+      sourcePath,
+      offset: Math.max(0, Number(clip.offset) || 0),
+      duration: span,
+      buckets
+    })
+    if (!peaks || peaks.ok === false) fail((peaks && peaks.error) || '读不到音频包络（片段可能没有声音）')
+    const list = Array.isArray(peaks.peaks) ? peaks.peaks : []
+    if (!list.length) fail('没读到音频包络（片段可能没有声音）')
+
+    const step = span / list.length
+    const raw = beatMod.detectBeats(list, step, sensitivity == null ? {} : { sensitivity })
+    const duration = Number(clip.duration) || 0
+    const local = raw
+      .map((value) => value / (speed || 1))
+      .filter((value) => value > 0.02 && value < duration - 0.02)
+
+    let applied = null
+    if (apply) {
+      const built = speedMod.curveFromBeats(duration, local, { fast, slow, hold })
+      if (!built) fail('节拍都落在片段两端，生成不了曲线（把 apply 关掉只取点，或先 trim 片段）')
+      const patch = speedMod.curvePatch(clip, built.points)
+      if (!patch) fail('曲线生成失败')
+      draft.data.clips[index] = { ...clip, ...patch }
+      applied = { hits: built.hits, points: patch.speedCurve.points.length, speed: patch.speed }
+    }
+    const summary = saveDraft(draft.id, draft.name, draft.data)
+    return {
+      summary,
+      clipId,
+      beats: local,
+      count: local.length,
+      sourceBeats: raw,
+      step,
+      buckets: list.length,
+      applied
+    }
+  }
+
   /* ---- 导出 ---- */
 
   async function exportVideo(args) {
@@ -1146,7 +1670,9 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     fs.mkdirSync(path.dirname(abs), { recursive: true })
 
     const key = aspect.normalizeAspect(args.aspect || draft.data.aspect)
-    const res = exportRate.readResolution(args.resolution)
+    /* 没传分辨率就沿用草稿的档位（与界面同源）：agent 建 4K 草稿后直接导，
+       不该因为少写一个参数就把成片降成 1080P —— 而这一步没有任何报错。 */
+    const res = exportRate.readResolution(args.resolution || draft.data.resolution)
     const width = Number(args.width) || res.width
     const height = Number(args.height) || res.height
     const size = aspect.outputSizeFor(width, height, key)
@@ -1208,6 +1734,48 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     const result = packMod.exportPack({ data: draft.data, outPath: target })
     if (!result || result.ok === false) fail((result && result.error) || '打包失败')
     return { outPath: target, bytes: (() => { try { return fs.statSync(target).size } catch { return 0 } })(), ...result }
+  }
+
+  /**
+   * 导入素材包（界面上是顶栏「导入素材包」）。
+   *
+   * 与 `packDraft` 对偶，但**落成新草稿而不是覆盖同名**：包里带的是别人机器上的工程，
+   * 覆盖本机同 id 的草稿会把用户自己的东西冲掉，而且不可逆。
+   *
+   * `registerUrl` 传的是 `mediaUrlOf`：`importPack` 会按解包后的**新绝对路径**重算
+   * `yjai-media://` 地址。不传的话所有素材的 url 为空串 —— 草稿能打开，画面全黑，
+   * 而且 `missing` 里也不会提（它只查文件在不在）。
+   */
+  ops.unpackDraft = ({ packPath, name }) => {
+    const packMod = require('./pack')
+    const file = path.resolve(String(packPath || ''))
+    if (!file || !fs.existsSync(file)) fail(`包文件不存在：${packPath}`)
+
+    const stamp = `pack-${Date.now().toString(36)}`
+    const destDir = path.join(userDataDir, 'packs', stamp)
+    const imported = packMod.importPack({
+      packPath: file,
+      destDir,
+      registerUrl: (mediaPath) => {
+        try {
+          if (!fs.statSync(mediaPath).isFile()) return ''
+        } catch {
+          return ''
+        }
+        return media.mediaUrlOf(mediaPath)
+      }
+    })
+    if (!imported.ok) fail(imported.error || '解包失败')
+
+    const summary = store.save({ name: name || imported.name || '素材包工程', data: imported.data })
+    return {
+      draftId: summary.id,
+      summary,
+      name: summary.name,
+      mediaCount: imported.mediaCount,
+      missing: imported.missing,
+      dir: destDir
+    }
   }
 
   /* ---- 应用本体：装 / 起 / 打开草稿 ---- */

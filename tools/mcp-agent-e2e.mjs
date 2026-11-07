@@ -32,11 +32,12 @@ const FIX_SRT = path.join(__dirname, 'fixtures', 'mcp-subs.srt')
 
 const require = createRequire(import.meta.url)
 /* 画面比例的尺寸推导与界面**同一份**（shared/aspect.js）：
-   9:16 是"从基准分辨率里裁出竖屏最大内接矩形"，不是把 720p 放大到 1280 高 */
+   9:16 是"短边守恒地展开"（720p → 720×1280），不是在 1280×720 里裁出一块竖屏内接矩形
+   —— 后者会得到 404×720，短边只有 404，等于偷偷降了两档分辨率 */
 const ASPECT = require(path.join(ROOT, 'packages', 'desktop', 'src', 'shared', 'aspect.js'))
 
 /** 断言的条数（改动断言必须同步 scripts/verify.mjs 的 expected） */
-export const TOTAL_ASSERTIONS = 27
+export const TOTAL_ASSERTIONS = 31
 
 const ffmpegBin = () => process.env.FFMPEG_PATH || 'ffmpeg'
 const ffprobeBin = () => {
@@ -453,6 +454,68 @@ async function main() {
       Number.isFinite(lowBefore) && Number.isFinite(lowAfter) && lowAfter > lowBefore && lowAfter > highAfter && zUnique,
       `z ${lowBefore}→${lowAfter}（另一枚 ${highAfter}）· 叠加轨 z=[${overlayZ.join(',')}]`
     )
+
+    /* 27~30. 2026-11-03 补的双通道缺口：这四件事原先只有界面能做。
+       都**只走 stdio JSON-RPC**（不直调内部函数）—— 直调 ops 只能证明实现，
+       证明不了 schema 里的参数名真的接得上（参数名写反时本地全绿、真 agent 全空）。 */
+
+    /* 27. 导入素材包 → 解出一份新草稿（不能覆盖原稿：用户的包打开一次就把原工程冲了） */
+    const unpacked = await client.tool('yijing_unpack_draft', { packPath, name: '导入验证' })
+    const unpackId = unpacked.draftId
+    record(
+      '27. unpack_draft 解成**新草稿**（id 不同、素材条数与包里一致）',
+      Boolean(unpackId) && unpackId !== draftId && unpacked.mediaCount >= 1,
+      `新草稿 ${unpackId} · 素材 ${unpacked.mediaCount}` 
+    )
+
+    /* 28. 解出来的素材必须有 url：漏了 registerUrl 时草稿能打开、画面全黑，
+       而 `missing` 里不会提（它只查文件在不在）。判据读**回到草稿里的 url**。 */
+    const unpackDoc = await client.tool('yijing_read_draft', { draftId: unpackId })
+    const unpackAssets = (unpackDoc.data && unpackDoc.data.assets) || []
+    const noUrl = unpackAssets.filter((a) => !a.url)
+    record(
+      '28. 解出来的每条素材 url 非空（否则画面全黑而 missing 不报）',
+      unpackAssets.length >= 1 && noUrl.length === 0,
+      `${unpackAssets.length} 条素材 · 无 url 的 ${noUrl.length} 条`
+    )
+
+    /* 29. 删素材要连带删引用它的片段：只删素材会留下"片段还在、源文件没了"的半坏草稿 */
+    const victim = unpackAssets[0]
+    const refCount = ((unpackDoc.data && unpackDoc.data.clips) || []).filter(
+      (c) => String(c.assetId || '') === String(victim.id)
+    ).length
+    const removed = await client.tool('yijing_remove_media', { draftId: unpackId, assetId: victim.id })
+    const afterRemove = await client.tool('yijing_read_draft', { draftId: unpackId })
+    const leftClips = (afterRemove.data.clips || []).filter((c) => String(c.assetId || '') === String(victim.id))
+    record(
+      '29. remove_media 连带删掉引用它的片段（不留孤儿片段）',
+      removed.removedAssets === 1 && removed.removedClips === refCount && leftClips.length === 0,
+      `素材 -1 · 片段 -${removed.removedClips}（引用数 ${refCount}）`
+    )
+
+    /* 30. 导字体：磁盘与设置两侧都要通。只复制不写设置 ⇒ 界面永远看不见；
+       只写设置不复制 ⇒ 重启就坏。这里判**复制出来的文件在盘上**且**列表里有它**。 */
+    const fontSrc = ['C:/Windows/Fonts/arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'].find((p) => {
+      try {
+        return fs.statSync(p).isFile()
+      } catch {
+        return false
+      }
+    })
+    if (fontSrc) {
+      const imported = await client.tool('yijing_import_font', { paths: [fontSrc] })
+      const listed = await client.tool('yijing_list_fonts', {})
+      const first = imported.imported && imported.imported[0]
+      record(
+        '30. import_font 复制落盘且列表查得到（只写设置或只复制都会坏）',
+        Boolean(first) && fs.existsSync(first.path) && listed.total >= 1,
+        `${first ? path.basename(first.path) : '无'} · 列表 ${listed.total} 个`
+      )
+    } else {
+      /* 不写"跳过但记通过"：本产品是 Windows 桌面应用，系统字体必然存在；
+         找不到字体说明这台机器环境不对，应该红出来，而不是让它长得像通过。 */
+      record('30. import_font 复制落盘且列表查得到（只写设置或只复制都会坏）', false, '本机找不到任何 ttf，无法验证字体导入')
+    }
 
     realDone = true
   } catch (e) {

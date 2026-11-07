@@ -41,7 +41,7 @@ const CLIPS = [
 ]
 
 /** 固定断言数（改断言必须同步这里与 verify.mjs 的 expected） */
-const TOTAL_ASSERTIONS = 16
+const TOTAL_ASSERTIONS = 18
 /** 看门狗：到点强退，不让它把 verify 挂死 */
 const WATCHDOG_MS = 5 * 60 * 1000
 
@@ -184,16 +184,27 @@ async function main() {
 
     /* ---------------------------- 打开导出面板 ---------------------------- */
     await page.locator('.wb-export').first().click()
+    /* 面板的打开信号用摘要条，不用编码格式下拉 ——
+       2026-11-02 起编码格式在「高级」屏里，默认不渲染（见 SidePanels 的 seg 状态）。 */
     const opened = await page
-      .waitForSelector('[data-export-codec]', { timeout: 15000 })
+      .waitForSelector('[data-export-summary]', { timeout: 15000 })
       .then(() => true)
       .catch(() => false)
-    check('点导出按钮后编码格式下拉出现', opened)
+    check('点导出按钮后导出面板打开（摘要条出现）', opened)
     if (!opened) {
       aborted = '导出面板没打开'
       return summary()
     }
     await sleep(400)
+
+    /* 编码格式 / 视频编码 / 码率控制都在「高级」屏：
+       先真的点一下那枚分段按钮，再验下拉 —— 否则验的是"没渲染的东西"。 */
+    const advancedBtn = page.locator('[data-export-seg="advanced"]')
+    check('导出面板有「基本 / 高级」两屏切换', (await advancedBtn.count()) === 1)
+    await advancedBtn.click()
+    await sleep(320)
+    const advancedVisible = await page.locator('[data-export-codec]').isVisible().catch(() => false)
+    check('点「高级」后编码格式下拉真的出现了（不是只改了状态）', advancedVisible)
 
     /* ------------------ 1. 默认是 H.264，五档格式都在 ------------------ */
     const defCodec = await page.locator('[data-export-codec]').inputValue()

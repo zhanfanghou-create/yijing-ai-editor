@@ -18,6 +18,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const zlib = require('node:zlib')
 
 const SIG_LOCAL = 0x04034b50
 const SIG_CENTRAL = 0x02014b50
@@ -25,6 +26,8 @@ const SIG_EOCD = 0x06054b50
 /** 通用标志位 11：文件名用 UTF-8（中文素材名不这么标会被解成乱码） */
 const FLAG_UTF8 = 0x0800
 const METHOD_STORE = 0
+/** deflate。**我们只写 store，但读要认 deflate** —— 详见 readZip 的说明 */
+const METHOD_DEFLATE = 8
 
 let crcTable = null
 
@@ -183,10 +186,19 @@ function readZip(filePath) {
     const localExtraLen = buf.readUInt16LE(localOffset + 28)
     const dataStart = localOffset + 30 + localNameLen + localExtraLen
     const raw = buf.subarray(dataStart, dataStart + compSize)
-    /* 不收 deflate：我们自己只写 store。外人手工改过的包直接如实报错，
-       而不是"解出一段看起来像 JSON 的乱码"（更难查）。 */
-    if (method !== METHOD_STORE) throw new Error(`不支持的压缩方式 ${method}：${name}`)
-    out.push({ name, data: Buffer.from(raw), size: raw.length })
+    /* 我们写包只用 store（包里的 mp4/jpg 本来就压过），但**读要认 deflate**：
+       特效素材包里有一堆 PNG 序列，用 deflate 打包能省 15%，而这类包可能是用
+       别的工具打的（Python 的 zipfile 默认就是 deflate）。只认 store 会让
+       "自己打的包能读、生成的包读不了"这种不对称问题在交付时才暴露。 */
+    let data
+    if (method === METHOD_STORE) {
+      data = Buffer.from(raw)
+    } else if (method === METHOD_DEFLATE) {
+      data = zlib.inflateRawSync(raw)
+    } else {
+      throw new Error(`不支持的压缩方式 ${method}：${name}`)
+    }
+    out.push({ name, data, size: data.length })
   }
   return out
 }

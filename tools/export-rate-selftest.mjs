@@ -71,12 +71,16 @@ console.log('\n=== D. readRate 三形态并联（id / 数字 / 旧草稿里的 3
   check('表外合法值 48 → 认，但 id 保持 48', off.id === '48' && off.fps === 48, JSON.stringify(off))
 }
 
-console.log('\n=== E. 分辨率六档 ===')
+console.log('\n=== E. 分辨率五档（上限 4K）===')
 {
   const ids = rate.RESOLUTIONS.map((item) => item.id)
-  check('六档：480p / 720p / 1080p / 2k / 4k / 8k', ids.join(',') === '480p,720p,1080p,2k,4k,8k', ids.join(','))
-  const u8 = rate.readResolution('8k')
-  check('8K = 7680 × 4320', u8.width === 7680 && u8.height === 4320, `${u8.width}×${u8.height}`)
+  check('五档：480p / 720p / 1080p / 2k / 4k', ids.join(',') === '480p,720p,1080p,2k,4k', ids.join(','))
+  const u4 = rate.readResolution('4k')
+  check('4K = 3840 × 2160', u4.width === 3840 && u4.height === 2160, `${u4.width}×${u4.height}`)
+  check('表里没有 8k（本产品上限 4K，不给一个按下去多半失败的档）', !ids.includes('8k'))
+  const legacy8 = rate.readResolution('8k')
+  check('旧草稿的 8k → 落到 4k（不许静默掉到 1080P：那是连降两档）',
+    legacy8.id === '4k' && legacy8.width === 3840, JSON.stringify(legacy8))
   const u480 = rate.readResolution('480p')
   check('480P = 854 × 480（不是 640×480：那个是 4:3）', u480.width === 854 && u480.height === 480, `${u480.width}×${u480.height}`)
   const unknown = rate.readResolution('不存在的档')
@@ -85,6 +89,23 @@ console.log('\n=== E. 分辨率六档 ===')
   check('null → 1080P', empty.id === '1080p', JSON.stringify(empty))
   /* 每一档都必须是偶数宽高：H.264 的 yuv420p 要求偶数，奇数会让 ffmpeg 直接报错 */
   check('每档宽高都是偶数（yuv420p 硬要求）', rate.RESOLUTIONS.every((item) => item.width % 2 === 0 && item.height % 2 === 0))
+}
+
+console.log('\n=== E2. 4K 上限夹取（绕开下拉框的入口也要挡住）===')
+{
+  check('短边上限是 2160', rate.MAX_SHORT_SIDE === 2160, String(rate.MAX_SHORT_SIDE))
+  const big = rate.clampSize(7680, 4320)
+  check('8K 基准 → 3840×2160 且标记 clamped', big.width === 3840 && big.height === 2160 && big.clamped === true, JSON.stringify(big))
+  const square = rate.clampSize(3000, 3000)
+  check('3000×3000 → 2160×2160（保持方形）', square.width === 2160 && square.height === 2160, JSON.stringify(square))
+  const tall = rate.clampSize(2160, 3840)
+  check('2160×3840（4K 竖屏）→ 原样不动（短边已经是 2160）',
+    tall.width === 2160 && tall.height === 3840 && tall.clamped === false, JSON.stringify(tall))
+  const wide = rate.clampSize(4320, 2160)
+  check('4320×2160（4K + 2:1）→ 原样不动（按短边算，不按总像素）',
+    wide.width === 4320 && wide.height === 2160 && wide.clamped === false, JSON.stringify(wide))
+  const odd = rate.clampSize(1921, 1081)
+  check('奇数尺寸 → 都取偶数', odd.width % 2 === 0 && odd.height % 2 === 0, JSON.stringify(odd))
 }
 
 console.log('\n=== F. 默认值 ===')

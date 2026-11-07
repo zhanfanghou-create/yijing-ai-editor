@@ -1235,3 +1235,92 @@
 .app.is-home {
   grid-template-rows: 1fr;
 }
+
+/* ================= 无线画布：左栏那一项打开的内嵌网页 ================= */
+
+/* 主区整块给它（不是覆盖层，也不需要关闭按钮）：
+   点左栏「创作视频」就换回来 —— 与另一屏是**同级互斥**关系，不是叠在上面的东西。
+   24px 左右留白与首页其它区块对齐；底部给 24 是因为顶栏 56px 已经在上面了。 */
+.home-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 0 24px 24px;
+}
+
+/* 网页卡片本体。圆角 8 与首页其它卡片同一档；底色取目标站 theme-color，
+   加载中不会先闪一块白（跨源 iframe 在 load 之前就是一片纯白）。 */
+.app-web {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  background: #0b0f0c;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* 就绪前先不显示：过渡只有 0.16s，不影响体感速度，但能避免白闪 */
+.app-web-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: #0b0f0c;
+  opacity: 0;
+  transition: opacity 0.16s linear;
+}
+
+.app-web-frame.is-ready {
+  opacity: 1;
+}
+
+/* 加载遮罩：盖在 iframe 上而不是替换它 ——
+   iframe 必须一直在文档里，否则 onLoad 永远不会触发（不挂载就没有 load 事件），
+   而「ready」也就永远为假，转圈会一直转下去。 */
+.app-web-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: #0b0f0c;
+  color: var(--h-muted);
+  font-size: 12px;
+}
+
+.app-web-mask p {
+  margin: 0;
+  max-width: 320px;
+  line-height: 1.6;
+}
+
+.app-web-spin {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: var(--h-accent);
+  animation: app-web-spin 0.9s linear infinite;
+}
+
+@keyframes app-web-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 动效敏感的用户：转圈放慢而不是停掉（停掉就看不出"还在加载"了） */
+@media (prefers-reduced-motion: reduce) {
+  .app-web-spin {
+    animation-duration: 2.6s;
+  }
+}

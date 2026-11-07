@@ -218,6 +218,7 @@ export function transitionAt(clips, t) {
   const limit = num(incoming.sourceDuration) > 0 ? num(incoming.sourceDuration) - 0.05 : Number.POSITIVE_INFINITY
   return {
     key: hit.key,
+    geo: hit.geo || null,
     duration: hit.duration,
     progress,
     incomingId: incoming.id,
@@ -422,7 +423,7 @@ export function compositeAt(clips, assets, playhead, options = {}) {
         visible: true,
         role: 'incoming',
         sourceTime: tr.incomingSourceTime,
-        xfade: { key: tr.key, progress: tr.progress }
+        xfade: { key: tr.key, geo: tr.geo, progress: tr.progress }
       })
     }
     if (!visibleIds.has(clip.id)) return describeLayer(clip, pool, t, { visible: false, role: 'hot' })

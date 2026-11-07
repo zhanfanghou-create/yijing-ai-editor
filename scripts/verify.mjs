@@ -524,10 +524,12 @@ const GATES = [
   },
   {
     id: 'export-rate-selftest',
-    name: '自证·导出规格（帧率七档 / NTSC 整数比 / 分辨率六档 / 非法输入退回默认）',
+    name: '自证·导出规格（帧率七档 / NTSC 整数比 / 分辨率五档上限 4K / 4K 夹取 / 非法输入退回默认）',
     argv: [NODE, '--no-warnings', 'tools/export-rate-selftest.mjs'],
-    // 稳定数字 27。
-    //
+    // 稳定数字 35（27 → 35，2026-11-07）：
+    //   E 段把「六档」改成「五档（上限 4K）」并补了三条：表里没有 8k、旧草稿的 8k 落回 4k、
+    //   4K = 3840×2160；新增 E2 段 6 条「4K 上限夹取」——上限必须在**换算层**挡住，
+    //   只写在下拉框里的话，MCP 传 width/height 或旧草稿存着 8K 尺寸就绕过去了。
     // 这一层错了**画面完全正常**，所以判据必须落在换算结果上：
     //   · 29.97 被 Math.round 成 30 ⇒ NTSC 母版错档，成片照样能播；
     //   · 29.97 原样拼进 `fps=` 滤镜 ⇒ 容器里存 2997/100 这个非标准 timebase，
@@ -536,7 +538,7 @@ const GATES = [
     //   · 多出 36/42/48 ⇒ 那是不存在的交付规格。
     // 「真的落进容器了吗」由 render-e2e 的两条真渲断言证（ffprobe 读 avg_frame_rate），
     // 这一道只证「算得对」。
-    expected: 27,
+    expected: 35,
     marker: /EXPORT_RATE_SELFTEST_PASSED/,
     count: /EXPORT_RATE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -766,6 +768,51 @@ const GATES = [
     count: /FACEFX_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'models-selftest',
+    name: '自证·本地 AI 模型管理（状态判定 / 半套回落 / 体积校验 / 删除不动随包）',
+    argv: [NODE, '--no-warnings', 'tools/models-selftest.mjs'],
+    // 稳定数字 12。模型管理的错法**全是静默的**，而且错得越离谱越像"装好了"：
+    //   · 下载中途断网留下半截文件 ⇒ 之后每次都判"已安装"，推理时才炸；
+    //   · 半套文件被当成可用 ⇒ 界面上写着"已就绪"，功能却坏了；
+    //   · 删除时把随包那份一起删了 ⇒ 功能永久坏掉，下次发版前都没救；
+    //   · .part 残留不清 ⇒ 下次下载拼出一份错的。
+    // 所以判据用的是"状态机三档 + 随包文件逐个还在"，不是"看看文件存不存在"。
+    expected: 12,
+    marker: /MODELS_SELFTEST_PASSED/,
+    count: /MODELS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'download-resume',
+    name: '下载器·断点续传 / 换源重下 / 416 / 并行分段 / 代理隧道（本地起服务，不碰外网）',
+    argv: [NODE, 'tools/check-download-resume.mjs'],
+    // 稳定数字 25。
+    //
+    // 这道闸门挡的是"下载器自己把自己搞坏"，而它的所有错法**都长得像网络不好**：
+    //   · 每次失败删 `.part` ⇒ 慢网下进度条反复弹回 0，228MB 的模型永远装不完；
+    //   · 追加写却没看状态码 ⇒ 服务器忽略 Range 时拼出"长度刚好对、内容前后两半"的文件，
+    //     promote() 的体积校验照样放行 ⇒ 模型能加载、识别结果是乱码；
+    //   · 换镜像沿用旧 `.part` ⇒ 同上（体积校验拦不住"同长度不同内容"）；
+    //   · `node:https` 不读 `https_proxy` ⇒ 用户开着系统代理，应用仍在裸奔。
+    // 前三条只要一次真失败就触发，第四条在所有开代理的机器上必然触发 ——
+    // 而"真网上下"会抖、抖了只能判 SKIP，SKIP 变常态就等于没这道闸门。
+    // 所以这里在 127.0.0.1 起一个**会准时在 40% 掐断连接**的源站 + 一个**真 CONNECT 代理**，
+    // 43 条断言全部离线可复现，其中 18 条钉多连接并行下载：分段请求形状、
+    // 四条真并发（限速源站上量到 3.95×）、断一段只补那一段、不认 Range 退回单流、
+    // 停滞看门狗、换源清残段、删除清残段。
+    //
+    // 已验过的负对照（都打在对应那条上，不是"随便红了就行"）：
+    //   · 把写盘 flags 改成永远追加 ⇒ 「服务器忽略 Range 时整份重写」变红（717824 字节）；
+    //   · 把"重试前删 .part"加回去 ⇒ 「重试带的是断点 Range」变红；
+    //   · 去掉"代理连不上就退回直连" ⇒ 「代理连不上时自动退回直连」变红；
+    //   · 分段重试时把段文件删掉重下 ⇒ 「重试只补缺的那一段」变红（4 段 · 起点 0）；
+    //   · 去掉两级体积门槛 ⇒ 「低于阈值的文件不分段」变红（4 个分段请求）；
+    //   · dropPart 不清 `.part.seg*` ⇒ 「换源时旧的分段文件一起清掉」变红（剩 2 个）；
+    //   · 关掉停滞看门狗 ⇒ 两条停滞断言变红（15011ms 仍未结束，且不会挂住套件）。
+    expected: 43,
+    marker: /DOWNLOAD_RESUME_OK/,
+    count: /DOWNLOAD_RESUME_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'facefx',
     name: '人物特效·MediaPipe 478 点（识别↔预览跟随↔成片跟随）',
     argv: [NODE, 'tools/check-facefx.mjs'],
@@ -884,9 +931,67 @@ const GATES = [
     // 35 → 36（2026-10-28）：新增「已有素材时工具区不再自称没有媒体文件」。
     //   底部引导语原先写死在 JSX 里，库里有 3 个素材时仍显示「没有媒体文件？」，
     //   语义自相矛盾；不抛异常也不让任何闸门变红，只有看截图才发现。
-    expected: 36,
+    // 36 → 38（2026-11-07）：新增两条 4K 导入 —— 用户口径是「最高支持 4K 像素导入导出」。
+    //   导出侧由 check-4k-io 真导一遍读成片尺寸；导入侧的元数据走的是**另一条读取路径**
+    //   （<img>/<video> 解码器，assets.js 的 probeMedia，不是 ffprobe）。两条路任意一条
+    //   把 4K 降成 1080P，症状都一样：素材能用、时间线正常、成片也出得来，只有素材卡上的
+    //   「宽×高」不同 —— 所以判据读卡片文案。没有 ffmpeg 时视频那条记 SKIP（总数不变）。
+    expected: 38,
     marker: /MEDIA_IMPORT_OK/,
     count: /MEDIA_IMPORT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: '4k-io',
+    name: '导入导出·4K（真造 4K 素材 → 真导 → 读成片尺寸）',
+    argv: [NODE, '--no-warnings', 'tools/check-4k-io.mjs'],
+    // 稳定数字 13 = 1（4K 视频源造出来了）+ 3（导入侧：能登记 / 源真实 3840×2160 / 图片源 3840×2160）
+    //   + 5（导出侧：4K 16:9 / 4K 9:16 / 4K 1:1 / 4K 图片片段 / 1080P 9:16）
+    //   + 1（8K 宽高传进来被夹到 3840×2160）+ 1（七种比例的面板尺寸 = 成片尺寸）
+    //   + 2（档位表最高是 4k / 旧 8k 请求落到 4k）。
+    //
+    // 为什么必须真导：`outputSizeFor` 那层算术再对，成片也可能不是那个尺寸 ——
+    // 尺寸要走 options → outputSizeOf → 滤镜链 → ffmpeg。中间任何一处换了来源
+    // （面板算一个、主进程算一个）成片就会与界面不一致，而两边单独看都很正常。
+    //
+    // 这一道钉的是 2026-11-07 修掉的**真实缺陷**：以前 outputSizeFor 是"在基准框里
+    // 裁出比例的最大内接矩形"，4K + 9:16 只有 1214×2160（短边 1214）—— 界面写着 4K、
+    // 拿到的竖屏片短边连 720 的 1.7 倍都不到，成片尺寸与参数表谁都不报错。
+    // 现在短边守恒：4K 竖屏 = 2160×3840。把它改回裁内接矩形，第 4 条断言必红。
+    //
+    // ⚠️ 这条要真 ffmpeg：没有 ffmpeg 就等于没验证（脚本 exit 2，不打 OK 标记）。
+    expected: 13,
+    marker: /FOUR_K_IO_OK/,
+    count: /FOUR_K_IO_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'app-link',
+    name: '首页左栏「无线画布」（CSP 接线 / 占满主区 / 真加载 / 切回去）',
+    argv: [NODE, '--no-warnings', 'tools/check-app-link.mjs'],
+    // 稳定数字 18 = 8（静态：地址真源 / CSP 的 frame-src 同源 / 不许是通配 /
+    //   vite 的 commonjs 白名单 / 首页 NAV 有这一项且上报漏判不会弹"未知入口" /
+    //   iframe 的 src 来自真源且面板无按钮 / 剪辑器左栏没有第二个入口 /
+    //   画布页与网页卡片有真实尺寸）+ 10（真机：左栏项文案 / 在可视区 / 切页 /
+    //   占满主区 / 面板无按钮 / 子 frame 真出现 / load 事件触发 / 没有报错提示 /
+    //   切回创作页 / 无未捕获异常）。
+    //
+    // 这道闸门钉的是 2026-11-07 的几个真实缺陷（每一个都"单独看没错"）：
+    //   · CSP 的 frame-src 与地址真源不同步时 iframe 一片空白，界面连提示都没有；
+    //   · 首页 pickNav 是按 `page === 'home'` 分发的，新增 canvas 会被当成未知入口，
+    //     点下去页面照切、却弹一句「还没有可用的入口」；
+    //   · 画布页若套在 `.home-body` 里，24px 内边距 + 滚动条会把网页挤成留缝的一块。
+    //
+    // ⚠️ 判据读 `page.frames()` 而不是 src 属性：src 写对了但被 CSP 拦掉，src 照样是
+    //    那个值。实测（拿掉 frame-src 外源）：子 frame 40 秒都不出现，而 `load` 事件
+    //    照常触发 —— 所以"遮罩退场"那一条单独用会假绿，真判据是 frame 存不存在。
+    // ⚠️ 静态那条 CSS 断言要先剥注释再匹配：注释里就写着类名，
+    //    不剥的话把声明删掉照样 PASS（实测过，假绿）。
+    // ⚠️ 面板尺寸与 `.home-main` **相对比**，不写绝对像素：换个窗口大小就假红。
+    //
+    // 目标站不可达 ⇒ 真机 10 条记 SKIP（skip 组），静态 8 条照跑 ——
+    // 跳过的条目不等于验过，那一行统计会明说。
+    expected: 18,
+    marker: /APP_LINK_OK/,
+    count: /APP_LINK_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
   {
     id: 'render',
@@ -1255,9 +1360,186 @@ const GATES = [
     // 判据一律读**DOM 消费端**：select 的 value 与 option 列表（不是 state、不是常量表）、
     // 容器提示的 data-* 属性、以及 ProRes 时码率控件是否真的从 DOM 里消失。
     // 最后一条还钉「切回 H.264 那组控件要回来」—— 只删不回来的条件渲染同样是 bug。
-    expected: 16,
+    // 2026-11-02 起面板分「基本 / 高级」两屏（导出面板信息过载），编码相关的三组控件
+    // 在高级屏里；于是本条目多两条：①面板有分段切换 ②点了高级之后下拉**真的**可见
+    // —— 只改状态不换渲染同样是"点了没反应"，正是这道闸要抓的那一类。
+    expected: 18,
     marker: /EXPORT_PANEL_E2E_OK/,
     count: /EXPORT_PANEL_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'caption-track',
+    name: '客户端 E2E（「字幕轨」= 右栏紧跟「信息」的轨级页签：整条轨清单 / 点行定位 / 中栏不再重复）',
+    argv: [NODE, 'tools/check-caption-track.mjs'],
+    // 稳定数字 11。2026-11-02 Jason：「字幕轨单独放到右侧窗口信息标签后面」，
+    // 随后补「只有在添加编辑字幕时标签才显示，不是有字幕时」——所以显隐判据是
+    // **此刻在不在做字幕的事**（中栏停在「文字/字幕」页、或选中的是字幕片段）。
+    // 三类静默失效全都不报错：①原处还留一份 ②任何页面都摆着这枚页签 ③点一行不定位。
+    // 判据读 DOM：页签实际顺序、渲染出来的行数、时间线 [data-playhead] 的秒数；
+    // 最后两条钉窗口最小宽 1180 时六枚页签不被裁掉、以及页头「清空」真的只清字幕。
+    expected: 11,
+    marker: /CAPTION_TRACK_E2E_OK/,
+    count: /CAPTION_TRACK_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'speech-selftest',
+    name: '自证·本机语音识别（正文清理 / 注册表字节数与随包运行时一致 / 空目录不假绿）',
+    argv: [NODE, '--no-warnings', 'tools/speech-selftest.mjs'],
+    // 稳定数字 8。这一族错法全是静默的：
+    //   · 注册表 `bytes` 抄错一个数字 ⇒ 用户点下载，下完被判"体积不符"删掉，界面只说"失败"；
+    //   · 随包 .node 与注册表 URL 版本不一致 ⇒ 下载来的运行时与随包那份是两套 ABI，
+    //     只在装出来的包里崩；
+    //   · 模型配置键名写错（paraformer / senseVoice）⇒ 加载"成功"但什么都不认。
+    // 所以第 6 条拿**磁盘上真实文件**核对注册表数字，不是"有文件就算过"。
+    expected: 8,
+    marker: /SPEECH_SELFTEST_OK/,
+    count: /SPEECH_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'tts-selftest',
+    name: '自证·本机配音（音色包注册表字节数 / 词典齐全 / 空文本与超长文本被拦）',
+    argv: [NODE, '--no-warnings', 'tools/tts-selftest.mjs'],
+    // 稳定数字 8。这一族错法都是静默的：
+    //   · 注册表 bytes 抄错 ⇒ 下完被判"体积不符"删掉，界面只说失败；
+    //   · 少登记一个分词词典 ⇒ 能出声但多音字全读错，没有任何报错；
+    //   · 注册表里出现第二个 .onnx ⇒ 合成器挑错模型，加载"成功"但输出噪声；
+    //   · 空/超长文本不拦 ⇒ 主进程同步阻塞，界面看着像死机。
+    // 全是纯函数与注册表真值，不加载模型也不联网。
+    expected: 8,
+    marker: /TTS_SELFTEST_OK/,
+    count: /TTS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'voicefx-selftest',
+    name: '自证·变声与人声增强（预设表 / 采样率归一 / atempo 互为倒数 / 强度单调）',
+    argv: [NODE, '--no-warnings', 'tools/voicefx-selftest.mjs'],
+    // 稳定数字 10。这族错法同样全是静默的：
+    //   · 只改 asetrate 不配 atempo ⇒ 变调又变速，片段短一截，音画对不上；
+    //   · asetrate 硬编码 48000 但上游是 44.1kHz ⇒ 倍率错，同样"变调 + 缩水"
+    //     （本条是拿真实 ffmpeg 跑出来的：3 秒源变 2.749 秒）；
+    //   · 返回串带前导逗号 ⇒ 拼进 aTail 变 `,,`，报在导出最后一步；
+    //   · 强度不单调 ⇒ 滑杆能拖、声音不变。
+    // 纯函数真值 + 一次真实 ffmpeg 侧的时长/音高核对（见 _probe，不入闸门）。
+    expected: 10,
+    marker: /VOICEFX_SELFTEST_OK/,
+    count: /VOICEFX_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'speech-recognize',
+    name: '客户端 E2E（AI 识别字幕：没模型自动弹设置并定位 → 真下载 → 出带文字的字幕）',
+    argv: [NODE, 'tools/check-speech-recognize.mjs'],
+    // 稳定数字 10（2026-11-02 Jason：「使用相关功能自动弹出设置的 AI 模型下载配置界面」）。
+    // ⚠️ 这道闸**真的会下载 78MB 模型**（走应用自己的下载器，与用户点「下载」同一条路），
+    //    整条链路是：下载 → 体积校验 → 落盘 → 加载 → 识别 → 落字幕。耗时约 1~2 分钟，
+    //    看门狗 12 分钟。
+    //    **网络不可达 ⇒ 记 10 条 SKIP（skip 组），可达但下不下来 ⇒ 红。**
+    //    原先写的是"网络不通就红"，2026-11-03 全量里被一次镜像抖动打成红，
+    //    而那个红长得像功能坏了 —— 花了不少时间去查 DNS / 代理 / Electron 运行时。
+    // ⚠️ 同一天又补了第二种跳过：**前置探测过了、下载时却超时**。
+    //    探测用的是 75KB 的 tokens.txt，真下载的是 78MB 的 model.int8.onnx ——
+    //    小文件通 ≠ 大文件能下。实测那次：探测秒回，下载时 hf-mirror 连接超时 +
+    //    备用的 huggingface.co ETIMEDOUT，而同一台机器十分钟前刚下完同一个 78MB。
+    //    所以现在的判据是两条：
+    //      ① 探测不可达          ⇒ 10 条全 SKIP；
+    //      ② 下载报错且错因是网络（连接超时 / ETIMEDOUT / ECONNRESET / ENOTFOUND…）
+    //                            ⇒ 前 6 条照常算通过，后 4 条 SKIP，退出码 0；
+    //      ③ 下载报错但不是网络（体积不符 / sha 不符 / 磁盘满 / 加载失败）⇒ 照旧红。
+    //    第三条才是这道闸真正防的东西，别把它一起放过。
+    //    两条跳过分支都用注入的方式实测过（网络类 → 6P/0F/4S exit 0；
+    //    非网络类 → 0 条 SKIP，走正常判定）。
+    expected: 10,
+    marker: /SPEECH_RECOGNIZE_E2E_(OK|SKIPPED)/,
+    count: /SPEECH_RECOGNIZE_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'speech-tiers',
+    name: '客户端 E2E（字幕识别档位：两档都列出 · 未装标「未安装」· 装上后可选 · 选择跨重启保留）',
+    argv: [NODE, 'tools/check-speech-tiers.mjs'],
+    // 稳定数字 7。钉的是「双通道对等」的第一条：**人在界面上能独立做完**。
+    // 两个识别模型早就登记、agent 能指定 modelId，但界面一直写死默认档 ——
+    // 这种断法不报错、功能都还能用，只有专门一条闸门能发现。
+    // ⚠️ 首跑 78MB（轻量识别模型，走应用自己的下载器）；profile 是**共享且不清空**的
+    //    （`%TEMP%/yjai-e2e/speech-shared`），第二次之后只做体积校验。网络不通会红，这是预期。
+    expected: 7,
+    marker: /SPEECH_TIERS_OK/,
+    count: /SPEECH_TIERS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'denoise-ui',
+    name: '客户端 E2E（AI 降噪：模型没装就地下载 0.5MB → 真处理 → 素材库多一条）',
+    argv: [NODE, 'tools/check-denoise-ui.mjs'],
+    // 稳定数字 8。这道闸**专治一类纯 Node 测不出的问题**：
+    //   sherpa 默认用外部 ArrayBuffer 映射采样，Electron 主进程直接拒绝
+    //   （"External buffers are not allowed"）。同一个 `speech.js` 在纯 Node 下
+    //   跑得好好的（`mcp-denoise` 全绿），装进应用里点按钮必炸 ——
+    //   只有真起一个 Electron 才看得见。首版正是靠它抓到的。
+    // ⚠️ 无窗：脚本自己注入 YJAI_NO_WINDOW=1，不抢焦点。
+    //    **模型源不可达 ⇒ 记 8 条 SKIP（skip 组），可达但下不下来 ⇒ 红。**
+    //    2026-11-03 全量里它就因为"本机直连 github.com 恒不通"被打成红，
+    //    而报的是"只看到 4 项通过"这种像功能坏了的话。
+    expected: 8,
+    marker: /DENOISE_UI_(OK|SKIPPED)/,
+    count: /DENOISE_UI_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'matte-ui',
+    name: '客户端 E2E（智能抠像·图片：模型没装就地下载 0.25MB → 真抠 → 产物 PNG 带 alpha）',
+    argv: [NODE, 'tools/check-matte-ui.mjs'],
+    // 稳定数字 9。抠像的推理**只在渲染层**（要 Canvas / WebGL），主进程一行都跑不了 ——
+    // 所以纯 Node 的自测最多验"路径算得对"，验不了"抠出来的像素对不对"。
+    // 这道闸的关键判据是**把产物 PNG 重新读进 canvas 数 alpha**：
+    //   模型跑通但忘了把 mask 乘进 alpha，会得到一张全不透明的"原图"，
+    //   提示条依然写"已抠像" —— 只有数像素才能拆穿。
+    // ⚠️ 无窗：脚本自己注入 YJAI_NO_WINDOW=1，不抢焦点。
+    //    **模型源不可达 ⇒ 记 9 条 SKIP，可达但下不下来 ⇒ 红。**
+    expected: 9,
+    marker: /MATTE_UI_(OK|SKIPPED)/,
+    count: /MATTE_UI_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'matte-video',
+    name: '客户端 E2E（智能抠像·视频：逐帧抠 3 秒 45 帧 → 合背景 → 成片时长与背景都对）',
+    argv: [NODE, 'tools/check-matte-video-ui.mjs'],
+    // 稳定数字 8。视频那条比图片多三环，每环都能单独坏且不报错：
+    //   ① 逐帧 IPC 写盘（seqId 校验过严 = 全失败；过松 = 路径穿越）；
+    //   ② `-start_number 0`（漏了 ffmpeg 从 00001 找，直接 "Could not open"）；
+    //   ③ 背景合成（不做 = 全黑底，但提示条照样写"已抠像"）。
+    // 判据读 ffprobe 量出来的时长与解码回来的一帧像素，不看提示条。
+    // ⚠️ 无窗：脚本自己注入 YJAI_NO_WINDOW=1，不抢焦点。
+    //    **模型源不可达 ⇒ 记 8 条 SKIP，可达但下不下来 ⇒ 红。**
+    expected: 8,
+    marker: /MATTE_VIDEO_(OK|SKIPPED)/,
+    count: /MATTE_VIDEO_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'mcp-denoise',
+    name: '契约·智能体的 AI 语音降噪（真模型跑 5.6s → 48k 立体声、时长一致、草稿真的多一条音轨）',
+    argv: [NODE, 'tools/check-mcp-denoise.mjs'],
+    // 稳定数字 10。降噪比识别多两个必错的环节，且两者都不会报错：
+    //   ① 模型工作在 16kHz、成片要 48kHz —— 不重采样会让整条音轨时长漂移；
+    //   ② 模型收尾按帧截断，实测少 128 采样 —— 不补齐则每段短 8ms，多段后音画逐段错位。
+    // 判据全部读**产物本体**（wav chunk 头算时长、草稿本体数 clip），不读返回值。
+    // ⚠️ 首跑约 22MB（运行时，若本机没装）+ 0.5MB 模型，缓存在 %TEMP%/yjai-e2e 下。
+    expected: 10,
+    marker: /MCP_DENOISE_OK/,
+    count: /MCP_DENOISE_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'mcp-speech',
+    name: '契约·智能体的语音转字幕（用真模型认 5.6s 中文 → 字幕真的落到字幕轨上）',
+    argv: [NODE, 'tools/check-mcp-speech.mjs'],
+    // 稳定数字 7。双通道对等的硬指标要求「agent 只靠 MCP 也能全自动做完」——
+    // 界面那条路由 speech-recognize 验，但 agent 走的是 mcp-ops 里另一条路：
+    // 两边共享 speech.js，却各自负责坐标换算与落盘，**一方错了另一方全绿**。
+    // 判据读草稿本体（readDraft 后看 text 轨），不读返回值 ——
+    // 「返回 ok:true、草稿里没东西」正是这里最容易发生的一种假绿。
+    // ⚠️ 首跑约 100MB（运行时 22MB + 中文模型 78MB），缓存在 %TEMP%/yjai-e2e 下，
+    //    重跑只做体积校验（1 秒级）。看门狗 10 分钟，网络不通会红，这是预期。
+    expected: 7,
+    marker: /MCP_SPEECH_OK/,
+    count: /MCP_SPEECH_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    /* 只调小：首跑最坏是"下 100MB + 装 + 认 5.6s"，实测冷启动 2 分钟内 */
+    timeoutMs: 10 * 60 * 1000
   },
   {
     id: 'preview-follow',
@@ -1593,6 +1875,118 @@ const GATES = [
     count: /通过\s*(?<p>\d+)\s*项\s*\/\s*失败\s*(?<f>\d+)\s*项/
   },
   {
+    id: 'fx-wiring',
+    name: '契约·画面特效四处接线（真源 / 预览规则 / 卡片示意 / 导出 case / 缩略图 全部对上）',
+    argv: [NODE, 'tools/check-fx-wiring.mjs'],
+    // 稳定数字 11 = 键数 ≥ 10 · kind 五档 · 预览规则 · 卡片示意 · 导出 case+return
+    //   · 素材类**不许**混进滤镜链 · 缩略图文件 · 卡片引用的键都注册 · 无表外孤儿规则
+    //   · transform 带 animation · 参数串每一位都在档位范围内（2026-11-03 参数化后新增）。
+    //
+    // 为什么必须有这道：加一个画面特效要同时改四处（frameEffects.json / styles.css /
+    // looks.js / 缩略图），**漏任何一处都不报错、不影响构建**，只表现为
+    //   "卡片点了预览不动" / "预览在动成片原样" / "卡片是个空框"。
+    // 本轮就是靠人工比对才发现"343 张卡只有 6 个键、235 张同一个漏光"，
+    // 那属于四处都对但内容退化 —— 由 material-thumbs 的第 14 条兜住；这一道管接线。
+    expected: 11,
+    marker: /FX_WIRING_OK/,
+    count: /FX_WIRING_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'fx-distinct',
+    name: '像素·特效 267 个效果两两可分辨（读缩略图，不读参数）',
+    argv: [NODE, 'tools/check-fx-distinct.mjs'],
+    // 稳定数字 6 = 卡片/名字/键数三者相等 · 每族一一对应 · 每键有图 · 无纯色图
+    //   · 全库两两差异 · 族内最小差异。
+    //
+    // 为什么必须单独一道：fx-wiring 判的是"四处接线对不对"，material-thumbs 判的是
+    // "有没有图、是否一一对应"，两道在「343 张卡只落在 24 个键上」时**全是绿的**。
+    // 键少名字多这件事本身没有任何判据盯着 —— 点 20 张名字不同的卡出来是同一个效果，
+    // 而所有闸门都通过。这道闸门把 267 张图两两比一遍，只问"有没有两张看起来一样"。
+    //
+    // 判据是「平均差 与 95 分位差×0.35 取大」：特效大多是局部的（一团光、一个取景框），
+    // 只看平均差会被大片没变的背景稀释，实测会把明明不同的两档判成一样。
+    // 阈值 3.4（素材类 1.2，它们本身是细线元素，盖住画面不到 5%）。
+    expected: 6,
+    marker: /FX_DISTINCT_OK/,
+    count: /FX_DISTINCT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'fx-pixels',
+    name: '真渲染·「改像素」三件套（柔化真的糊 / 黑白真的归零 / 复古真的褪色偏暖）',
+    argv: [NODE, 'tools/check-fx-pixels.mjs'],
+    // 稳定数字 8 = 基准有对比 1 + 三条特效各（CSS 命中 + 像素真的变）2×3 = 6，共 7 ——
+    //   外加 fx-vintage 多一条"真的偏暖"，共 8。
+    //
+    // 为什么必须量像素：fx-blur / fx-mono / fx-vintage 都挂在覆盖层的 `backdrop-filter` 上。
+    // 这类规则最典型的坏法是**CSS 命中、computedStyle 也对、画面一像素没变**
+    // （层被挡住，或背后没有可模糊的内容）—— 静态扫描与 fx-wiring 都判不出来。
+    // 做法：在真实渲染器里注入高对比条纹测试图 + 应用自己的 `.canvas-fx.<key>`，
+    // 截图后量边缘能量 / 饱和度 / 冷暖。阈值按实测的一半取（见脚本头部基准数据）。
+    expected: 8,
+    marker: /FX_PIXELS_OK/,
+    count: /FX_PIXELS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'fx-packs',
+    name: '契约·特效素材包（帧真在动 / 循环接得上 / 雪碧图拼全 / 表与包双向一致）',
+    argv: [NODE, 'tools/check-fx-packs.mjs'],
+    // 稳定数字 14 = 包存在 1 · 能装 1 · 幂等 1 · manifest 合法 1
+    //   · 表→包 1 · 包→表 1 · pack 字段自洽 1
+    //   · 帧数+缺号 1 · 无空帧 1 · 帧真在动 1 · 循环无缝 1 · 雪碧图尺寸 1
+    //   · 卡片键无孤儿 1 · 素材卡命中 1。
+    //
+    // 为什么必须逐帧量像素：上一版 343 张卡只有 6 个真效果、235 张全指向同一个暖光，
+    // 而 `check-material-thumbs` 的 13 条断言**一条都没红** —— 因为"每张卡都有图、
+    // 同键同图、一图一键"全部成立。它判的是"图与键的关系"，不是"键背后有没有东西"。
+    // 素材型特效把这个洞放大了一档：少一帧、帧全透明、雪碧图只拼一半，
+    // 界面上**完全看不出异常**，点下去"没反应"或"动一下就停"。
+    //
+    // 判据口径：预乘 alpha 后按"内容区面积"归一化 ——
+    //   · 直接 convert('RGB') 会丢 alpha ⇒ 月亮那种"亮度在呼吸"算出来只有 0.25；
+    //   · 直接用 RGBA 相减 ⇒ 全透明区里改颜色也算"变化"，而用户根本看不见。
+    expected: 14,
+    marker: /FX_PACKS_OK/,
+    count: /FX_PACKS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'fx-pack-pixels',
+    name: '真渲染·素材型特效（预览在播 / 成片里真的叠上去了）',
+    argv: [NODE, 'tools/check-fx-pack-pixels.mjs'],
+    // 稳定数字 15 = 主进程报 10 个 1 · 每个都有 URL 1 · 包信息可读 1
+    //   · 动画规则命中 1 · steps 生效 1 · 雪碧图真加载 1
+    //   · 导出侧能解析帧目录 1 · 计划里有 -stream_loop 1 · 有 enable=between 的 overlay 1
+    //   · 帧序号路径存在 1 · 导出跑完 1 · 成片里真有素材 1 · 改动够可见 1
+    //   · 预览真画出东西 1 · 预览在播 1。
+    //
+    // 这一道管的是"接了但看不见 / 接了但没生效"：
+    //   · 预览：CSS 类挂上了、computedStyle 一切正常、background-image 加载失败 ⇒
+    //     画面一像素没有，而静态扫描全绿；
+    //   · 导出：`looks.frameFxFilterFor` 对素材类返回空串，如果 render.js 那段
+    //     overlay 没接上，导出**完全成功、不报错**，只是没有特效。
+    // 所以这里真起 Electron 截两张图、真跑两遍 ffmpeg 比同一时刻的帧。
+    expected: 15,
+    marker: /FX_PACK_PIXELS_OK/,
+    count: /FX_PACK_PIXELS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'filter-parity',
+    name: '真渲染·滤镜与调节（预览公式 = 导出链 = 缩略图，落在同一批像素上）',
+    argv: [NODE, 'tools/check-filter-parity.mjs'],
+    // 稳定数字 8 = 底片可解码 1 + 每键平均差 1 + 最坏键 1 + 极值键覆盖 1
+    //   + 滤镜链无 YUV 近似 1 + 每键有非空链 1 + 调节链无近似 1 + 调节数值一致 1。
+    //
+    // 为什么必须真渲：同一组参数被两套实现解释（预览走 CSS 的线性矩阵，导出走 ffmpeg）。
+    // 任何一侧写成"近似"都会让**预览一个色、成片另一个色**，而这种缺陷不抛错、
+    // 不影响构建、截图也看不出来（截图截的是预览）。2026-11-03 实测到三处：
+    //   hue=h= 在 46° 差 12.5 ΔE / eq=saturation 在高饱和档差 12~18 / eq=contrast 同属 YUV。
+    // 换成 colorchannelmixer(矩阵) 与 lutrgb(逐通道仿射) 后，67 键中位差 6.46 → 1.62。
+    //
+    // 参考像素在闸门里**独立重算**，不 import 被测实现 —— 否则它只能证明"文件没被删"。
+    expected: 8,
+    marker: /FILTER_PARITY_OK/,
+    count: /FILTER_PARITY_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'ui-spec',
     name: '静态·界面规格（设计令牌被真的消费 / 状态三态 / 主按钮唯一 / 图标尺寸显式）',
     argv: [NODE, 'tools/check-ui-spec.mjs'],
@@ -1848,6 +2242,168 @@ const GATES = [
     count: /CARD_SPECS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'material-thumbs',
+    name: '素材·效果图（滤镜/转场/特效/调节每条都有真实预览图，且图与效果键一一对应）',
+    argv: [NODE, 'tools/check-material-thumbs.mjs'],
+    // 稳定数字 13 = 4（四组各解析到条目）+ 1（合计 ≥ 1000 条，防空集恒真）
+    //   + 3（每条有 thumb / 文件在磁盘上 / 不是空壳）+ 2（同键同图 / 一图一键）
+    //   + 1（无孤儿文件）+ 1（glob 覆盖 *.webp）+ 1（生成器底片齐全）。
+    //
+    // 为什么必须有这道：2026-11-02 Jason「效果里都有效果图展示，你把它所有效果图都给咱也配上，
+    // 包括滤镜贴纸转场调节文本」。查下来**调节**整页没有图（用 CSS 渐变画了一块假风景），
+    // 其余三组虽有图但都是程序画的色块（天一条渐变、地一块绿、中间一个橙方块），
+    // 卡片上读不出"这条会把画面变成什么样"。
+    // 现在四组统一改用真实取景底片按**真实参数**算出来，这道闸门钉住的就是
+    //   "别哪天又退回色块 / 又出现没图的条目 / 又一个键两张封面"。
+    //
+    // ⚠️ 判的是结构不变量，不判"好不好看"—— 好看只能靠看截图。
+    //
+    // 稳定数字 14 = 上面的 13 + 1（特效页单一效果键占比 ≤ 30%，2026-11-02 补）。
+    // 那一条是补漏：加它之前，"344 张卡只有 6 个键、其中 235 张全是 fx-lightleak"
+    // 能把上面每一条都跑成绿的 —— 图与键确实一一对应，可用户点 20 张不同的卡
+    // 出来是同一个暖光扫过。旧判据结构上判不出"卡片数量与效果数量不匹配"。
+    //
+    // 稳定数字 15 = 上面的 14 + 1（调节预设每条最强一档 10~45，2026-11-02 补）。
+    // 补它的直接原因：那 22 条预设单值最大只有 ±22、平均 7.4，等于只用掉滑杆 22% 的行程，
+    // 点「自然通透」是 +4 亮度 / +6 对比 / +8 饱和 —— 画面几乎没变，用户读作"这卡坏了"。
+    // 而前 14 条**一条都不会红**：图是有的、键是一一的、也不空壳。
+    // 「有图」和「有区别」是两件事，前者判结构、后者只能判数值口径。
+    // 上限 45 是反方向的保护：顶到滑杆尽头会让预设开始偏色、暗部死黑。
+    //
+    // 稳定数字 16 = 上面的 15 + 1（每张卡的 css 键都能在真源里查到，2026-11-03 补）。
+    // 补它的直接原因：三处消费端都是"查不到就退回默认"——预览 filterDef 退回 none、
+    // 导出退回 none、缩略图 FILTER_PARAMS.get(css, {}) 退回空参数。
+    // 于是拼错一个键**不报任何错**：卡还在、封面还在、点下去画面不动。
+    // 当天把 499 张卡的 css 全换成新生成的一卡一键，手工对表必然漏，这条是兜底。
+    expected: 16,
+    marker: /MATERIAL_THUMBS_OK/,
+    count: /MATERIAL_THUMBS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'material-thumbs-selftest',
+    name: '自证·效果图判据可分辨（正控制组全绿 · 11 条扰动各自红在对的断言上）',
+    argv: [NODE, 'tools/check-material-thumbs.mjs', '--selftest'],
+    // 稳定数字 13 = 1 正控制组 + 12 条扰动（缺 thumb / 图不在盘 / 空壳 / 同键多图 /
+    //   glob 只认 png / 底片缺失 / 孤儿图 / 组空掉 / 预设退化 / 预设过头 / 一图两键 /
+    //   卡的键查不到）。
+    //
+    // 为什么必须单独自证：这道闸门的判据全是"集合关系"，坏法几乎不抛异常 ——
+    //   写错方向（该判同一张却判了同一个键）会永远绿；集合为空时会恒真。
+    //   本自证第一次跑就抓出两条真问题：
+    //     ① "同键多图"的扰动只改了图、没制造出第二条同键条目 ⇒ 那条扰动根本没扰动；
+    //     ② 孤儿图扰动写成 `(d.sizes[k]=1) || d.files.add(k)` —— 赋值返回 4096 是真值，
+    //        `||` 直接短路，add 从未执行 ⇒ 反控静默全绿。
+    //   ⇒ 判据的判据只有真的跑起来才有意义。
+    //
+    // 2026-11-02 加"预设幅度"那条时又撞了一次同类：夹具里调节条目的 key 是 `-k1`
+    // 这种占位串，新判据 JSON.parse 直接抛 ⇒ 正控制组当场红。夹具必须跟判据一起改。
+    expected: 13,
+    marker: /MATERIAL_THUMBS_SELFTEST OK/,
+    count: /MATERIAL_THUMBS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'transition-parity',
+    name: '转场·三处同式（导出表达式 / 预览模型 / 缩略图矩阵落在同一批像素上）',
+    argv: [NODE, 'tools/check-transition-parity.mjs'],
+    // 稳定数字 11 = 1（204 个 geo）+ 1（覆盖 11 个几何族）+ 1（源图可解）
+    //   + 2（每个进度跟 JS 模型对上：4×4 块平均 ≤ 4 / 逐像素 ≤ 20 兜底）
+    //   + 1（表达式无状态）+ 1（表达式非空）+ 1（全部 gbrp）+ 1（带 alpha 用 gbra）
+    //   + 1（原生 58 键不走 custom）+ 1（逐帧进度对齐 ≤ 0.06）。
+    //
+    // 为什么必须真跑 ffmpeg：这个转场族是我们自己拼 `xfade=transition=custom`
+    // 表达式实现的，同一条效果有三份实现（导出表达式 / 预览 CSS / 缩略图 Pillow），
+    // 任何一处近似都**不抛错、不报警**，只是"预览一个色、成片另一个色"。
+    // 2026-11-03 真实抓到三条近似：hue-rotate 用 `hue=h=`、saturate 用 `eq=saturation`、
+    // contrast 用 `eq=contrast`，在 46°/高饱和档差 12~18 ΔE。
+    //
+    // 另外两条判据是当天新挖出来的**静默缺陷**，都比调色近似更狠：
+    //   · 表达式里用了 `st()/ld()` ⇒ xfade 是切片多线程的，`st()` 写共享变量被线程互相
+    //     覆盖，**同一表达式连跑三次给出三组不同像素**（实测）。判据：链里不许出现 st/ld。
+    //   · 同一段 `255*P` 探针在 gray/gbrp 上 20 帧走完，在 yuv420p 上 **7 帧就走完**
+    //     （进度被压扁 ≈3 倍）⇒ 所有 custom 转场必须在 RGB 平面上做。
+    //     判据：全部 gbrp（带 alpha 的 gbra），外加"逐帧进度对齐"直接读回 P 验证。
+    //
+    // ⚠️ 这道闸门要真 ffmpeg：跑全量必须 `export FFMPEG_PATH=<ffmpeg.exe 绝对路径>`，
+    //   否则它以"起不来 ffmpeg"失败（不做成 SKIP —— 这条没有 ffmpeg 就等于没验证）。
+    expected: 11,
+    marker: /TRANSITION_PARITY_OK/,
+    count: /TRANSITION_PARITY_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'transition-distinct',
+    name: '转场·两两不一样（204 个名字 = 204 个能一眼分开的效果）',
+    argv: [NODE, 'tools/check-transition-distinct.mjs'],
+    // 稳定数字 6 = 1（204 个 geo）+ 1（几何签名唯一）+ 1（每条都看得出在变）
+    //   + 1（任意两条外观差 ≥ 0.02）+ 1（最挤的 1% ≥ 0.04）+ 1（族内最小差 ≥ 0.02）。
+    //
+    // 为什么必须有这道：转场卡 331 张、去重名字 204 个，而 ffmpeg 的 `xfade` 只自带 58 种。
+    // 只要把名字映射到"能跑的几个效果"，就会出现"点开十张名字不同的卡，成片一模一样"，
+    // 用户看不出报错，只会觉得这个功能是假的。判据不是"参数不同"，是**看上去不同**：
+    // 用 `appearanceAt()` 算三段权重（前一段/中间色/后一段）乘到两个灰阶上，得到一个
+    // 0..1 的外观标量场，再两两比对。
+    //
+    // 三个校准过的细节，改判据前先读：
+    //   ① **取"各进度里最像的那一个"的差（max），不取平均**。取平均会把结构性差别抹平：
+    //      条纹擦除与线性擦除平均只剩 0.011，而人眼一眼看出"梳齿"与"平滑直线"不同。
+    //   ② **网格 96×96，不是 32×32**。最密的是 24 列网格（`像素屏幕故障`）与 18 条条纹，
+    //      32 网格每周期只有 1.3 个采样点、结构直接采丢，会把它们判成"一样"。
+    //   ③ **"每条都在变"是"帧内空间变化 或 跨进度变化"**，不是只看帧内：
+    //      `full` 族（叠化/渐显/柔和渐变）按定义整帧同进度，帧内极差天然为 0。
+    //
+    // 当天据此改了三处内容（都是"名字一样效果也一样"的真问题）：
+    //   · `像素屏幕故障` grid order 1 → 4（列优先推进变成乱序翻转）；
+    //   · `块故障` 同上（与 `马赛克5` 只差 0.0214）；
+    //   · `水平线` 18 条 → 8 条、`垂线` 改交错翻转（细条纹顺次推进就是"打了台阶的硬擦除"，
+    //     实测与 `下移` 只差 0.0185）。
+    expected: 6,
+    marker: /TRANSITION_DISTINCT_OK/,
+    count: /TRANSITION_DISTINCT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'thumb-distinct',
+    name: '素材·947 张缩略图两两看得出差别（卡片上的观感，不是参数表）',
+    argv: [NODE, 'tools/check-thumb-distinct.mjs'],
+    // 稳定数字 2 = 1（张数下限）+ 1（任意两张平均色差 ≥ 3.5）。
+    //
+    // 为什么必须有这道：上面 `transition-distinct` 判的是**空间场**，2026-11-03 实测
+    // 它放过了一对肉眼分不出的封面 ——
+    //   · `水平线`(stripe n=8 顺次) ↔ `下移`(lin 90°)：场差 0.036（闸门"安全区"），
+    //     缩略图只有 **1.92** 平均色差，48×27 卡片上完全一样；
+    //   · `马赛克`(grid order 0) ↔ 上面两条：三张几乎相同。order 0 是"整行推进"，
+    //     场值只按行递增，任何进度都是"上面若干整行已翻" —— 那是横带擦除，不是网格。
+    // 根因：32×32 单通道亮度场把"A 画面还是 B 画面"糊成两个标量，局部差异被整幅平均掉；
+    // 用户看的是彩色小图。**场差 ≠ 观感差。**
+    //
+    // 判据口径与 `gen-look-params.py` 的 `dist()`、`gen-material-thumbs.py` 的
+    // `dist()` 完全同式（Lab 三通道绝对差之和 / 像素数，48×27）—— 三处必须是同一把尺子，
+    // 否则会出现"分配器觉得够远、闸门觉得撞脸"这种互相矛盾的绿灯。
+    //
+    // 当天据此改了三处内容（键都没动 —— 键是名字的哈希，老草稿零迁移）：
+    //   · `马赛克` / `网络马赛克` / `漫画输出` grid order 0 → 2（逐行 → 棋盘交错）；
+    //   · `水平线` 改成 12 条交错：顺次推进的横条**任何进度都是单边界**，与连续平移同形，
+    //     soft 顶到叶宽也只从 1.92 抬到 2.36；改交错后是 64.36。
+    // 改完全库最小 3.85（改造前 1.92）。
+    //
+    // ⚠️ 第一条断言是**张数下限**：目录空了"两两没有撞脸"是恒真的，
+    //    那闸门会绿得毫无意义（本项目有"空集恒真"的前科）。
+    // ⚠️ 阈值 3.5 是硬底线，滤镜分配器的目标是 5.5；当下 21 对落在 3.85~5 之间
+    //    （冷白餐盘↔清透、特效焦点框那一组…）——那是待办，不在这道闸门的红线上。
+    expected: 2,
+    marker: /THUMB_DISTINCT_OK/,
+    count: /THUMB_DISTINCT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'thumb-distinct-selftest',
+    name: '自证·缩略图可分辨判据（同色要拦 / 微小差要拦 / 张数不足要拦 / 各异要放）',
+    argv: [NODE, 'tools/check-thumb-distinct.mjs', '--selftest'],
+    // 稳定数字 4 = 同色拦 + 各异放 + 张数不足拦 + 差一点点也拦。
+    // 第四条是关键：证明阈值不是摆设 —— 粗筛逻辑（粗差 ≤ 细差，超过 40 才跳过）
+    // 只要写错一个符号，整套筛法会静默放行。
+    expected: 4,
+    marker: /THUMB_DISTINCT_SELFTEST_OK/,
+    count: /THUMB_DISTINCT_SELFTEST\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'workbench-tree',
     name: '界面·左栏功能树（每项都有去向 · 面板名可解析 · 落点不是占位面板）',
     argv: [NODE, 'tools/check-workbench-tree.mjs'],
@@ -1916,7 +2472,10 @@ const GATES = [
     // 89 → 90 加「人物特效」（1 个叶子节点，自身就是落点）；
     // 90 → 93 加「插件」（3 个叶子节点：我的插件 / 我的边框 / 我的贴纸）。
     //   ⚠️ 带子项的**根卡片不计入**节点数（它自己不是落点），所以每次只加子项条数。
-    expected: 93,
+    // 93 → 94 加「智能抠像」（1 个叶子节点，自身就是落点）。这一条是复跑全量时才发现的：
+    //   上一轮加面板时只跑了 workbench-tabs（它数的是标签栏与中栏，不含左栏树），
+    //   workbench-tree 没跟着跑 ⇒ 差一个数没被发现。左栏加减节点必须两道一起跑。
+    expected: 94,
     marker: /WORKBENCH_TREE_CHECK_OK/,
     count: /WORKBENCH_TREE_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+problems=(?<f>\d+)/
   },
@@ -2132,7 +2691,7 @@ const GATES = [
     // 于是「点下去中栏显示『左侧选一个功能开始』的空壳 / 中栏是空的 /
     // 点了什么都没变 / 点下去抛异常」这四类缺陷，之前一个都拦不住。
     //
-    // 期望值全部在脚本里**独立写死**（2 个首页导航项、7 个标签、7 个根卡片、
+    // 期望值全部在脚本里**独立写死**（3 个首页导航项、7 个标签、7 个根卡片、
     // 32 个左栏项），
     // 不从被测代码 import —— 从被测代码取期望等于让被测代码自己出考卷，
     // 删掉一个标签它也会跟着"通过"。写死的另一面是：源码少一个/多一个入口会当场红。
@@ -2161,7 +2720,10 @@ const GATES = [
     // 240 → 251（同日加「插件」页签）：3(标签级) + 3 节点×2 + 2(根卡片) = 11。实测 251、0 跳过。
     //   ⚠️ 数字全部由脚本里的 TABS 表算出来（`TABS.length * 3` 等），
     //   所以只能靠跑一遍拿真实值，不能手推 —— 手推漏掉 `TABS.length * 2` 那项就少 2。
-    expected: 251,
+    // 251 → 253（2026-11-02 加「智能抠像」左栏节点）：**没有新标签**，
+    //   只在「素材」页多 1 个节点 ⇒ 1 节点×2 = 2。实测 253 全过、0 跳过。
+    // 253 → 254（2026-11-07 首页导航加第三项「无线画布」）：A 段逐项点击 +1。
+    expected: 254,
     marker: /TABS_E2E_OK/,
     count: /TABS_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -2540,7 +3102,7 @@ const GATES = [
   },
   {
     id: 'mcp-bridge',
-    name: '契约·MCP 桥（镜枢 ↔ 剪辑软件：28 工具 · stdout 纯洁 · 自动注册 · 打包覆盖）',
+    name: '契约·MCP 桥（镜枢 ↔ 剪辑软件：37 工具 · stdout 纯洁 · 自动注册 · 打包覆盖）',
     argv: [NODE, 'tools/check-mcp-bridge.mjs'],
     // 稳定数字 18。这道闸盯的是"坏掉都不报错"的一整组东西：
     //   · 四个文件在不在、工具表是不是**恰好**那 9 个（少一个 agent 就少一项能力）；
@@ -2584,17 +3146,35 @@ const GATES = [
     id: 'mcp-agent-e2e',
     name: '真机·智能体全流程（只靠 MCP 工具调用建草稿→多轨→调色字幕特效→导出→ffprobe+像素核验）',
     argv: [NODE, 'tools/mcp-agent-e2e.mjs'],
-    // 稳定数字 27。这道闸回答的是"agent 到底能不能把片子做出来"：
+    // 稳定数字 31。这道闸回答的是"agent 到底能不能把片子做出来"：
     //   · 按镜枢的方式拉起 stdio server（不是直接调内部函数），全程只发 JSON-RPC；
     //   · 判据读消费端：成片用 ffprobe 读规格/音轨，抽帧算 max|r-g| 证明 mono 真的进了成片，
     //     底部亮像素证明字幕真的烧进画面（"返回 ok"不算证据）；
-    //   · 最后一条是硬断言「27 条全跑到底」—— 中途抛错时前面只记了几条，
+    //   · 最后一条是硬断言「31 条全跑到底」—— 中途抛错时前面只记了几条，
     //     没有这一条会打印 total=9 却仍 _OK。
     //   25/26 是 2026-10-31 补的两条：停用片段（enabled）与叠加轨层级（layer）。
     //   两者都是界面右键菜单里有的动作，此前 MCP 写不进去（"界面上有、agent 做不到"）。
-    expected: 27,
+    //   27~30 是 2026-11-03 补的四个双通道缺口（导入素材包 / 素材 url 非空 / 删素材连带删片段 /
+    //   导字体）。它们**必须走 stdio** —— 直调 ops 只能证明实现，证明不了 schema 里的
+    //   参数名接得上；参数名写反时本地全绿、真 agent 传进去是空。
+    expected: 31,
     marker: /MCP_AGENT_OK/,
     count: /MCP_AGENT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'card-sync',
+    name: '契约·集成卡片对账（镜枢的 integration.json ↔ 我方 37 工具的 toolCount 与工具名）',
+    argv: [NODE, 'tools/check-card-sync.mjs'],
+    // 稳定数字 3。这道闸防的是**跨仓库漂移**：卡片是给 agent 看的说明书，
+    // 不属于任何一侧的构建产物 —— 我方加工具不会让它重新生成，对面也不会主动发现。
+    // 于是"卡片写 28、实际 37"能存在几个月而两边套件全绿（2026-11-03 正是如此）。
+    // 两类已发生的坏法：① 数量落后 ⇒ agent 漏掉能做的事；
+    // ② 卡片点名了不存在的工具 ⇒ agent 每次都报"没有这个工具"，长得像环境没装好。
+    // 对面仓库没 clone（换机器 / CI）时三条记 SKIP、marker 打 PARTIAL，仍算这道闸没失败；
+    // 但"仓库在、卡片被删/改名"必须红 —— 那是真丢了说明书。
+    expected: 3,
+    marker: /CARD_SYNC_(OK|PARTIAL)/,
+    count: /CARD_SYNC_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
   {
     id: 'app-cli-e2e',
@@ -2621,7 +3201,7 @@ const GATES = [
   },
   {
     id: 'dual-channel',
-    name: '契约·双通道对等（界面 92 个入口 ↔ 28 个 MCP 工具双向覆盖，缺口必须登记）',
+    name: '契约·双通道对等（界面入口 ↔ 37 个 MCP 工具双向覆盖，缺口必须登记）',
     argv: [NODE, 'tools/check-dual-channel.mjs'],
     // 稳定数字 9。Jason 的硬指标：每项功能都要①人在界面上能独立做完 ②agent 只靠 MCP
     // 能全自动做完。这条闸门**自动枚举**界面入口（带 title 的按钮 / 时间线右键项 /
@@ -2632,6 +3212,26 @@ const GATES = [
     expected: 9,
     marker: /DUAL_CHANNEL_OK/,
     count: /DUAL_CHANNEL_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'mcp-gap-ops',
+    name: '真机·补掉的双通道缺口（删素材连带删片段 / 导字体写设置 / 导素材包 url 非空 / 卡点落在 ±50ms）',
+    argv: [NODE, 'tools/mcp-gap-ops-selftest.mjs'],
+    // 稳定数字 15。这四件事原先**只有界面能做**，agent 做不到（登记在 dual-channel 的
+    // expectedGaps 里）。补上之后要证明的不是"多了个工具名"，而是行为与界面同源：
+    //   · 删素材只删素材不删片段 ⇒ 留下"片段还在、源文件没了"的半坏草稿，预览黑屏、
+    //     导出才炸，而错误指向 ffmpeg。所以断言片段数一起减，且不误删别的素材；
+    //   · 导字体只复制不写设置 ⇒ agent 导的字体界面上永远不出现；只写设置不复制 ⇒
+    //     重启就坏。两侧都钉，并钉重复导入不产生第二条；
+    //   · 素材包漏了 registerUrl ⇒ 草稿能打开、画面全黑，而 missing 里不会提
+    //     （它只查文件在不在）。所以判据是**新草稿里每条素材的 url 非空**；
+    //   · 卡点用**节拍位置已知**的点击声（每 0.5s 一下）判，点必须落在 ±0.05s 内；
+    //     只判"返回了数组"的话，灵敏度写反、步长算错都照样绿。
+    // ⚠️ `detectBeats` 是真异步：自检里同步调只会拿到 Promise，每条断言都在拿
+    //    undefined 比较，报错还长得像"实现有问题"。所以 check() 统一 await。
+    expected: 15,
+    marker: /MCP_GAP_OPS_OK/,
+    count: /MCP_GAP_OPS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
   {
     id: 'mcp-manifest',
@@ -2798,7 +3398,17 @@ function runGate(gate, index) {
       timeout: timeoutMs,
       killSignal: 'SIGKILL',
       stdio: ['ignore', outFd, outFd],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined, NODE_ENV: 'production' }
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: undefined,
+        NODE_ENV: 'production',
+        /* 默认无窗：闸门要的是 DOM、计算样式和像素，不需要窗口可见。
+           可见窗口会在跑套件时反复抢焦点、盖住用户正在做的事 —— 这不该是默认行为。
+           想看窗口亲眼看一遍：`YJAI_SHOW_WINDOW=1 node scripts/verify.mjs --only <id>`。
+           实现见 main/index.js 的 HEADLESS：窗口移出屏幕 + showInactive，
+           仍参与合成所以截图正常，只是不占桌面。 */
+        ...(process.env.YJAI_SHOW_WINDOW === '1' ? {} : { YJAI_NO_WINDOW: '1' })
+      }
     })
   } finally {
     fs.closeSync(outFd)

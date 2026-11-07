@@ -537,6 +537,13 @@ async function main() {
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(15000)
+    /* 主进程崩了的话，Playwright 只会说"页面被关闭了" —— 一个字的线索都没有。
+       把 stderr 接出来，崩溃现场才有得看（这是"页面突然没了"唯一可靠的分诊手段）。 */
+    app.process()?.stderr?.on('data', (chunk) => {
+      const text = String(chunk).trim()
+      if (text) console.log('[main.err]', text.slice(0, 600))
+    })
+    app.process()?.on('exit', (code, signal) => console.log('[main.exit]', code, signal))
     await page.waitForSelector('.home', { timeout: 30000 })
     page.on('pageerror', (error) => pageErrors.push(String(error)))
     page.on('console', (message) => {

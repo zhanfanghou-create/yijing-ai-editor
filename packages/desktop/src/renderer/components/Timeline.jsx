@@ -34,6 +34,9 @@ import { AUDIO_CAPABLE } from '../composite.js'
 import { clipSpeed, readCurve, trimPatch } from '../trim.js'
 import { pipAnchor } from '../pip.js'
 import { effectiveTransitions, filterDef, isNoopFilter } from '../looks.js'
+/* 画面特效的名称：片段上要挂「特效」角标，否则改完特效回到时间线看不出变没变
+   （预览里还得正好停在这一段上才看得见）。标签与真源同在 shared/frameEffects.json。 */
+import { frameEffectDef, isNoopFrameEffect } from '../frameEffects.js'
 import { ClipAudioWave, ClipFilmstrip, ClipStill, ClipText, ClipWaveform, stripCount } from '../clipVisuals.jsx'
 import Splitter from './Splitter.jsx'
 /* 缩放上下限只有一份（keymap.js）：工具栏滑块、±按钮、Ctrl+滚轮、「适配全片」
@@ -45,11 +48,33 @@ import { contentEnd, fitZoom } from '../timelineNav.js'
    与预览的排序、导出的 overlay 链是同一份 —— 这里不许再写一遍判断。 */
 import * as layersTable from '../../shared/layers.js'
 
+/**
+ * 轨道表。**数组顺序 = 时间线自上而下的顺序**（列头与轨道行都照这份表渲染，
+ * 见下方 `.wb-tllabels` 与 `.wb-tllane` 两处 map）。
+ *
+ * ⚠️ 2026-11-02 Jason 指出：「文字和特效、滤镜轨道应该在上面」。
+ *   原来是 `视频 / 叠加 / 音频 / 字幕`，字幕轨被压在最底下 —— 那是把
+ *   **建轨的先后**当成了层序。正确的读法是「上 = 离观众近」：
+ *     · 字幕/文字是盖在画面最上面的一层（与参考客户端一致）；
+ *     · 叠加轨（画中画 / 贴纸 / 边框）比主视频更靠前；
+ *     · 主视频轨在中间，音频轨没有画面、永远在最下。
+ *   ⇒ 现在自上而下是 `字幕 / 叠加 / 视频 / 音频`。
+ *
+ * ⚠️ 这里**没有**独立的「特效轨 / 滤镜轨」：本项目里画面特效写 `clip.frameFx`、
+ *   调色写 `clip.filter`，两者都是**片段自身的属性**，不是独立轨道上的元素
+ *   （ffmpeg 侧也是跟着片段一起进 filtergraph 的，没有独立的 fx overlay 链）。
+ *   为了让它们在轨道上看得见，片段块上挂了「特效 / 调色」角标（见 clip-badge），
+ *   所以"特效在哪"不用去翻右栏。
+ *
+ * 改这张表必须同步 tools/workbench-buttons-e2e.mjs 的 TABS、
+ * tools/workbench-tabs-e2e.mjs 的 TABS，以及 tools/check-card-specs.mjs /
+ * tools/check-workbench-tree.mjs 里钉住的标签数。
+ */
 const TRACKS = [
-  { key: 'video', label: '视频轨', tone: '', icon: 'video' },
+  { key: 'text', label: '字幕轨', tone: 'text', icon: 'text' },
   { key: 'overlay', label: '叠加轨', tone: 'overlay', icon: 'video' },
-  { key: 'audio', label: '音频轨', tone: 'audio', icon: 'audio' },
-  { key: 'text', label: '字幕轨', tone: 'text', icon: 'text' }
+  { key: 'video', label: '视频轨', tone: '', icon: 'video' },
+  { key: 'audio', label: '音频轨', tone: 'audio', icon: 'audio' }
 ]
 
 /** 每秒占多少像素 */
@@ -740,6 +765,10 @@ export default function Timeline({
         <button type="button" onClick={() => clips.length && onClear()} disabled={!clips.length} title="清空时间线（Ctrl+Shift+Delete）">
           <IconTrash size={16} />
         </button>
+        {/* 分割键**不带文字**。它旁边七枚都是纯图标，只有它拖着一个「分割」，
+            整排就有一个键比邻居宽一倍，右边所有键跟着错位 —— 而且这排的
+            每个键本来就有 hover 提示，字是重复的。开源参考项目的工具条同理：
+            全图标 + 提示词，一个字都不印。 */}
         <button
           type="button"
           onClick={onSplit}
@@ -747,7 +776,6 @@ export default function Timeline({
           title="在播放头处分割选中的片段（Ctrl+B）"
         >
           <IconSplit size={16} />
-          分割
         </button>
 
         <span className="wb-sep" />
@@ -1178,6 +1206,12 @@ export default function Timeline({
                     title={`${clip.name}｜拖动改起点 · 拖两端修剪 · 单击定位播放头 · 右键更多 · 双击删除`}
                     data-clip={clip.id}
                     data-disabled={clip.enabled === false ? '1' : '0'}
+                    /* 字幕片段的**正文**与**起点**挂在 DOM 上：
+                       闸门要断言"识别真的出了字"必须读渲染出来的东西，读 state
+                       等于自己证明自己；而且这两个值本来就该在片段上看得见
+                       （右键菜单与检查器都拿它做提示），不是为测试专门加的。 */
+                    data-clip-text={track.key === 'text' ? String(clip.text || '') : undefined}
+                    data-clip-start={Number(clip.start || 0).toFixed(3)}
                     /* 画面层级（自由层级）：叠加轨上才有多层可言，把层号挂出来，
                        闸门才能断言"菜单点了之后层号真的变了"（而不是只看画面） */
                     data-clip-z={track.key === 'overlay' ? String(layersTable.readZ(clip)) : undefined}
@@ -1306,6 +1340,14 @@ export default function Timeline({
                           {filterDef(clip.filter).label}
                         </span>
                       ) : null}
+                      {/* 画面特效角标：与调色同理（无特效不显示）。
+                          这两个角标是"特效 / 滤镜在轨道上能看见"的唯一出口 ——
+                          它们是片段属性、不是独立轨道，不给角标就只能去右栏翻。 */}
+                      {!isNoopFrameEffect(clip.frameFx) ? (
+                        <span className="clip-badge" data-clip-fx={clip.frameFx} title={`画面特效：${frameEffectDef(clip.frameFx).label}`}>
+                          {frameEffectDef(clip.frameFx).label}
+                        </span>
+                      ) : null}
                       {/* 画中画角标：位置 + 尺寸直接写在轨道上。
                           少了它，改完锚点回到时间线看不出变没变（只有预览里能看出，
                           而预览还得正好停在这一段上）。 */}
@@ -1378,17 +1420,14 @@ export default function Timeline({
 
           {!clips.length ? (
             <div className="wb-tlempty">
-              {/* 虚线框用 SVG 描边画（节距 9 实 / 6.5 空），不用 border-style:dashed。
-                  Chromium 在 1px 边框上只能画 3 实 / 2 空的密点线，与参考的"长虚线"不是一回事。
-                  rx 取 15.5 是为了和外层 border-radius:16px 同心（描边以路径为中心，路径内缩 0.5px）。 */}
-              <svg className="wb-tlempty-dash" aria-hidden="true">
-                <rect x="0" y="0" width="100%" height="100%" rx="15.5" ry="15.5" />
-              </svg>
-              <button className="wb-import" type="button" onClick={onImport}>
-                <IconAddSquare size={16} />
-                导入
-              </button>
-              <span>拖拽图片、视频到这里，开始剪辑吧~</span>
+              {/* 空态不再画那圈虚线。
+                  一整块 8/6.5 节距的长虚线框，配上正中间一枚紫色实心「导入」，
+                  是整屏最"装饰"的一处 —— 它说的是"这里什么都没有"，而虚线本身
+                  就是一条多余的说明。开源参考项目的空态只有一个淡图标加一行字，
+                  连框都不要。导入入口在工具条上已经有两个（导入 / 素材库），
+                  这里再放一枚主按钮，等于把同一件事喊三遍。 */}
+              <IconAddSquare size={28} />
+              <span>把图片或视频拖进来，或点工具条的导入</span>
             </div>
           ) : null}
         </div>

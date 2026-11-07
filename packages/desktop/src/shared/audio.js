@@ -200,9 +200,85 @@ function panFilter(pan, round = round4) {
   return `pan=stereo|c0=${left}*c0|c1=${right}*c1`
 }
 
+/**
+ * 人声增强（导出阶段）→ 高通 + 中频提亮 + 压缩器。
+ *
+ * 和「降噪」是两件事，顺序不能反：降噪先削掉底噪（否则压缩器会把底噪一起抬起来），
+ * 增强再动音色。三段的分工：
+ *   · `highpass` 去 85Hz 以下的隆隆声（桌面震动、空调低频、手持摩擦）；
+ *   · `equalizer` 在 280Hz 压一点（"闷"的来源）、2.8kHz 提一点（辅音的清晰度所在）；
+ *   · `acompressor` 把忽大忽小压到同一个水平，`makeup` 补回被压掉的响度。
+ * ⚠️ 预览里不做（`<audio>` 没有等价滤镜），面板上标「导出时应用」。
+ */
+function voiceEnhanceFilter(level, round = round4) {
+  const strength = clamp(num(level, 0), 0, 100)
+  if (strength < 1) return ''
+  const k = strength / 100
+  const mid = round(1.5 + k * 3.5, 1)
+  const cut = round(-0.5 - k * 2.5, 1)
+  const ratio = round(1.5 + k * 2.5, 1)
+  return (
+    'highpass=f=85,lowpass=f=12000,' +
+    `equalizer=f=280:width_type=o:width=1.6:g=${cut},` +
+    `equalizer=f=2800:width_type=o:width=1.2:g=${mid},` +
+    `acompressor=threshold=${round(-12 - k * 10, 0)}dB:ratio=${ratio}:attack=6:release=160:makeup=2`
+  )
+}
+
+/**
+ * 变声预设（导出阶段）。
+ *
+ * ⚠️ 三个必须记住的约束：
+ *  1. 改采样率的几个（花栗鼠 / 低沉）**必须**紧跟 `aresample` 回到 48kHz，
+ *     再用 `atempo` 把时长拉回来 —— 只写 `asetrate` 的话是"变调 + 变速"，
+ *     片段会短掉一截，和视频对不上，而且轨道上看着一切正常。
+ *  2. `atempo` 单级只吃 0.5–2.0，这里几个预设的倍率都在范围内，不需要拆链。
+ *  3. 机器人和电话是**近似**：ffmpeg 没有真正的环形调制，用 `acrusher`（位深压缩）
+ *     加 `tremolo` / 频段限制来做出"机械""细窄"的听感。要更真得上模型，不在本机方案内。
+ *
+ *  ⚠️ 这里**故意不放回声类预设**（`aecho`）：它会把输出拖长一个尾巴（实测 3 秒的源
+ *     变 3.08 秒），而片段时长是按视频定的 —— 尾巴会挤进下一段，音画对不上。
+ *     要对齐就得在导出的音频链末尾再加一道按 dur 的 atrim，那是给一个"听着好玩"的
+ *     效果付全局风险，不划算。
+ */
+const VOICE_CHANGES = [
+  { key: 'none', label: '原声' },
+  { key: 'chipmunk', label: '花栗鼠' },
+  { key: 'deep', label: '低沉' },
+  { key: 'phone', label: '电话' },
+  { key: 'robot', label: '机器人' },
+  { key: 'radio', label: '电台' }
+]
+
+function voiceChangeFilter(key) {
+  switch (String(key || 'none')) {
+    case 'chipmunk':
+      /* 采样率 ×1.32 ⇒ 音高升高约 5 个半音；atempo 1/1.32 把时长拉回原样。
+         ⚠️ 开头那句 `aformat` 不是装饰：`asetrate` 的数值是**绝对采样率**，
+            上游如果不是 48kHz（44.1kHz 的素材很常见），倍率就不是 1.32，
+            症状是"变调了、时长也短了一截"，而轨道和面板一切正常。
+            自己声明一次，链内就不依赖调用方的顺序。 */
+      return 'aformat=sample_rates=48000,asetrate=63360,aresample=48000,atempo=0.7576'
+    case 'deep':
+      /* ×0.78 ⇒ 降低约 4.5 个半音，同样拉回时长 */
+      return 'aformat=sample_rates=48000,asetrate=37440,aresample=48000,atempo=1.2821'
+    case 'phone':
+      /* 300–3400Hz 是电话频段；再叠一点位深压缩做出"压缩感" */
+      return 'highpass=f=300,lowpass=f=3400,acrusher=bits=10:mode=log:mix=0.25'
+    case 'robot':
+      /* 位深压缩 + 快速颤动 = 机械感。颤动频率取 32Hz（人声基频之上，听着像"金属"） */
+      return 'acrusher=bits=6:mode=log:mix=0.4,tremolo=f=32:d=0.75'
+    case 'radio':
+      return 'highpass=f=180,lowpass=f=6200,acompressor=threshold=-16dB:ratio=5:attack=4:release=120'
+    default:
+      return ''
+  }
+}
+
 module.exports = {
   VOLUME_KF_MAX,
   LOUDNESS_MODES,
+  VOICE_CHANGES,
   readVolumeKf,
   hasVolumeKf,
   volumeAt,
@@ -211,5 +287,7 @@ module.exports = {
   audioDenoiseFilter,
   videoDenoiseFilter,
   stabilizeFilter,
-  panFilter
+  panFilter,
+  voiceEnhanceFilter,
+  voiceChangeFilter
 }

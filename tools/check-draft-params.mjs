@@ -345,6 +345,22 @@ async function main() {
     })
     check('改时间线名 · 收起后同一行显示新值（写的是真字段）', shownName === '主线时间线', `实测「${shownName}」`)
 
+    /* 分辨率档也是**草稿属性**：在导出面板里真的选一次 4K，重启后草稿参数还得写 2160。
+       ⚠️ 这条原来只验了比例（名字里却写着"分辨率"）—— 分辨率档当时根本不进草稿，
+          默认就是 1080p，所以那条断言恒真。现在真选一次，读回来必须是 4K 的尺寸：
+          1:1 + 4K = 2160×2160（短边守恒；若回退成 1080p 这里是 1080×1080）。 */
+    await page.click('.wb-export')
+    await page.waitForSelector('[data-export-resolution]', { timeout: 10000 })
+    await page.selectOption('[data-export-resolution]', '4k')
+    await sleep(400)
+    const afterPick = await page.evaluate(() => ({
+      value: document.querySelector('[data-export-resolution]')?.value || '',
+      draftRes: document.querySelector('[data-draft-resolution]')?.getAttribute('data-draft-resolution') || ''
+    }))
+    console.log(`    · 选 4K 后：下拉=${afterPick.value || '(无)'} 草稿参数=${afterPick.draftRes || '(无)'}`)
+    await page.keyboard.press('Escape')
+    await sleep(400)
+
     /* 落盘：重开后还在。
        ⚠️ 自动保存有 1.2 秒防抖，改完就 reload 会抢在落盘之前 ——
        那时读到的还是旧值，闸门会红得莫名其妙。等够再走。 */
@@ -360,7 +376,7 @@ async function main() {
       const el = document.querySelector('[data-draft-resolution]')
       return el ? el.getAttribute('data-draft-resolution') : ''
     })
-    check('落盘 · 重启后比例与分辨率还在（1:1）', persistedRes === '1080×1080', `实测 ${persistedRes || '（无）'}`)
+    check('落盘 · 重启后比例与分辨率档都在（1:1 + 4K = 2160×2160）', persistedRes === '2160×2160', `实测 ${persistedRes || '（无）'}`)
 
     /* 波形不在这里判：这一屏的夹具是文字素材（没有真实媒体文件，
        画不出 PCM）。真波形由 real-film 那道闸（真影片）按画布像素钉住 ——

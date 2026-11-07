@@ -55,11 +55,21 @@ function aspectRatioOf(key) {
 }
 
 /**
- * 在基准分辨率里裁出该比例的**最大内接矩形**，且宽高都取偶数
+ * 基准分辨率 + 画面比例 → 成片尺寸。宽高都取偶数
  * （ffmpeg 的 yuv420p 要求偶数，奇数会在编码那一步报 "width not divisible by 2"）。
  *
- * 裁而不是补：比例是"画布形状"，素材比画布宽就裁左右、比画布高就裁上下，
- * 不留黑边 —— 与预览那侧 `object-fit: cover` 是同一个口径。
+ * ── 口径：**短边守恒**，不是"在基准框里裁内接矩形" ─────────────────
+ * 分辨率档位描述的是"这一档的像素量级"（1080P = 短边 1080，4K = 短边 2160），
+ * 不是一块固定的 16:9 画框。所以换比例时短边不动、长边按比例展开：
+ *
+ *   1080P 16:9 → 1920×1080    1080P 9:16 → 1080×1920    1080P 1:1 → 1080×1080
+ *   4K    16:9 → 3840×2160    4K    9:16 → 2160×3840    4K    2:1 → 4320×2160
+ *
+ * ⚠️ 曾经这里是"在 1920×1080 里裁出 9:16 的最大内接矩形"，于是竖屏只有
+ *    608×1080（4K 只有 1214×2160）—— 用户选 4K 竖屏，拿到的是一条**低于 720p 的竖屏**
+ *    （短边 1214 < 720 的两倍），而界面上明明白白写着"4K"，参数表与成片谁都不报错。
+ *    裁内接矩形是**素材进画布**的口径（cover），不是输出尺寸的口径；两者混用就等于
+ *    把"画布怎么摆"当成"输出多少像素"。
  *
  * @param {number} baseW 基准宽（用户选的输出分辨率，如 1920）
  * @param {number} baseH 基准高（如 1080）
@@ -72,25 +82,19 @@ function outputSizeFor(baseW, baseH, key) {
   const ratio = aspectRatioOf(key)
   const even = (n) => Math.max(2, Math.floor(n / 2) * 2)
   /**
-   * 已经是这个比例了就不要"再裁一次"。
+   * 已经是这个比例了就不要"再算一次"。
    *
    * 面板会把算好的尺寸（例如 720P + 9:16 = 404×720）连同 aspect 一起发给导出侧，
    * 导出侧再拿它当基准算一遍 —— 由于偶数取整，404/720 = 0.5611 与 9/16 有 1px 的差，
-   * 第二遍会再裁掉 2px，成片变成 404×718：面板写着 404×720、文件却是 404×718。
+   * 第二遍会再缩放 1~2px，成片变成 404×718：面板写着 404×720、文件却是 404×718。
    * 容差 1.5px：真换比例时误差是几十上百像素，不会被这条误判。
    */
   if (Math.abs(w - h * ratio) <= 1.5 || Math.abs(h - w / ratio) <= 1.5) {
     return { width: even(w), height: even(h) }
   }
-  let outW = w
-  let outH = h
-  if (w / h > ratio) {
-    // 基准比目标更宽 ⇒ 裁左右
-    outW = Math.round(h * ratio)
-  } else {
-    // 基准比目标更高 ⇒ 裁上下
-    outH = Math.round(w / ratio)
-  }
+  const shortSide = Math.min(w, h)
+  const outW = ratio >= 1 ? Math.round(shortSide * ratio) : shortSide
+  const outH = ratio >= 1 ? shortSide : Math.round(shortSide / ratio)
   // 向下取偶数：宁可小 1px，也不要让 ffmpeg 在编码那一步挂掉
   return { width: even(outW), height: even(outH) }
 }

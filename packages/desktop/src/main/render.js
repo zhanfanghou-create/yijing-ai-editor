@@ -52,6 +52,8 @@ function borderFileOf(key) {
   return borderIndex.get(want) || ''
 }
 const PIP = require('../shared/pip.json')
+/* 画面特效的参数轴 —— 素材类的缩放档要在这里解出来（与预览的 --fx-t 同一份） */
+const { fxFamily, fxParamsOf } = require('../shared/fxParams.js')
 /* 倍速的真源：与渲染层**同一份**（各写一份就会有一边漏掉倍速，
    症状是"预览与成片速度不一致"，两边单独看都没错）。 */
 const speed = require('../shared/speed.js')
@@ -133,6 +135,9 @@ const scenesTable = require('../shared/scenes.js')
 /* 预览画质 / 代理：档位表、文件名与缩放滤镜都在 shared/proxy.js（渲染层读同一份档位表）。
    ⚠️ 代理**只服务预览**：本文件里除了这个函数，没有任何导出路径会碰它。 */
 const proxyTable = require('../shared/proxy.js')
+/* 转场接缝：geo 驱动的转场由 shared/transitionMask.js 拼 `transition=custom` 的
+   表达式（与预览、缩略图同一组数字），并告诉这里要不要先转 RGB 平面。 */
+const transitionMask = require('../shared/transitionMask.js')
 
 /** 常见安装位置（Windows 上用户手工解压 ffmpeg 基本就放这几个地方） */
 const COMMON_DIRS = [
@@ -949,12 +954,29 @@ async function writeInnerShadowPng(bin, key, spec, color) {
  * 而画中画的**自由变形与虚线框**这一轮不做（右栏也不给画中画开这两个入口）——
  * 宁可"没有这个控件"，也不要"控件在、成片里没有"。
  */
+/**
+ * options → 成片尺寸（**唯一的换算入口**）。
+ *
+ * ⚠️ 必须被 `prepareEffectMasks` 与 `buildPlan` 两处共用：前者按它生成遮罩 PNG、
+ *    后者按它拼滤镜链。各写一份的后果是"遮罩按 A 尺寸画、滤镜链按 B 尺寸用"——
+ *    圆角与虚线的位置整体错位，而两张图单独看都很正常。
+ *
+ * ⚠️ 「最高 4K」在这一层收口，不在下拉框那一层：档位表只约束界面，
+ *    MCP 工具能直接传 width/height，旧草稿里也可能存着当年 8K 档的尺寸。
+ *    只靠下拉框，这句承诺绕一步就失效了。
+ */
+function outputSizeOf(options) {
+  const opt = options || {}
+  const baseW = Math.max(2, Math.round(num(opt.width, 1920) / 2) * 2)
+  const baseH = Math.max(2, Math.round(num(opt.height, 1080) / 2) * 2)
+  const capped = exportRate.clampSize(baseW, baseH)
+  return aspect.outputSizeFor(capped.width, capped.height, opt.aspect)
+}
+
 async function prepareEffectMasks(bin, clips, options) {
   const map = new Map()
   if (!bin) return map
-  const baseW = Math.max(2, Math.round(num(options && options.width, 1920) / 2) * 2)
-  const baseH = Math.max(2, Math.round(num(options && options.height, 1080) / 2) * 2)
-  const { width, height } = aspect.outputSizeFor(baseW, baseH, options && options.aspect)
+  const { width, height } = outputSizeOf(options)
   const seen = new Set()
   for (const clip of Array.isArray(clips) ? clips : []) {
     if (clip.track === 'overlay') continue
@@ -1294,16 +1316,15 @@ function buildPlan({
   assumeVideoAudio = true,
   backdrop = '',
   ffmpegPath = '',
-  effectMasks = null
+  effectMasks = null,
+  fxPacks = {}
 }) {
-  /* 成片尺寸 = 基准分辨率里裁出「当前画面比例」的最大内接矩形。
-     ⚠️ 裁而不是"照基准输出"：素材链上每一处 scale/pad 都按这两个数算，
-        尺寸本身就是裁好的，链上所有环节自然跟着对。
-     ⚠️ 与预览同一口径（预览是 object-fit: cover），否则"预览裁了、成片留黑边"，
-        而两边单独看都没错 —— 比例表与裁切算法都在 shared/aspect.js，不许各写一份。 */
-  const baseW = Math.max(2, Math.round(num(options.width, 1920) / 2) * 2)
-  const baseH = Math.max(2, Math.round(num(options.height, 1080) / 2) * 2)
-  const { width, height } = aspect.outputSizeFor(baseW, baseH, options.aspect)
+  /* 成片尺寸 = 基准分辨率按**短边守恒**展开成当前画面比例（shared/aspect.js）。
+     ⚠️ 链上每一处 scale/pad 都按这两个数算，尺寸本身就是最终的，所有环节自然跟着对。
+     ⚠️ 与预览同一口径（预览画布也是这个比例），否则"预览是竖屏、成片是方块"，
+        而两边单独看都没错 —— 比例表与算法都在 shared/aspect.js，不许各写一份。
+     ⚠️ 上限 4K 与遮罩生成共用 outputSizeOf，不许在这里另算一遍。 */
+  const { width, height } = outputSizeOf(options)
   /* 帧率：交给 ffmpeg 的必须是**整数比**字符串。
      ⚠️ 不能先 Math.round：29.97 会变成 30（NTSC 母版直接错档）；
         也不能把 29.97 原样拼进滤镜：ffmpeg 会解析成 2997/100 这个非标准 timebase。
@@ -1709,6 +1730,19 @@ function buildPlan({
       const pan = audiofx.panFilter(clip.pan, round)
       return pan ? `,${pan}` : ''
     })()
+    /* 人声增强与变声（导出阶段）。顺序有讲究，不是随便排的：
+       · 增强排在**降噪之后** —— 先削底噪再压缩，否则压缩器会把底噪一起抬上来；
+       · 变声排在增强之后、平衡之前 —— 它改的是"内容"（音高与频段），
+         平衡改的是"声场"（左右增益），内容先于声场；
+       · 两者都排在音量包络之前 —— 包络是最后一道，动了音量就该是最终结果。 */
+    const boostPart = (() => {
+      const s = audiofx.voiceEnhanceFilter(clip.voiceBoost, round)
+      return s ? `,${s}` : ''
+    })()
+    const voicePart = (() => {
+      const s = audiofx.voiceChangeFilter(clip.voiceFx)
+      return s ? `,${s}` : ''
+    })()
     if (hasAudio) {
       /* 变调（半音）：作用在**整段**上、排在变速之后。
          放在分段之前的话每段都会各自变一次调，听起来像"一格一格地抖"。 */
@@ -1717,7 +1751,7 @@ function buildPlan({
       /* 尾段（降噪 / 平衡 / 音量 / 淡入淡出）两条路共用，都以逗号开头 ——
          接在曲线那条后面时要**去掉第一个逗号**：concat 的输出标签后面紧跟的是
          第一个滤镜名，写成 `[caok1],asetrate=…` 会被 ffmpeg 当成语法错。 */
-      const aTail = pitchPart + adnPart + panPart + gainPart + fadePartFor(clip, dur)
+      const aTail = pitchPart + adnPart + boostPart + voicePart + panPart + gainPart + fadePartFor(clip, dur)
       /* ⚠️ 尾段可能**整段为空**（没变调、没降噪、没平衡、音量 100、没淡入淡出）——
          那时 `[caok1][sa1]` 里夹着零个滤镜，ffmpeg 报 "No such filter: ''"。
          补一个 `anull` 兜底：它什么都不做，但让这条链始终是"输入 → 至少一个滤镜 → 输出"。 */
@@ -1774,11 +1808,35 @@ function buildPlan({
         : 0
       if (link && d > 0.05) {
         const offset = Math.max(0, cur.len - d)
+        /* geo 驱动的转场走 `transition=custom`：表达式由 shared/transitionMask.js
+           用与预览同一组数字拼出来（`A*(1-m)+B*m`），已转义过逗号。
+           没有 geo 的（老的 58 个原生键）照旧走 xfade 自带的名字。
+           ⚠️ 闪黑/闪白要把整帧压成一个常量色，只有 RGB 平面才三通道同权，
+              所以 `rgb` 非空时接缝两侧先转 gbrp（带 alpha 的工程转 gbra），
+              转完再回到这一段的 pixFmt —— 否则中点那一帧是品红，见
+              shared/transitionMask.js 文件头坑 3。 */
+        const { spec, rgb } = transitionMask.xfadeArgs(link.geo || null, {
+          ffmpeg: link.ffmpeg,
+          pixFmt
+        })
+        let left = cur.v
+        let right = seg.v
+        if (rgb) {
+          filters.push(`${cur.v}format=${rgb}[txa${i}]`)
+          filters.push(`${seg.v}format=${rgb}[txb${i}]`)
+          left = `[txa${i}]`
+          right = `[txb${i}]`
+        }
         filters.push(
-          `${cur.v}${seg.v}xfade=transition=${link.ffmpeg}:duration=${fmtSec(d)}:offset=${fmtSec(offset)}[vx${i}]`
+          `${left}${right}xfade=${spec}:duration=${fmtSec(d)}:offset=${fmtSec(offset)}[vx${i}]`
         )
+        if (rgb) filters.push(`[vx${i}]format=${pixFmt}[vxr${i}]`)
         filters.push(`${cur.a}${seg.a}acrossfade=d=${fmtSec(d)}:c1=tri:c2=tri[ax${i}]`)
-        cur = { v: `[vx${i}]`, a: `[ax${i}]`, len: Number((cur.len + seg.len - d).toFixed(3)) }
+        cur = {
+          v: rgb ? `[vxr${i}]` : `[vx${i}]`,
+          a: `[ax${i}]`,
+          len: Number((cur.len + seg.len - d).toFixed(3))
+        }
       } else {
         filters.push(`${cur.v}${cur.a}${seg.v}${seg.a}concat=n=2:v=1:a=1[vx${i}][ax${i}]`)
         cur = { v: `[vx${i}]`, a: `[ax${i}]`, len: Number((cur.len + seg.len).toFixed(3)) }
@@ -2082,6 +2140,87 @@ function buildPlan({
   }
 
   /**
+   * 素材类画面特效（`frameFx` 以 `fm-` 开头，像素来自 `resources/fxpacks/*.yjpack`）。
+   *
+   * 它**不走滤镜链**（looks.frameFxFilterFor 对这些键返回空串），而是在成片视频出口
+   * 上再叠一层：同一批透明 PNG 序列，`overlay` 到画面上，只在片段的起止区间内生效。
+   *
+   * 为什么不塞进片段级的那条链：`overlay` 需要**第二个输入**，而片段链是单输入的
+   * `-vf` 风格拼接（`[0:v]...,[1:v]...`），硬塞进去会把整条链的接续方式改掉。
+   * 放在出口上只动一次，且天然按成片时间轴算 `enable`，与预览的「这一段显示」同口径。
+   *
+   * ⚠️ 必须 `scale=${width}:${height}` **强制拉伸**，不能等比：预览里覆盖层是
+   *    `inset: 0` + `background-size: … 100%`，也就是拉满。等比缩放会让素材
+   *    在 1:1 / 9:16 的画布上只占中间一条，成片与预览就对不上了。
+   * ⚠️ 同一个特效出现在多段时**各自开一个输入**：一个 ffmpeg 输入流只能被消费一次，
+   *    复用需要通过 `split` 引出多路，那样标签管理会复杂得多；
+   *    多开一次输入的代价是多一次序列解码，比"标签错位导致滤镜图连不上"便宜得多。
+   */
+  const packJobs = []
+  /* ⚠️ 不能直接 push 到 `warnings`：它在下面几十行才 `const warnings = []`，
+     现在引用就是 TDZ（ReferenceError: Cannot access 'warnings' before initialization）。
+     先收在局部数组里，等 warnings 建好再并进去。 */
+  const packWarnings = []
+  for (const seg of plan.segments) {
+    const rawKey = String((seg.clip && seg.clip.frameFx) || '')
+    /* ⚠️ 素材类的键也可以带参数后缀（`fm-focus@1` = 缩放档，见 shared/fxParams.json）。
+       按完整键查 fxPacks 会命中不了 ⇒ 成片里那一层静默消失，还附一条"素材没安装"的假警告。 */
+    const key = fxFamily(rawKey)
+    if (!key.startsWith('fm-')) continue
+    const meta = fxPacks[key]
+    if (!meta || !meta.dir) {
+      /* 素材缺失要**留痕**：成片照常出，但"说好的特效没上去"必须能被调用方报出来。
+         静默跳过的话，用户只会看到"预览里有泡泡、成片里没有"，而导出是成功的。 */
+      packWarnings.push(`画面特效「${key}」的素材没有安装，成片里不会有这一层`)
+      continue
+    }
+    packJobs.push({
+      key,
+      scale: Number(fxParamsOf(rawKey).t) || 1,
+      amount: Number(fxParamsOf(rawKey).a) || 1,
+      meta,
+      start: num(seg.start, 0),
+      end: num(seg.start, 0) + num(seg.duration, 0)
+    })
+  }
+  if (packJobs.length && videoLabel) {
+    packJobs.forEach((job, i) => {
+      args.push(
+        '-framerate', String(Math.max(1, Math.floor(num(job.meta.fps, 10)))),
+        '-stream_loop', '-1',
+        '-i', path.join(job.meta.dir, 'f%03d.png')
+      )
+      const idx = inputIndex++
+      const src = `fxs${i}`
+      const out = `fxo${i}`
+      /* 缩放档（素材类唯一可调维度）：与预览的 `transform: scale(var(--fx-t))` 同向。
+         t>1 → 放大后中心裁回画布；t<1 → 缩小后居中补**透明**边
+         （补黑边会让整块画布变暗，而预览里缩小只是元素变小、画面不变）。 */
+      const sc = Math.max(0.2, Math.min(3, num(job.scale, 1)))
+      /* 叠加强度：乘在素材自己的 alpha 上（预览是 `opacity: var(--fx-a)`，同义） */
+      const amt = Math.max(0, Math.min(1, num(job.amount, 1)))
+      const fade = amt < 0.999 ? `colorchannelmixer=aa=${amt.toFixed(3)},` : ''
+      let fit = ''
+      if (sc > 1.001) {
+        const w2 = Math.round(width * sc)
+        const h2 = Math.round(height * sc)
+        fit = `scale=${w2}:${h2}:flags=bicubic,crop=${width}:${height}:(in_w-out_w)/2:(in_h-out_h)/2,`
+      } else if (sc < 0.999) {
+        const w2 = Math.max(2, Math.round(width * sc))
+        const h2 = Math.max(2, Math.round(height * sc))
+        fit = `scale=${w2}:${h2}:flags=bicubic,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black@0,`
+      } else {
+        fit = `scale=${width}:${height}:flags=bicubic,`
+      }
+      filters.push(`[${idx}:v]${fit}${fade}format=rgba,setpts=PTS-STARTPTS[${src}]`)
+      filters.push(
+        `${videoLabel}[${src}]overlay=0:0:format=auto:enable='between(t,${round(job.start)},${round(job.end)})'[${out}]`
+      )
+      videoLabel = `[${out}]`
+    })
+  }
+
+  /**
    * 收尾统一**打色彩标签**：`setparams` 挂在成片的视频出口上。
    *
    * 为什么非要在滤镜里打一遍（明明下面还给了 `-color_trc bt709` 这些输出参数）：
@@ -2141,6 +2280,8 @@ function buildPlan({
   if (subs.missingFont) {
     warnings.push('这台机器上没找到可用的中文字体，字幕没能写进成片（画面与音频不受影响）')
   }
+  /* 素材类特效缺素材时在拼链阶段就记下了（那时候 warnings 还没声明） */
+  warnings.push(...packWarnings)
   return {
     args,
     duration: finalDuration,
@@ -2189,6 +2330,76 @@ async function extractAudio({ sourcePath, outPath, ffmpegPath, signal }) {
     return { ok: false, error: result.error || '提取失败', reason: 'ffmpeg' }
   }
   return { ok: true, outPath, duration: (info && info.duration) || 0 }
+}
+
+/* ------------------------------ 智能抠像：序列帧编码 ------------------------------ */
+
+/**
+ * 把 PNG 序列编成一条视频。
+ *
+ * ⚠️ **为什么不做"带 alpha 的透明视频"**（这是踩过一轮才知道的硬约束）：
+ *    Chromium 能**播** VP9/VP8 的 alpha（预览没问题），但 ffmpeg 只能**解**不能**编** ——
+ *    实测 `-c:v libvpx-vp9 -pix_fmt yuva420p -auto-alt-ref 0` 出来的 webm，
+ *    ffprobe 报的 pix_fmt 是 `yuv420p`，解码回 PNG 是 colorType 2（无 alpha）。
+ *    ffmpeg 能编 alpha 的只有 `prores_ks`（yuva444p10le）与 `qtrle`，两者都在 MOV 里，
+ *    而 Chromium **播不了** MOV —— 那就变成"导出正常、预览一片黑"，
+ *    正是本项目明令禁止的"预览与成片不一致"。
+ *    所以抠像视频的产物一律是**已经合好背景的普通 mp4**：预览播的就是它，成片叠的也是它。
+ *
+ * 两个编码档：
+ *   · `h264`（默认）：背景已烘进去，不需要 alpha，体积小、兼容性最好；
+ *   · `vp9`：留给"以后真要透明"的场合，但请先重跑一遍 alpha 验证再启用。
+ *
+ * @param {object} opts
+ * @param {string} opts.dir 帧序列目录（里面有 frame-00000.png ...）
+ * @param {number} opts.fps 序列帧率
+ * @param {string} opts.outPath 输出路径
+ * @param {'h264'|'vp9'} [opts.codec]
+ * @returns {Promise<{ ok:boolean, outPath?:string, frames?:number, bytes?:number, error?:string, reason?:string }>}
+ */
+async function encodeMatteSequence({ dir, fps, outPath, ffmpegPath, codec, signal }) {
+  if (!dir) return { ok: false, error: '没有指定帧序列目录', reason: 'bad-input' }
+  if (!outPath) return { ok: false, error: '没有指定输出路径', reason: 'bad-input' }
+  const found = findFfmpeg()
+  const bin = ffmpegPath || (found && found.ffmpeg)
+  if (!bin) return { ok: false, error: '找不到 ffmpeg，无法合成视频', reason: 'not-found' }
+
+  const rate = Math.max(2, Math.min(60, Number(fps) || 15))
+  const useVp9 = codec === 'vp9'
+  const videoArgs = useVp9
+    ? ['-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0', '-b:v', '0', '-crf', '28']
+    : /* yuv420p 而不是 yuv444p：420 的兼容性最好，而抠像产物是给人看的，
+         4:2:0 的色度损失在 720p 上肉眼看不出来，文件却小一半 */
+      ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '20']
+
+  const result = await run(
+    bin,
+    [
+      '-y',
+      /* 帧号从 0 开始：渲染层是按 index 从 0 写的，ffmpeg 默认从 1 找，
+         不加就会报 "Could not open frame-00000.png" */
+      '-start_number', '0',
+      '-framerate', String(rate),
+      '-i', path.join(dir, 'frame-%05d.png'),
+      '-an',
+      ...videoArgs,
+      /* 4 线程：限一下免得把用户的机器占满（编码是后台任务，不该抢前台） */
+      '-threads', '4',
+      outPath
+    ],
+    { timeout: 15 * 60 * 1000, signal }
+  )
+  if (!result.ok) {
+    return { ok: false, error: result.error || '编码失败', reason: 'ffmpeg' }
+  }
+  let bytes = 0
+  try {
+    bytes = fs.statSync(outPath).size
+  } catch {
+    /* 下面按 0 处理，由调用方判空 */
+  }
+  if (!bytes) return { ok: false, error: '编码产物是空的', reason: 'empty' }
+  return { ok: true, outPath, bytes, fps: rate }
 }
 
 /* ------------------------------ 波形峰值 ------------------------------ */
@@ -2294,7 +2505,7 @@ async function audioPeaks({ sourcePath, offset = 0, duration = 0, buckets = 160 
  * 跑一次渲染。onProgress 会收到 0..1 的进度。
  * 返回 { ok, outPath, duration, attempts } 或 { ok:false, error }。
  */
-async function render({ clips, outPath, options, onProgress, ffmpegPath, signal, backdrop = '' }) {
+async function render({ clips, outPath, options, onProgress, ffmpegPath, signal, backdrop = '', fxPacks = {} }) {
   /**
    * 复合片段先摊平成普通片段（纯函数，预览侧用的是同一份）。
    * 之后这个函数里所有 `clips` 的用法都改成 `list` —— 探测流信息、备遮罩、拼滤镜图
@@ -2385,7 +2596,8 @@ async function render({ clips, outPath, options, onProgress, ffmpegPath, signal,
       assumeVideoAudio,
       backdrop: stageBackdrop,
       ffmpegPath: bin,
-      effectMasks
+      effectMasks,
+      fxPacks
     })
     if (plan.error) return { ok: false, error: plan.error, reason: 'empty' }
     const result = await runRender(bin, plan.args, plan.duration, onProgress, signal)
@@ -2627,6 +2839,7 @@ module.exports = {
   buildPlan,
   render,
   extractAudio,
+  encodeMatteSequence,
   audioPeaks,
   detectScenes,
   makeProxy,

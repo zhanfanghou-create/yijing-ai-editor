@@ -16,10 +16,18 @@
            blob:              —— 注入 MediaPipe 的 wasm 加载器。加载器内容来自
              **本包 bundle**（`?raw` 进的代码），不是磁盘上的素材文件。
              ⚠️ 绝不能改成放行 yjai-media: —— 那等于"任何能写进素材目录的
-                文件都能被当脚本执行"，而素材目录是用户可写的。 -->
+                文件都能被当脚本执行"，而素材目录是用户可写的。
+
+         frame-src —— 左栏「无线画布」在右侧内嵌的那个在线工作台。
+           · 只放行**这一个源**，不是 https: 通配：内嵌视图里若被塞进别的站点，
+             那是一个能看到我们窗口尺寸、能弹窗的东西，白名单必须精确到源。
+           · 这个源必须与 src/shared/appLink.js 的 url 同源（那边是地址真源，
+             改了地址这里也要改；两处不一致的症状是 iframe 一片空白 + 控制台
+             "Refused to frame"，界面上什么都不显示）。
+           · 'self' 留着是为了将来放本地说明页，当前没有用到。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yjai-media: http: https:; media-src 'self' blob: yjai-media: http: https:; connect-src 'self' yjai-media: http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:"
+      content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yjai-media: http: https:; media-src 'self' blob: yjai-media: http: https:; connect-src 'self' yjai-media: http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:; frame-src 'self' https://www.yjai.top"
     />
     <title>艺镜AI剪辑</title>
   </head>

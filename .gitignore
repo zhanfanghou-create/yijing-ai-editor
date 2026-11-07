@@ -38,6 +38,12 @@ packages/desktop/resources/mediapipe/*.wasm
 packages/desktop/resources/mediapipe/*.task
 packages/desktop/resources/mediapipe/*.js
 
+# 语音识别的随包运行时（sherpa-onnx 的 N-API 插件 + onnxruntime，Apache-2.0，约 23MB）
+# 同 mediapipe：二进制不入库，只留抓取脚本与许可证说明。
+#   node tools/fetch-speech.mjs
+packages/desktop/resources/speech/*.node
+packages/desktop/resources/speech/*.dll
+
 # 运行期数据（导出临时文件、用户数据目录）
 packages/desktop/exports/
 *.sqlite
@@ -54,10 +60,24 @@ _probe_*
 # 临时探测与取景产物（截图/探针脚本），别入库
 _probe/
 _smoke*
+
+# 特效素材包的生成中间产物（逐帧 PNG / 雪碧图 / 联系图，约 15MB）
+# 只保留成品 packages/desktop/resources/fxpacks/*.yjpack 与生成脚本；
+# 中间产物可随时用 `python tools/gen-fx-packs.py` 重算出来。
+tools/fxpacks-src/
 _srv*
 _tmp_*
+_tmp-*
 *.log
 npm-debug.log*
+
+# Python 字节码缓存（tools/*.py 被自检脚本反复 import 时生成，与源码无关）
+__pycache__/
+*.pyc
+
+# 缩略图底片打包时的裁剪中间产物（由 tools/thumb-bases/raw/ 可重算，约 3MB）
+# 只保留真源 raw/ 与成品 frames.yjpack —— 见 tools/gen-thumb-pack.py
+tools/thumb-bases/_pack_tmp/
 
 # 侦察/取证目录：README 里说明方法，产物不入库
 _recon/

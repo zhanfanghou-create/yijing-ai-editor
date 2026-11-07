@@ -316,3 +316,142 @@ export async function statMedia(paths) {
   }
   return []
 }
+
+/* ------------------------------- 本地 AI 模型 ------------------------------- */
+
+/**
+ * 模型表 + 本机占用。
+ *
+ * 浏览器预览下没有主进程，返回空表而不是伪造一份 —— 设置页据此显示"只在桌面端可用"，
+ * 比在浏览器里摆一排按不动的下载按钮好。
+ */
+export async function listModels() {
+  if (bridge?.models?.list) {
+    try {
+      const res = await bridge.models.list()
+      if (res && res.ok) return res
+    } catch {
+      /* 落到空表 */
+    }
+  }
+  return { ok: false, models: [], usage: { total: 0, root: '' } }
+}
+
+export async function downloadModel(id) {
+  if (!bridge?.models?.download) return { ok: false, error: '只在桌面端可用' }
+  try {
+    return await bridge.models.download(id)
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || '下载失败' }
+  }
+}
+
+export async function importModel(id) {
+  if (!bridge?.models?.import) return { ok: false, error: '只在桌面端可用' }
+  try {
+    return await bridge.models.import(id)
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || '安装失败' }
+  }
+}
+
+export async function removeModel(id) {
+  if (!bridge?.models?.remove) return { ok: false, error: '只在桌面端可用' }
+  try {
+    return await bridge.models.remove(id)
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || '删除失败' }
+  }
+}
+
+export async function revealModel(id) {
+  if (!bridge?.models?.reveal) return { ok: false, error: '只在桌面端可用' }
+  try {
+    return await bridge.models.reveal(id)
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || '打不开目录' }
+  }
+}
+
+/** 下载进度订阅，返回退订函数；浏览器下是空操作 */
+export function onModelProgress(handler) {
+  if (!bridge?.models?.onProgress) return () => {}
+  return bridge.models.onProgress(handler)
+}
+
+/* ------------------------------- 语音识别 ------------------------------- */
+
+/**
+ * 识别链路状态（运行时 + 各模型）。
+ *
+ * 浏览器预览下恒返回 `{ ok:false, ready:false }` —— 调用方据此走"需要桌面端"分支，
+ * 而不是把"没有桥"和"模型没装"混成同一句话（前者用户无能为力，后者他自己就能装）。
+ */
+export async function speechStatus() {
+  if (!bridge?.speech?.status) return { ok: false, ready: false, runtime: { ok: false }, models: [] }
+  try {
+    const res = await bridge.speech.status()
+    if (res && res.ok) return res
+  } catch {
+    /* 落到"不可用" */
+  }
+  return { ok: false, ready: false, runtime: { ok: false }, models: [] }
+}
+
+/**
+ * 识别一组时间段，返回 `{ ok, segments:[{start,end,text}] }`。
+ *
+ * 失败时 `reason` 是**可判定的枚举**（`runtime-missing` / `model-missing` / …），
+ * 界面据此决定"要不要把用户送去装模型"——只靠错误文案判断的话，
+ * 改一句提示语就会静默丢掉这个跳转。
+ */
+export async function transcribeSpeech(payload) {
+  if (!bridge?.speech?.transcribe) return { ok: false, reason: 'no-bridge', error: '语音识别需要桌面端' }
+  try {
+    return await bridge.speech.transcribe(payload)
+  } catch (err) {
+    return { ok: false, reason: 'crash', error: (err && err.message) || '识别失败' }
+  }
+}
+
+export async function cancelSpeech(jobId) {
+  if (!bridge?.speech?.cancel) return { ok: false }
+  try {
+    return await bridge.speech.cancel(jobId)
+  } catch {
+    return { ok: false }
+  }
+}
+
+/**
+ * 配音音色包的状态。
+ *
+ * 与 `speechStatus()` 分开：识别和配音共用运行时，但"装没装音色包"是两件事。
+ * 合在一起会让"能认字但不能读出声"这种情况在界面上无法表达。
+ */
+export async function voiceStatus() {
+  if (!bridge?.speech?.voiceStatus) return { ok: false, ready: false, runtime: { ok: false }, voices: [] }
+  try {
+    const res = await bridge.speech.voiceStatus()
+    if (res && res.ok) return res
+  } catch {
+    /* 落到"不可用" */
+  }
+  return { ok: false, ready: false, runtime: { ok: false }, voices: [] }
+}
+
+/** 把文字读成人声（本机合成），返回 wav 的绝对路径 */
+export async function speakText(payload) {
+  if (!bridge?.speech?.speak) return { ok: false, reason: 'no-bridge', error: '配音需要桌面端（本机合成）' }
+  try {
+    return await bridge.speech.speak(payload)
+  } catch (err) {
+    return { ok: false, reason: 'crash', error: (err && err.message) || '合成失败' }
+  }
+}
+
+/** 识别进度订阅，返回退订函数；浏览器下是空操作 */
+export function onSpeechProgress(handler) {
+  if (!bridge?.speech?.onProgress) return () => {}
+  return bridge.speech.onProgress(handler)
+}

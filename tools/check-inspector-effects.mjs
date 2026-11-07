@@ -240,10 +240,11 @@ function runMath(adj, txt) {
     `矩阵 r=${matrixWarm[0]} b=${matrixWarm[12]} | warm=${fWarm} cool=${fCool}`
   )
 
-  /* 4. 饱和度 +40 → 两侧都 1.40 */
+  /* 4. 饱和度 +40 → 两侧都 1.40（导出侧是 CSS 那条亮度加权矩阵，不是 eq=saturation） */
   add(
-    '饱和度 +40 · 预览 saturate(1.4) 与导出 eq=saturation=1.4 一致',
-    adj.cssFilterOps({ saturate: 40 }, null).includes('saturate(1.4)') && /saturation=1\.4/.test(ff({ saturate: 40 })),
+    '饱和度 +40 · 预览 saturate(1.4) 与导出 colorchannelmixer 矩阵一致',
+    adj.cssFilterOps({ saturate: 40 }, null).includes('saturate(1.4)') &&
+      /colorchannelmixer=rr=1\.3148:rg=-0\.286:rb=-0\.0288/.test(ff({ saturate: 40 })),
     `${adj.cssFilterOps({ saturate: 40 }, null)} | ${ff({ saturate: 40 })}`
   )
 
@@ -601,7 +602,7 @@ async function main() {
       list.map((el) => el.getAttribute('data-insp-tab'))
     )
     check(
-      '选中画面片段 · 右栏一排页签 = 信息 + 画面/音频/变速/调整（信息在首位，分类紧随其后）',
+      '选中画面片段 · 右栏一排页签 = 信息 + 画面/音频/变速/调整（「字幕轨」只在字幕相关操作时出现，此处不该有）',
       tabs.join(',') === 'info,visual,audio,speed,adjust',
       tabs.join(',') || '(一个都没有)'
     )
@@ -1054,13 +1055,14 @@ async function main() {
     await page.locator('.clip[data-clip]', { hasText: '字幕一' }).first().click()
     await sleep(500)
 
-    /* 字幕片段：右栏顶部 = [信息][字幕] 两枚同级页签 */
+    /* 字幕片段：右栏顶部 = [信息][字幕轨][字幕] 三枚同级页签
+       （选中字幕片段 = 在做字幕的事，所以轨级的「字幕轨」这枚也在） */
     const infoTabsText = await page.locator('[data-info-tab]').evaluateAll((list) =>
       list.map((el) => el.getAttribute('data-info-tab'))
     )
     check(
-      '选中字幕片段 · 右栏顶部是 [信息][字幕] 两枚同级页签（字幕紧跟信息后面）',
-      infoTabsText.join(',') === 'info,text',
+      '选中字幕片段 · 右栏顶部是 [信息][字幕轨][字幕] 三枚同级页签',
+      infoTabsText.join(',') === 'info,captions,text',
       infoTabsText.join(',') || '(没有页签)'
     )
 

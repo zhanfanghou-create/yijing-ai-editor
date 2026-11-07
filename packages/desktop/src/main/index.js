@@ -18,6 +18,8 @@ const {
   probe: probeFfmpeg,
   render: renderTimeline,
   extractAudio: extractAudioTrack,
+  /* 智能抠像：带 alpha 的 PNG 序列 → 透明视频（VP9 + alpha） */
+  encodeMatteSequence: encodeMatteSequenceOf,
   audioPeaks: audioPeaksOf,
   detectScenes: detectScenesOf,
   makeProxy: makeProxyOf,
@@ -32,6 +34,9 @@ const {
 const media = require('./media')
 const { createDraftStore } = require('./drafts')
 const packOf = require('./pack')
+/* 字体入库：复制与命名规则住在这里（`yijing_import_font` 走同一份），
+   主进程只额外负责白名单与 url —— 见下方 importFont */
+const fontsMod = require('./fonts')
 const packTable = require('../shared/pack')
 const hdrTable = require('../shared/hdr')
 /* 导出编码格式：保存对话框的扩展名与 render:start 的落地扩展名都按它走，
@@ -47,6 +52,14 @@ const borders = require('./borders')
 /* 本地插件（素材包）：清单校验在 shared/pluginPack.js，落盘在 plugins.js */
 const plugins = require('./plugins')
 const facefx = require('./facefx')
+/* 智能抠像的运行时定位（wasm 复用 mediapipe，模型走注册表）。纯 Node，可脱机自测 */
+const matte = require('./matte')
+/* 特效素材包：安装 / 解析（帧序列给导出、雪碧图给预览）。纯 Node，可脱机自测 */
+const fxpack = require('./fxpack')
+/* 本地 AI 模型：注册表、下载、导入、删除。纯 Node，可脱机自测（tools/models-selftest.mjs） */
+const models = require('./models')
+/* 本机语音识别：sherpa-onnx 推理。纯 Node，可脱机自测（tools/speech-selftest.mjs） */
+const speech = require('./speech')
 const { registerMcpServer } = require('./mcp-register')
 
 const isDev = !app.isPackaged
@@ -184,26 +197,18 @@ function copyIntoMaterials(sourcePath) {
  *    `document.fonts` 里就永远没有这个家族，预览静默退回默认字体。
  */
 function importFont(sourcePath) {
-  const absolute = path.resolve(String(sourcePath || ''))
-  const ext = path.extname(absolute).toLowerCase()
-  if (!['.ttf', '.otf', '.ttc'].includes(ext)) return null
-  try {
-    const dir = path.join(app.getPath('userData'), 'fonts')
-    fs.mkdirSync(dir, { recursive: true })
-    const base = path.basename(absolute, path.extname(absolute)).replace(/[^\w\u4e00-\u9fa5-]/g, '_')
-    const stamp = createHash('sha1').update(absolute).digest('hex').slice(0, 8)
-    const target = path.join(dir, `${base}-${stamp}${ext}`)
-    if (!fs.existsSync(target)) fs.copyFileSync(absolute, target)
-    allowedMedia.add(target)
-    return {
-      /* id 用哈希：同一个字体重复导入得到同一个 id，设置里不会出现两条一样的 */
-      id: stamp,
-      name: base,
-      path: target,
-      url: mediaUrlOf(target)
-    }
-  } catch {
-    return null
+  /* 复制与命名规则在 `main/fonts.js`（MCP 工具 `yijing_import_font` 走同一份实现，
+     两份各写一遍会在"文件名带不带哈希"这种细节上分叉，而分叉的后果是互相覆盖）。
+     这里只做**主进程独有**的那一半：把落地路径加进白名单，并算出可预览的 url。 */
+  const font = fontsMod.importFontFile({ sourcePath, userDataDir: app.getPath('userData') })
+  if (!font) return null
+  allowedMedia.add(font.path)
+  return {
+    /* id 用哈希：同一个字体重复导入得到同一个 id，设置里不会出现两条一样的 */
+    id: font.id,
+    name: font.name,
+    path: font.path,
+    url: mediaUrlOf(font.path)
   }
 }
 
@@ -431,6 +436,19 @@ const hdrCache = new Map()
 
 /* -------------------------------- 主窗口 -------------------------------- */
 
+/**
+ * 无窗模式：`YJAI_NO_WINDOW=1` 时窗口照常创建、照常渲染，但**始终不显示**。
+ *
+ * 为什么需要它：所有端到端闸门都要起真实 Electron 才能测到渲染层，而默认行为是
+ * `ready-to-show` 就把窗口弹出来 —— 跑一次全量套件会反复抢焦点、盖住用户正在做的事。
+ * 闸门本身不需要窗口可见：它只要 DOM 与截图。
+ *
+ * ⚠️ 隐藏窗口的渲染会被 Chromium 按"后台标签页"节流（rAF 降到 1Hz、定时器拉长），
+ *    表现是截图截到半张、或 `waitForSelector` 莫名其妙超时。所以无窗模式下必须
+ *    同时关掉 backgroundThrottling，否则"能截到图"这件事本身不可靠。
+ */
+const HEADLESS = process.env.YJAI_NO_WINDOW === '1'
+
 function createWindow() {
   nativeTheme.themeSource = 'dark'
 
@@ -455,11 +473,27 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
-      spellcheck: false
+      spellcheck: false,
+      // 无窗模式下必须关节流，否则隐藏窗口的 rAF 降到 1Hz，截图与等待选择器都不可靠
+      backgroundThrottling: !HEADLESS
     }
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow.show())
+  /* 无窗模式：**不 show:false**，而是移出屏幕 + 不抢焦点。
+     一开始写的是 `if (!HEADLESS) show()`，结果 Playwright 的截图会一直挂住 ——
+     隐藏窗口不与合成器同步几何，`waitForSelector` 能过、`screenshot` 永远等不到帧。
+     所以窗口必须真的参与合成，只是不占用户的桌面：
+       · setPosition 到屏幕外 → 用户看不见；
+       · showInactive 而不是 show → 不激活、不抢焦点，不会打断正在打字的窗口。 */
+  if (HEADLESS) {
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.setPosition(-12000, 0, false)
+      mainWindow.setSkipTaskbar(true)
+      mainWindow.showInactive()
+    })
+  } else {
+    mainWindow.once('ready-to-show', () => mainWindow.show())
+  }
 
   if (isDev && process.env.YIJAI_USE_DEV_SERVER === '1') {
     mainWindow.loadURL(DEV_URL)
@@ -926,6 +960,9 @@ function registerIpc() {
         /* 背景（素材 → 背景选的那张图）。渲染层给的是 import 出来的 URL，
            打包后指向 app.asar 内 —— 转换与 asar 落地由 render.js 内部处理。 */
         backdrop: (payload && payload.backdrop) || '',
+        /* 特效素材包：`key → { dir, frames, fps }`。素材型画面特效靠它把 PNG 序列
+           overlay 到成片上；没装包时这里是空对象，render.js 会把它记进 warnings。 */
+        fxPacks: fxpack.effects(fxPackDeps()),
         signal: controller.signal,
         onProgress: (ratio) => {
           if (!sender.isDestroyed()) sender.send('render:progress', { ratio })
@@ -1284,6 +1321,8 @@ function registerIpc() {
       resourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
       mainDir: __dirname,
+      /* 本机安装的模型优先（设置 → AI 模型里下载/导入的那份），否则回落随包 */
+      userData: app.getPath('userData'),
       allow: (abs) => allowedMedia.add(abs),
       mediaUrlOf
     })
@@ -1306,7 +1345,8 @@ function registerIpc() {
     const rt = facefx.faceRuntime({
       resourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
-      mainDir: __dirname
+      mainDir: __dirname,
+      userData: app.getPath('userData')
     })
     if (!rt.loader) return { ok: false, text: '', error: '找不到 wasm 加载器' }
     try {
@@ -1314,6 +1354,409 @@ function registerIpc() {
     } catch (err) {
       return { ok: false, text: '', error: (err && err.message) || '读不出来' }
     }
+  })
+
+  /* ───────────────── 智能抠像（人像分割） ─────────────────
+   *
+   * 与人物特效共用同一份 wasm 运行时，只是多一个 0.25MB 的分割模型。
+   * 推理在渲染层（要 Canvas / WebGL），这里只负责"文件在哪、地址是什么、产物写哪"。
+   */
+
+  /** 抠像运行时：wasm 两个文件 + 分割模型，缺哪个列哪个 */
+  ipcMain.handle('matte:runtime', async () => {
+    const rt = matte.matteRuntime({
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      mainDir: __dirname,
+      userData: app.getPath('userData'),
+      allow: (abs) => allowedMedia.add(abs),
+      mediaUrlOf
+    })
+    return { ok: rt.ok, missing: rt.missing, wasm: rt.wasm, model: rt.model }
+  })
+
+  /** 模型装没装（面板据此决定按钮文案：直接抠 / 先下载模型） */
+  ipcMain.handle('matte:model', async () => {
+    const st = matte.modelState({
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      mainDir: __dirname,
+      userData: app.getPath('userData')
+    })
+    return { ok: true, ready: st.ready, missing: st.missing, bytes: st.bytes }
+  })
+
+  /**
+   * 保存抠像产物（渲染层算完的画面）。
+   *
+   * 为什么由主进程写盘而不是渲染层用 `<a download>`：
+   *   ① 要落到 `userData/matte` 才能进素材库、才能在导出时被 ffmpeg 读到；
+   *   ② 写完**必须**登记白名单，否则 `yjai-media://` 403，预览是一片空白
+   *      （第③类静默失效：素材在库里、点了没反应）。
+   *
+   * 入参是 base64（不带 data: 前缀），不用 `ArrayBuffer`：
+   *   structured clone 传大 Buffer 会让 IPC 卡住几秒，而 720p PNG 也就 1~2MB。
+   */
+  ipcMain.handle('matte:save', async (_event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    const ext = body.ext === 'webm' ? 'webm' : 'png'
+    const b64 = String(body.base64 || '')
+    if (!b64) return { ok: false, error: '没有收到图像数据' }
+    if (b64.length > 220 * 1024 * 1024) return { ok: false, error: '产物太大（超过 160MB）' }
+
+    const outDir = path.join(app.getPath('userData'), 'matte')
+    try {
+      fs.mkdirSync(outDir, { recursive: true })
+    } catch (err) {
+      return { ok: false, error: `建目录失败：${(err && err.message) || err}` }
+    }
+    const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    const outPath = path.join(outDir, `matte-${stamp}.${ext}`)
+    try {
+      const buf = Buffer.from(b64, 'base64')
+      if (!buf.length) return { ok: false, error: '图像数据是空的' }
+      fs.writeFileSync(outPath, buf)
+    } catch (err) {
+      return { ok: false, error: `写文件失败：${(err && err.message) || err}` }
+    }
+    allowedMedia.add(outPath)
+    return { ok: true, path: outPath, url: mediaUrlOf(outPath), bytes: fs.statSync(outPath).size }
+  })
+
+  /**
+   * 视频抠像：逐帧写入临时序列目录（`<userData>/matte/seq-<id>/frame-00000.png`）。
+   *
+   * 为什么逐帧过 IPC 而不是攒成一个大包：
+   *   逐帧写能让渲染层边算边报进度，也能让用户中途取消时立刻停下 ——
+   *   攒包的话必须等全部算完才传，30 秒的素材就是 30 秒白等。
+   *
+   * ⚠️ `seqId` 只接受 `[a-z0-9-]`：它会被拼进路径，放过 `..` 就等于
+   *    把"往任意位置写文件"这个能力交给了渲染层。
+   */
+  ipcMain.handle('matte:seq-frame', async (_event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    const seqId = String(body.seqId || '')
+    if (!/^[a-z0-9-]{4,40}$/.test(seqId)) return { ok: false, error: '序列标识不合法' }
+    const index = Math.max(0, Math.floor(Number(body.index) || 0))
+    if (index > 99999) return { ok: false, error: '帧号超出上限' }
+    const b64 = String(body.base64 || '')
+    if (!b64) return { ok: false, error: '这一帧没有数据' }
+
+    const dir = path.join(app.getPath('userData'), 'matte', `seq-${seqId}`)
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, `frame-${String(index).padStart(5, '0')}.png`), Buffer.from(b64, 'base64'))
+    } catch (err) {
+      return { ok: false, error: `写帧失败：${(err && err.message) || err}` }
+    }
+    return { ok: true, index }
+  })
+
+  /**
+   * 把序列帧编成视频，产物进素材库。
+   *
+   * ⚠️ 产物是**普通 mp4**，不是透明视频：ffmpeg 编不出 Chromium 能播的 alpha 视频
+   *    （详见 render.js 里 encodeMatteSequence 顶部）。所以渲染层交过来的每一帧
+   *    已经合好了背景 —— 预览播的就是成片。
+   *
+   * 编码完**删掉临时序列**：720p 每秒 15 帧 PNG 约 10MB，30 秒素材就是 300MB，
+   * 留在盘上用户既不知道、也不敢删。
+   */
+  ipcMain.handle('matte:encode', async (_event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    const seqId = String(body.seqId || '')
+    if (!/^[a-z0-9-]{4,40}$/.test(seqId)) return { ok: false, error: '序列标识不合法' }
+    const dir = path.join(app.getPath('userData'), 'matte', `seq-${seqId}`)
+    const outDir = path.join(app.getPath('userData'), 'matte')
+    const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    const outPath = path.join(outDir, `matte-${stamp}.mp4`)
+
+    const result = await encodeMatteSequenceOf({
+      dir,
+      fps: body.fps,
+      outPath,
+      codec: 'h264'
+    })
+    /* 编码失败也要清目录：留着只会占空间，用户下次点还是从头算 */
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* 清不掉不影响结果，下次启动会覆盖同名文件 */
+    }
+    if (!result.ok) return result
+    allowedMedia.add(result.outPath)
+    return {
+      ok: true,
+      path: result.outPath,
+      url: mediaUrlOf(result.outPath),
+      bytes: result.bytes,
+      fps: result.fps,
+      duration: Number(body.duration) || 0
+    }
+  })
+
+  /* ───────────────── 画面特效素材包 ─────────────────
+   *
+   * 特效页里那些"真素材型"效果（泡泡 / 满屏问号 / 法阵 / 雨丝…）的像素来自
+   * `resources/fxpacks/overlay-fx.yjpack`。这里的职责只有两件：
+   *   ① 第一次被问到时把内置包装到 `userData/fxpacks/`（幂等，按 manifest 的 sha1 判）；
+   *   ② 把 `key → 雪碧图 URL / 帧数 / 帧率` 报给渲染层，把 `key → 帧目录` 给导出链。
+   *
+   * ⚠️ 装包是**懒执行**（第一次 `fxpack:state` 时才做）而不是 app ready 时：
+   *    解 10MB 的包要几百毫秒，放在启动路径上会让首屏变慢，而且它跟首屏毫无关系。
+   * ⚠️ 失败**不能抛**：素材包坏了只是特效页少几个效果，不该让应用起不来。
+   *    所以这里把错误包成 `{ ok:false, error }` 返回，界面据此提示"素材包没装上"。
+   */
+  const fxPackDeps = () => ({
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    mainDir: __dirname,
+    userData: app.getPath('userData'),
+    allow: (abs) => allowedMedia.add(abs),
+    mediaUrlOf
+  })
+
+  /** @type {{ ok: boolean, error?: string, skipped?: boolean } | null} */
+  let fxPackInstall = null
+
+  ipcMain.handle('fxpack:state', async () => {
+    if (!fxPackInstall) fxPackInstall = fxpack.installBuiltin(fxPackDeps())
+    const deps = fxPackDeps()
+    const st = fxpack.state(deps)
+    return {
+      ok: true,
+      installed: Boolean(fxPackInstall.ok),
+      installError: fxPackInstall.ok ? '' : String(fxPackInstall.error || ''),
+      effects: st.effects,
+      packs: st.packs
+    }
+  })
+
+  /** 强制重装内置包（素材包被人删了一半时，界面上给一个"重新安装素材包"的出口） */
+  ipcMain.handle('fxpack:reinstall', async () => {
+    const root = fxpack.installRootOf(fxPackDeps())
+    if (!root) return { ok: false, error: '拿不到用户目录' }
+    try {
+      fs.rmSync(path.join(root, fxpack.BUILTIN_PACK), { recursive: true, force: true })
+    } catch {
+      /* 删不掉就让 installPack 自己覆盖 */
+    }
+    fxPackInstall = null
+    fxPackInstall = fxpack.installBuiltin(fxPackDeps())
+    const st = fxpack.state(fxPackDeps())
+    return { ok: Boolean(fxPackInstall.ok), error: fxPackInstall.error || '', effects: st.effects }
+  })
+
+  /* ───────────────── 本地 AI 模型 ─────────────────
+   *
+   * 「随包优先、可在本机覆盖」：<userData>/models/<id>/ 里有一套完整的就用它，
+   * 否则回落 resources/<bundle>。facefx.js 的 faceRootOf 已按这个顺序找。
+   *
+   * ⚠️ 渲染层只交**组件 id**，不交任何路径：
+   *    下载地址、安装目录、要删哪些文件全部在主进程按注册表决定。
+   *    "从文件安装"是唯一的例外，它的路径来自系统文件对话框（用户亲手选的），
+   *    主进程仍会按注册表里的文件名与体积校验一遍再落盘。
+   */
+  const modelsDeps = () => ({
+    userData: app.getPath('userData'),
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    mainDir: __dirname
+  })
+
+  ipcMain.handle('models:list', async () => {
+    const table = models.list(modelsDeps())
+    return { ok: true, models: table, usage: models.totalBytes(modelsDeps()) }
+  })
+
+  ipcMain.handle('models:download', async (event, id) => {
+    try {
+      /* 进度推流要节流。78MB 按 64KB 一块 ≈ 1280 次 send，设置弹窗那条列表会跟着
+         重排 1280 次 —— 实测症状不是"卡一下"，而是**下载本身掉到 20KB/s**：
+         渲染层被重排占住时，主进程这边的 socket 读也跟着饿死（同一份代码、
+         同一个 URL 在纯 Node 下是 7MB/s，差别只在"有没有人在逐块画进度"）。
+         人眼只需要每秒几次，200ms 一帧完全够。最后一帧照发，不然进度条停在 97%。 */
+      const THROTTLE_MS = 200
+      let lastAt = 0
+      let lastPercent = -1
+      const push = (progress) => {
+        const now = Date.now()
+        const percent = Number(progress && progress.percent) || 0
+        const done = percent >= 100
+        if (!done && now - lastAt < THROTTLE_MS && percent === lastPercent) return
+        lastAt = now
+        lastPercent = percent
+        /* 进度是单向推送：渲染层订阅后只管画进度条，不需要回执。
+           窗口已销毁时 send 会抛，这里吞掉 —— 关窗时正在下载不该让主进程红一片。 */
+        try {
+          if (!event.sender.isDestroyed()) event.sender.send('models:progress', progress)
+        } catch {
+          /* 见上 */
+        }
+      }
+      const row = await models.download(String(id || ''), modelsDeps(), push)
+      return { ok: true, model: row }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || '下载失败' }
+    } finally {
+      /* 装完（或装到一半）都要让识别器重建：缓存里那份是按旧目录建的，
+         换了模型文件却继续用旧识别器，症状是"换了模型效果一点没变"。 */
+      speech.resetCache()
+    }
+  })
+
+  ipcMain.handle('models:import', async (_event, id) => {
+    const entry = models.byId(String(id || ''))
+    if (!entry) return { ok: false, error: '没有这个模型' }
+    const picked = await dialog.showOpenDialog({
+      title: `选择 ${entry.name} 的模型文件`,
+      properties: ['openFile'],
+      filters: [
+        { name: '模型文件', extensions: [...new Set(entry.files.map((item) => path.extname(item.name).replace('.', '')))] }
+      ]
+    })
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, canceled: true }
+    try {
+      const row = models.importFrom(entry, picked.filePaths[0], modelsDeps())
+      return { ok: true, model: row, file: picked.filePaths[0] }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || '安装失败' }
+    } finally {
+      /* 从文件装进来的那份会覆盖本机目录，识别器必须重建（理由同 models:download） */
+      speech.resetCache()
+    }
+  })
+
+  ipcMain.handle('models:remove', async (_event, id) => {
+    try {
+      const row = models.remove(String(id || ''), modelsDeps())
+      return { ok: true, model: row }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || '删除失败' }
+    } finally {
+      /* 删掉的可能是正在用的那份 —— 不重建识别器就会继续调一个已经不在磁盘上的模型，
+         而 sherpa 手里握着的是已经映射进内存的权重，它**不会报错**，会一直用旧模型。 */
+      speech.resetCache()
+    }
+  })
+
+  ipcMain.handle('models:reveal', async (_event, id) => {
+    const entry = models.byId(String(id || ''))
+    if (!entry) return { ok: false, error: '没有这个模型' }
+    const dir = models.installDirOf(entry, modelsDeps())
+    if (!dir) return { ok: false, error: '拿不到本机模型目录' }
+    fs.mkdirSync(dir, { recursive: true })
+    shell.openPath(dir)
+    return { ok: true, dir }
+  })
+
+  /* ---------------------------- 语音识别（本机） ---------------------------- */
+
+  /**
+   * 能交给识别器的源文件扩展名。
+   *
+   * 与字幕读文件同一套理由：渲染层被 sandbox 挡住，不能拿任意路径读文件；
+   * 放行一类扩展名，等于把这个 IPC 的能力**收窄到"读一个媒体文件"**，
+   * 而不是"读机器上任意文件"。
+   * 走 `yjai-media://` 的素材不需要过这张表（那是主进程自己发的地址），
+   * 但 E2E 与 MCP 会直传路径，所以这里必须有。
+   */
+  const SPEECH_EXTS = new Set([
+    'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv', 'wmv',
+    'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma', 'amr'
+  ])
+
+  /** 识别用的源路径：优先反解 `yjai-media://`，其次接受白名单扩展名的绝对路径 */
+  const speechSourceOf = (payload) => {
+    const fromUrl = pathFromMediaUrl(String((payload && payload.url) || ''))
+    if (fromUrl) return fromUrl
+    const raw = String((payload && payload.path) || '')
+    if (!raw || !path.isAbsolute(raw)) return ''
+    const ext = path.extname(raw).slice(1).toLowerCase()
+    return SPEECH_EXTS.has(ext) ? raw : ''
+  }
+
+  /* 正在跑的识别任务：`jobId → 是否已请求取消`。
+     用 Map 而不是一个布尔量：连点两次识别时，取消第一个不该把第二个也停掉。 */
+  const speechJobs = new Map()
+
+  ipcMain.handle('speech:status', async () => {
+    return speech.status({ ...modelsDeps(), tempDir: app.getPath('temp') })
+  })
+
+  /* 配音（文字 → 人声）。与识别共用运行时，但音色包是另一份文件，
+     所以状态单独查一次 —— 界面上"能不能听写字"和"能不能读出声"是两件事。 */
+  ipcMain.handle('speech:voice', async () => {
+    return speech.voiceStatus(modelsDeps())
+  })
+
+  ipcMain.handle('speech:tts', async (_event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    try {
+      return speech.synthesize(body, modelsDeps())
+    } catch (err) {
+      /* 合成是同步阻塞的，抛出去会变成"IPC 调用被拒"这种看不懂的错，
+         这里收成同一种结果形状，渲染层只需要看 ok。 */
+      return { ok: false, reason: 'crash', error: String((err && err.message) || err).slice(0, 200) }
+    }
+  })
+
+  /* AI 语音降噪：源路径由主进程自己反解（和识别同一条防线，不信渲染层传的绝对路径）。
+     产物落在 `<userData>/denoise`，渲染层拿到的是一个真实文件路径，再走 media.url() 换播放地址。 */
+  ipcMain.handle('speech:denoise', async (_event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    const sourcePath = speechSourceOf(body)
+    if (!sourcePath) return { ok: false, reason: 'bad-input', error: '这个素材没有可读的本地文件' }
+    if (!fs.existsSync(sourcePath)) return { ok: false, reason: 'bad-input', error: '源文件已经不在了' }
+    try {
+      return await speech.denoise(
+        { ...body, sourcePath },
+        { ...modelsDeps(), tempDir: app.getPath('temp') }
+      )
+    } catch (err) {
+      /* 降噪是同步阻塞的（3 秒音频约 0.1 秒，1 分钟约 3 秒），抛出去会变成
+         "IPC 调用被拒"这种看不懂的错；收成同一种结果形状，渲染层只看 ok。 */
+      return { ok: false, reason: 'crash', error: String((err && err.message) || err).slice(0, 200) }
+    }
+  })
+
+  ipcMain.handle('speech:denoise-status', async () => {
+    return speech.denoiseStatus(modelsDeps())
+  })
+
+  ipcMain.handle('speech:transcribe', async (event, payload) => {
+    const body = payload && typeof payload === 'object' ? payload : {}
+    const jobId = String(body.jobId || `job-${Date.now().toString(36)}`)
+    const sourcePath = speechSourceOf(body)
+    if (!sourcePath) return { ok: false, reason: 'bad-input', error: '这个素材没有可读的本地文件' }
+    if (!fs.existsSync(sourcePath)) return { ok: false, reason: 'bad-input', error: '源文件已经不在了' }
+
+    speechJobs.set(jobId, false)
+    try {
+      const result = await speech.transcribe(
+        { ...body, sourcePath },
+        { ...modelsDeps(), tempDir: app.getPath('temp') },
+        (progress) => {
+          try {
+            if (!event.sender.isDestroyed()) event.sender.send('speech:progress', { jobId, ...progress })
+          } catch {
+            /* 关窗时正在识别不该让主进程红一片 */
+          }
+        },
+        () => speechJobs.get(jobId) === true
+      )
+      return { ...result, jobId }
+    } catch (err) {
+      return { ok: false, reason: 'crash', error: (err && err.message) || '识别出错', jobId }
+    } finally {
+      speechJobs.delete(jobId)
+    }
+  })
+
+  ipcMain.handle('speech:cancel', async (_event, jobId) => {
+    const key = String(jobId || '')
+    if (speechJobs.has(key)) speechJobs.set(key, true)
+    return { ok: true }
   })
 
   /**

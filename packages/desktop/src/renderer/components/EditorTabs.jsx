@@ -95,7 +95,10 @@ export default function EditorTabs({ active, onChange }) {
           title={hint}
           data-wb-tab={key}
         >
-          <Icon size={22} />
+          {/* 图标 16 而不是 22：一排放 13 枚，22 的图标把每枚页签撑到 52px 宽，
+              整排溢出后只能靠切尾；开源参考项目同位置的 chip 图标墨迹约 13，
+              配 11px 文字，靠"小而密"才排得满且不挤。 */}
+          <Icon size={16} />
           <span>{label}</span>
         </button>
       ))}

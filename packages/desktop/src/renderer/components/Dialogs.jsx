@@ -16,7 +16,16 @@ import {
   presetOf
 } from '../keymap.js'
 import { Field, Modal, useToast } from '../ui.jsx'
-import { openExternal } from '../platform.js'
+import {
+  downloadModel,
+  importModel,
+  isDesktop,
+  listModels,
+  onModelProgress,
+  openExternal,
+  removeModel,
+  revealModel
+} from '../platform.js'
 // 参考风格弹窗壳的标题栏小 logo —— 与顶栏 / 首页同一来源，不许两处各画一个
 import logoUrl from '../assets/logo-256.png'
 
@@ -31,9 +40,267 @@ function KeyChips({ combo }) {
   return comboParts(combo).map((part) => <kbd key={part}>{part}</kbd>)
 }
 
+/** 字节 → 人能读的字面量。模型体积动不动十几 MB，写成 "18121524" 没人看得懂。 */
+function formatBytes(bytes) {
+  const value = Number(bytes)
+  /* 0 要显示成 "0 B" 而不是 "—"：设置页脚那行"本机占用"在一台没装任何模型的机器上
+     就是 0，写个破折号会让人以为"没量到"。 */
+  if (!Number.isFinite(value) || value < 0) return '—'
+  if (value === 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/**
+ * 设置 → AI 模型。
+ *
+ * 只列**真的在被功能用到**的模型（注册表在 main/models.js）。这里不做"能力市场"：
+ * 一个下了也用不上的模型，就是一个骗人的按钮。
+ *
+ * 三条路并存，缺一条都会在某种机器上变成"功能不存在"：
+ *   · 随包就绪 —— 装完即用，不需要网络；
+ *   · 在线下载 —— 包里没带时补装，或换一份更新的；
+ *   · 从文件安装 —— 下载地址在部分网络下不可达，用户能自己在别处拿到文件。
+ *
+ * `focusModel`：从功能（比如「AI 识别字幕」）跳进来时要停在谁身上。
+ * 这里把那一行**高亮 + 滚到视野内**，而不是只切页签 —— 一页模型列表滚一屏，
+ * 只说"去装模型"等于让用户自己找，而这正是他刚刚被拦住的那一步。
+ */
+function ModelsPanel({ focusModel = '' }) {
+  const toast = useToast()
+  const [rows, setRows] = useState([])
+  const [usage, setUsage] = useState({ total: 0, root: '' })
+  const [loaded, setLoaded] = useState(false)
+  /* 正在处理的组件 id：同一时刻只允许一个动作，避免两个下载同时写一个目录 */
+  const [busy, setBusy] = useState('')
+  const [percent, setPercent] = useState(0)
+  const [error, setError] = useState('')
+
+  const reload = useCallback(async () => {
+    const res = await listModels()
+    setRows(res.models || [])
+    setUsage(res.usage || { total: 0, root: '' })
+    setLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  useEffect(
+    () =>
+      onModelProgress((progress) => {
+        if (!progress || !progress.id) return
+        setPercent(Number(progress.percent) || 0)
+      }),
+    []
+  )
+
+  /* 分组顺序写死：语音识别在前（新用户第一次进来多半是为了它），人物特效在后。
+     用注册表里的 `group` 字段分，而不是按 id 前缀猜 —— 猜法一改名就静默分错组。 */
+  const groups = useMemo(() => {
+    const defs = [
+      ['speech', '语音识别', '把画面里的说话内容转成字幕文字，全程本机推理。'],
+      ['audio', '音频增强', '把有噪声的人声处理干净；素材不出本机，也不需要联网。'],
+      /* 抠像与人物特效共用同一份 MediaPipe wasm 运行时 —— 所以这一组里
+         不会出现"运行时"行，缺运行时会在面板上明说"先装人物特效运行时"，
+         而不是在这里放一个下完也跑不起来的按钮。 */
+      ['matte', '智能抠像', '把人和背景分开；人像模型只认人，画面里没人才会明说抠不出。'],
+      ['facefx', '人物特效', '识别人脸位置，让打码、提亮、描边跟着脸走。']
+    ]
+    return defs
+      .map(([key, title, note]) => ({
+        key,
+        title,
+        note,
+        /* 运行时排在本组第一行：没它，下面的模型下载了也跑不起来 */
+        rows: rows
+          .filter((row) => (row.group || 'other') === key)
+          .sort((a, b) => (a.kind === 'runtime' ? -1 : 0) - (b.kind === 'runtime' ? -1 : 0))
+      }))
+      .filter((group) => group.rows.length)
+  }, [rows])
+
+  /* 从功能跳进来时把目标行滚进视野。等 `loaded` 之后再滚：列表还没渲染时滚不了 */
+  useEffect(() => {
+    if (!focusModel || !loaded) return
+    const el = document.querySelector(`[data-model="${focusModel}"]`)
+    if (el && typeof el.scrollIntoView === 'function') {
+      try {
+        el.scrollIntoView({ block: 'center' })
+      } catch {
+        /* 老引擎不支持对象参数：滚不到也不影响功能 */
+      }
+    }
+  }, [focusModel, loaded])
+
+  const run = async (id, action, label) => {
+    setBusy(id)
+    setPercent(0)
+    setError('')
+    try {
+      const res = await action(id)
+      if (res && res.canceled) return
+      if (!res || !res.ok) {
+        const message = (res && res.error) || '操作失败'
+        setError(message)
+        toast.bad(`${label}失败：${message}`)
+        return
+      }
+      await reload()
+      toast.good(`${label}完成`)
+    } finally {
+      setBusy('')
+      setPercent(0)
+    }
+  }
+
+  if (!isDesktop) {
+    return <div className="empty" data-models-browser="1">模型管理只在桌面端可用。</div>
+  }
+
+  /**
+   * 一行模型。抽成函数是因为要按分组渲染两遍（语音识别 / 人物特效），
+   * 写成两段 JSX 就会出现"改了一处漏了另一处"。
+   */
+  const renderRow = (row) => {
+    const chip = row.source === 'local' ? '本机安装' : row.source === 'bundled' ? '随包已就绪' : '未安装'
+    const cls =
+      row.source === 'missing' ? 'model-chip bad' : row.source === 'local' ? 'model-chip on' : 'model-chip'
+    const isBusy = busy === row.id
+    const hasLocal = (row.files || []).some((item) => item.installed)
+    const focused = focusModel && focusModel === row.id
+    return (
+      <div
+        className={`model-row${focused ? ' focus' : ''}`}
+        key={row.id}
+        data-model={row.id}
+        data-model-source={row.source}
+        data-model-focus={focused ? '1' : undefined}
+      >
+        <div className="model-main">
+          <div className="model-head">
+            <strong>{row.name}</strong>
+            <span className={cls} data-model-chip={row.source}>
+              {chip}
+            </span>
+          </div>
+          <small className="model-purpose">{row.purpose}</small>
+          <small className="model-meta">
+            {formatBytes(row.size)} · {row.license}
+            {row.missing && row.missing.length ? (
+              <em className="model-missing">
+                　缺 {row.missing.length} 个文件：{row.missing.join('、')}
+              </em>
+            ) : null}
+          </small>
+          {isBusy ? (
+            <div className="model-progress" data-model-progress={row.id}>
+              <div className="model-progress-bar">
+                <i style={{ width: `${percent}%` }} />
+              </div>
+              <span>{percent}%</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="model-actions">
+          {row.downloadable && row.source !== 'local' ? (
+            <button
+              className="btn small"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => run(row.id, downloadModel, '下载')}
+              data-model-action="download"
+            >
+              {row.source === 'bundled' ? '重新获取' : '下载'}
+            </button>
+          ) : null}
+          <button
+            className="btn small"
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => run(row.id, importModel, '安装')}
+            data-model-action="import"
+          >
+            从文件安装
+          </button>
+          {hasLocal ? (
+            <button
+              className="btn small ghost"
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => run(row.id, removeModel, '删除')}
+              data-model-action="remove"
+            >
+              删除本机副本
+            </button>
+          ) : null}
+          <button
+            className="btn small ghost"
+            type="button"
+            onClick={() => revealModel(row.id)}
+            data-model-action="reveal"
+          >
+            打开目录
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="notice">
+        <IconInfo size={14} />
+        <span>
+          模型全部装在本机，装完由本机推理，不上传任何素材。随包已就绪的可以换成新版本，
+          也可以删掉本机副本回到随包那份。
+        </span>
+      </div>
+
+      {error ? (
+        <div className="notice warn" data-models-error="1">
+          <IconAlert size={14} />
+          <span>{error}</span>
+        </div>
+      ) : null}
+
+      {groups.map((group) => (
+        <div className="model-group" key={group.key} data-model-group={group.key}>
+          <div className="model-group-head">
+            <strong>{group.title}</strong>
+            <span>{group.note}</span>
+          </div>
+          <div className="model-list">{group.rows.map(renderRow)}</div>
+        </div>
+      ))}
+      {loaded && !rows.length ? <div className="empty">没有登记任何模型。</div> : null}
+
+      <div className="section-title">
+        <span>本机占用</span>
+        <span>{formatBytes(usage.total)}</span>
+      </div>
+      <div className="kv-list">
+        <div>
+          <span>模型目录</span>
+          <strong className="model-path" title={usage.root || ''}>
+            {usage.root || '—'}
+          </strong>
+        </div>
+      </div>
+    </>
+  )
+}
+
 export function SettingsDialog({
   info,
   onClose,
+  /* 打开时停在哪一页 + 高亮哪个模型。
+     从「AI 识别字幕」被拦住时由 App 传入，用户不用自己翻到「AI 模型」页再找。 */
+  initialTab,
+  focusModel = '',
   keymap,
   onKeymapChange,
   hardwareAcceleration = true,
@@ -47,7 +314,10 @@ export function SettingsDialog({
   previewQuality = 'full',
   onPreviewQualityChange
 }) {
-  const [tab, setTab] = useState('general')
+  /* 先看 App 有没有指定落点，没有才默认「通用」。`useState` 只在首次挂载取值，
+     而弹窗是「关掉就卸载」的（`{dialog === 'settings' ? … : null}`），
+     所以下次再打开一定会重新求值，不会停在上一页。 */
+  const [tab, setTab] = useState(initialTab || 'general')
   /** 正在等待录入的动作：`{ id, index }`；index 为 null 表示新增一格 */
   const [capturing, setCapturing] = useState(null)
   const toast = useToast()
@@ -414,17 +684,13 @@ export function SettingsDialog({
       desc={
         tab === 'general'
           ? '本机单机运行，只改本机生效的偏好设置。'
-          : '全部可改键位一览；点击键位格即可重新录入。'
+          : tab === 'models'
+            ? '本机推理要用的模型文件。随包的可以直接用，缺的可以下载或从文件装进来。'
+            : '全部可改键位一览；点击键位格即可重新录入。'
       }
       onClose={onClose}
       footer={
-        tab === 'general' ? (
-          <>
-            <button className="btn ghost" type="button" onClick={onClose}>
-              关闭
-            </button>
-          </>
-        ) : (
+        tab === 'shortcut' ? (
           <>
             <span className="wb-keys-count">
               {customized.length ? `已自定义 ${customized.length} 个动作` : '当前全部为默认键位'}
@@ -445,6 +711,12 @@ export function SettingsDialog({
               完成
             </button>
           </>
+        ) : (
+          <>
+            <button className="btn ghost" type="button" onClick={onClose} data-settings-close>
+              关闭
+            </button>
+          </>
         )
       }
     >
@@ -463,9 +735,20 @@ export function SettingsDialog({
         >
           快捷键
         </button>
+        <button
+          type="button"
+          className={tab === 'models' ? 'active' : ''}
+          onClick={() => {
+            setCapturing(null)
+            setTab('models')
+          }}
+          data-settings-tab="models"
+        >
+          AI 模型
+        </button>
       </div>
 
-      {tab === 'general' ? generalPanel : shortcutPanel}
+      {tab === 'general' ? generalPanel : tab === 'models' ? <ModelsPanel focusModel={focusModel} /> : shortcutPanel}
     </Modal>
   )
 }

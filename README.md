@@ -8,7 +8,7 @@
 > 这类 AI 智能体直接驱动 —— 智能体给出剪辑方案，软件自动落地成草稿并导出成片。
 
 <p align="center">
-  <a href="https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest"><b>▶ 下载 Windows 版（免安装 · 约 151 MB）</b></a>
+  <a href="https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest"><b>▶ 下载 Windows 版（免安装 · 约 181 MB）</b></a>
 </p>
 
 ![工作台总览](docs/screenshots/02-workbench.png)
@@ -85,13 +85,16 @@
 | 真波形 | 音频轨与视频片段底部按真实 PCM 绘制波形，不是装饰 |
 | 倍速 | 0.25×–4×，预览与成片速度一致（导出按倍速拆分 atempo 级） |
 | 画面比例 | 1:1 / 1:2 / 3:4 / 9:16 / 16:9 / 4:3 / 2:1 共 7 档，裁切铺满、不留黑边 |
+| 导入 / 导出规格 | 4K 素材直接导入、按 480P / 720P / 1080P / 2K / **4K** 导出（上限 4K，短边 2160：4K 竖屏即 2160×3840）；帧率七档 24 / 25 / 29.97 / 30 / 50 / 59.94 / 60 |
 | 导出 | 调用本机 ffmpeg 合成成片：滤镜 / 转场 / 帧特效 / 字幕 / 画中画 / 音量 / 倍速全部进成片 |
 | 草稿 | 自动保存，重启后自动恢复；可自定义分辨率、比例与保存位置 |
 | 界面 | 四区工作台可拖拽伸缩、双击复位、方向键微调；22 个可自定义快捷键 |
+| 首页 | 左栏三项：创作视频 / 最近草稿 / 无线画布。无线画布把在线工作台**嵌在窗口里**（不跳浏览器、无地址栏、无刷新按钮），切回「创作视频」即回到草稿列表 |
 
 ### 它不做什么
 
-- 不联网、不要账号、不采集任何数据；
+- 剪辑全程不联网，不要账号、不采集任何数据。首页左栏的「无线画布」是个**在线**工作台入口
+  （需要联网，内容来自远端页面），它不参与本地剪辑 —— 断网时其余功能照常；
 - **没有模型推理、没有在线素材 / 模板下载** —— 这一类依赖外部服务，本版一律不含；
 - 没有任何计费体系。
 
@@ -247,7 +250,7 @@
 
 | 文件 | 平台 | 大小 |
 | --- | --- | --- |
-| [`YiJingAIEditor-Setup-Windows-x64.exe`](https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest/download/YiJingAIEditor-Setup-Windows-x64.exe) | Windows 10 / 11 (x64) | 约 151 MB |
+| [`YiJingAIEditor-Setup-Windows-x64.exe`](https://github.com/zhanfanghou-create/yijing-ai-editor/releases/latest/download/YiJingAIEditor-Setup-Windows-x64.exe) | Windows 10 / 11 (x64) | 约 181 MB |
 
 - **免安装（portable）**：双击即用，不写注册表、不留残留；
 - 首次运行会在 `%APPDATA%\YiJingAIEditor` 下建立数据目录（草稿、设置）；

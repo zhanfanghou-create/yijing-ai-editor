@@ -33,16 +33,22 @@ const REQUIRED = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm', 'face_
  * @param {object} deps
  * @returns {string} 绝对路径；都没命中则空串
  */
-function faceRootOf({ resourcesPath, appPath, mainDir } = {}) {
+function faceRootOf({ resourcesPath, appPath, mainDir, userData } = {}) {
   const candidates = []
+  /* 本机安装的那份**优先**：models.js 让"下载/从文件安装"落到 <userData>/models/face-runtime，
+     它必须真的能盖过随包版本，否则那个下载按钮就只是把文件堆在磁盘上。
+     判据是"三个文件齐全"——半套不接管，直接回落随包（半套接管等于把功能弄坏）。 */
+  if (userData) candidates.push(path.join(String(userData), 'models', 'face-runtime'))
   if (resourcesPath) candidates.push(path.join(String(resourcesPath), 'mediapipe'))
   if (mainDir) candidates.push(path.resolve(String(mainDir), '..', '..', 'resources', 'mediapipe'))
   if (appPath) candidates.push(path.join(String(appPath), 'resources', 'mediapipe'))
   for (const dir of candidates) {
     try {
-      if (fs.existsSync(path.join(dir, 'face_landmarker.task'))) return dir
+      /* 完整的一套才算命中：只有目录、只有一部分文件，都要继续往下找 */
+      const complete = REQUIRED.every((name) => fs.statSync(path.join(dir, name)).size > 0)
+      if (complete) return dir
     } catch {
-      /* 权限 / 路径非法：当作这处没有 */
+      /* 权限 / 路径非法 / 缺某一个：当作这处没有 */
     }
   }
   return ''

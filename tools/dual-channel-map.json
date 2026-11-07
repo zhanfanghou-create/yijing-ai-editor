@@ -1,10 +1,7 @@
 {
   "note": "双通道对等账本：每条能力同时写『界面上怎么点』与『智能体用哪个工具』。ui 锚点格式 = <相对 src/renderer 的路径>|<button|ctx|tab|menu>|<文本>，由 check-dual-channel.mjs 与源码逐个核对。uiOnly = 界面上有但 agent 本来就不需要（纯视图/设备/桌面操作）；expectedGaps = 界面上有、agent 确实做不到的已知缺口，补好后必须从清单里删掉（闸门会判『登记过期』）。",
   "expectedGaps": [
-    "components/MediaPanel.jsx|button|删除素材",
-    "components/Inspector.jsx|button|导入 .ttf / .otf / .ttc 字体文件（会复制进本机素材目录，原文件删了也不影响）",
-    "components/Inspector.jsx|button|用本机 ffmpeg 抽这段音频的振幅包络，再找重音",
-    "components/TopBar.jsx|menu|pack-import"
+    "components/SidePanels.jsx|button|把人抠出来，背景变透明"
   ],
   "entries": [
     {
@@ -12,77 +9,107 @@
       "name": "环境自检（版本 / 草稿目录 / ffmpeg 可用 / 随包素材数量）",
       "ui": [],
       "uiAbsentReason": "这是给智能体开工前探路的机器状态（ffmpeg 在不在、素材包有几件），界面上没有等价入口：人打开软件就知道能不能用，agent 得先问一次。",
-      "mcp": ["yijing_status"]
+      "mcp": [
+        "yijing_status"
+      ]
     },
     {
       "id": "app.install",
       "name": "无人值守安装",
       "ui": [],
       "uiAbsentReason": "安装向导是独立 exe（packages/installer），窗口不在渲染层里，枚举器看不到；人双击它点下一步，agent 走 --silent 参数，两条路落到同一个 install.js。",
-      "mcp": ["yijing_install"]
+      "mcp": [
+        "yijing_install"
+      ]
     },
     {
       "id": "app.open",
       "name": "启动软件并直接打开某份草稿",
-      "ui": ["components/TopBar.jsx|menu|open:*"],
-      "mcp": ["yijing_open_app"]
+      "ui": [
+        "components/TopBar.jsx|menu|open:*"
+      ],
+      "mcp": [
+        "yijing_open_app"
+      ]
     },
     {
       "id": "env.catalog",
       "name": "机器可读能力清单（滤镜/转场/特效/贴纸/边框/模板/包装/人物特效/编码/帧率）",
       "ui": [],
       "uiAbsentReason": "catalog 就是各页签卡片墙的机器可读版（同一份 shared/*.json）。界面不需要『把可选值全列成 JSON』这个动作，但 agent 不知道枚举值就没法写对 key。",
-      "mcp": ["yijing_catalog"]
+      "mcp": [
+        "yijing_catalog"
+      ]
     },
     {
       "id": "draft.list",
       "name": "列草稿",
       "ui": [],
       "uiAbsentReason": "界面的草稿列表是首页创作中心的卡片网格（Home.jsx），卡片上没有 title，枚举器取不到稳定锚点；agent 需要的是 id 列表，界面上看到的是封面与名字。",
-      "mcp": ["yijing_list_drafts"]
+      "mcp": [
+        "yijing_list_drafts"
+      ]
     },
     {
       "id": "draft.read",
       "name": "读取草稿全貌（四轨片段 / 素材表 / 比例 / 播放头）",
       "ui": [],
       "uiAbsentReason": "人靠肉眼看时间线，没有『导出一份完整结构』这个动作。agent 不读就没有片段 id，任何改都无从下手。",
-      "mcp": ["yijing_read_draft"]
+      "mcp": [
+        "yijing_read_draft"
+      ]
     },
     {
       "id": "draft.create",
-      "name": "新建草稿",
-      "ui": ["components/TopBar.jsx|menu|new"],
-      "mcp": ["yijing_create_draft"]
+      "name": "新建草稿（可选画面比例与输出分辨率档）",
+      "ui": [
+        "components/TopBar.jsx|menu|new"
+      ],
+      "mcp": [
+        "yijing_create_draft"
+      ]
     },
     {
       "id": "draft.update",
-      "name": "改草稿本身：改名 / 画面比例 / 播放头 / 预览音量 / 保存",
+      "name": "改草稿本身：改名 / 画面比例 / 输出分辨率档 / 播放头 / 预览音量 / 保存",
       "ui": [
         "App.jsx|button|画面设置",
         "components/Stage.jsx|button|前一帧（←）",
         "components/Stage.jsx|button|后一帧（→）",
         "components/TopBar.jsx|menu|save"
       ],
-      "mcp": ["yijing_update_draft"]
+      "mcp": [
+        "yijing_update_draft"
+      ]
     },
     {
       "id": "draft.delete",
       "name": "删除草稿",
-      "ui": ["components/Home.jsx|button|删除这份草稿"],
-      "mcp": ["yijing_delete_draft"]
+      "ui": [
+        "components/Home.jsx|button|删除这份草稿"
+      ],
+      "mcp": [
+        "yijing_delete_draft"
+      ]
     },
     {
       "id": "draft.duplicate",
       "name": "另存为 / 复制一份草稿",
-      "ui": ["components/TopBar.jsx|menu|save-as"],
-      "mcp": ["yijing_duplicate_draft"]
+      "ui": [
+        "components/TopBar.jsx|menu|save-as"
+      ],
+      "mcp": [
+        "yijing_duplicate_draft"
+      ]
     },
     {
       "id": "media.probe",
       "name": "探测媒体（类型 / 真实时长 / 有无音轨 / 分辨率 / HDR）",
       "ui": [],
       "uiAbsentReason": "导入后这些信息直接印在素材卡片与属性面板上，没有『探测一次』的动作。agent 要先知道时长才能算片段落点。",
-      "mcp": ["yijing_probe_media"]
+      "mcp": [
+        "yijing_probe_media"
+      ]
     },
     {
       "id": "media.import",
@@ -92,7 +119,19 @@
         "components/Timeline.jsx|button|导入素材到媒体库",
         "components/EditorTabs.jsx|tab|media"
       ],
-      "mcp": ["yijing_import_media"]
+      "mcp": [
+        "yijing_import_media"
+      ]
+    },
+    {
+      "id": "media.remove",
+      "name": "删除素材（连同引用它的片段一起删，不留\"片段还在、源文件没了\"的半坏草稿）",
+      "ui": [
+        "components/MediaPanel.jsx|button|删除素材"
+      ],
+      "mcp": [
+        "yijing_remove_media"
+      ]
     },
     {
       "id": "clip.add",
@@ -101,7 +140,9 @@
         "components/MediaPanel.jsx|button|加入时间线",
         "components/EditorTabs.jsx|tab|audio"
       ],
-      "mcp": ["yijing_add_clips"]
+      "mcp": [
+        "yijing_add_clips"
+      ]
     },
     {
       "id": "clip.delete",
@@ -110,7 +151,9 @@
         "components/Timeline.jsx|ctx|删除片段",
         "components/Timeline.jsx|button|清空时间线（Ctrl+Shift+Delete）"
       ],
-      "mcp": ["yijing_delete_clips"]
+      "mcp": [
+        "yijing_delete_clips"
+      ]
     },
     {
       "id": "clip.text",
@@ -119,7 +162,9 @@
         "components/EditorTabs.jsx|tab|text",
         "components/Inspector.jsx|button|用回样式自带的颜色"
       ],
-      "mcp": ["yijing_update_clip"]
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.color",
@@ -129,13 +174,19 @@
         "components/EditorTabs.jsx|tab|adjust",
         "components/ColorCurveEditor.jsx|button|把这条曲线恢复成直线"
       ],
-      "mcp": ["yijing_update_clip"]
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.transition",
       "name": "转场与时长",
-      "ui": ["components/EditorTabs.jsx|tab|transition"],
-      "mcp": ["yijing_update_clip"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|transition"
+      ],
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.speed",
@@ -144,7 +195,9 @@
         "components/Inspector.jsx|button|放弃曲线，回到匀速 1.00x",
         "components/Inspector.jsx|button|保留当前平均速度，改成匀速"
       ],
-      "mcp": ["yijing_update_clip"]
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.attrs",
@@ -154,19 +207,29 @@
         "components/Timeline.jsx|ctx|粘贴属性",
         "components/Timeline.jsx|button|复制这一段的外观属性（调色 / 特效 / 位置 / 音量 / 字幕样式），不含素材与时间位置"
       ],
-      "mcp": ["yijing_update_clip"]
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.replace",
       "name": "替换片段的源素材",
-      "ui": ["components/Timeline.jsx|ctx|替换片段"],
-      "mcp": ["yijing_update_clip"]
+      "ui": [
+        "components/Timeline.jsx|ctx|替换片段"
+      ],
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "clip.disable",
       "name": "停用片段（可逆，片段仍占位，导出不出片）",
-      "ui": ["components/Timeline.jsx|ctx|停用片段"],
-      "mcp": ["yijing_update_clip"]
+      "ui": [
+        "components/Timeline.jsx|ctx|停用片段"
+      ],
+      "mcp": [
+        "yijing_update_clip"
+      ]
     },
     {
       "id": "audio.keyframes",
@@ -176,7 +239,19 @@
         "components/Inspector.jsx|button|从静音线性升到当前音量",
         "components/Inspector.jsx|button|删除这个点"
       ],
-      "mcp": ["yijing_update_clip"]
+      "mcp": [
+        "yijing_update_clip"
+      ]
+    },
+    {
+      "id": "audio.beats",
+      "name": "抽振幅包络找重音（按音频卡点），可顺带把速度曲线写进片段",
+      "ui": [
+        "components/Inspector.jsx|button|用本机 ffmpeg 抽这段音频的振幅包络，再找重音"
+      ],
+      "mcp": [
+        "yijing_detect_beats"
+      ]
     },
     {
       "id": "timeline.split",
@@ -185,13 +260,19 @@
         "components/Timeline.jsx|button|在播放头处分割选中的片段（Ctrl+B）",
         "components/Timeline.jsx|ctx|在播放头处分割"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.trim",
       "name": "修剪（起点移到播放头 / 掐头去尾）",
-      "ui": ["components/Timeline.jsx|ctx|起点移到播放头"],
-      "mcp": ["yijing_timeline_op"]
+      "ui": [
+        "components/Timeline.jsx|ctx|起点移到播放头"
+      ],
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.region",
@@ -204,7 +285,9 @@
         "components/Timeline.jsx|button|拖我调整区域起点",
         "components/Timeline.jsx|button|拖我调整区域终点"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.compound",
@@ -214,7 +297,9 @@
         "components/Timeline.jsx|ctx|解除复合片段",
         "components/Timeline.jsx|button|把复合片段内部的片段还原到时间线上（按当前裁剪与倍速换算）"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.group",
@@ -224,7 +309,9 @@
         "components/Timeline.jsx|ctx|取消组合",
         "components/Timeline.jsx|button|解除这几段之间的绑定（位置、时长、渲染都不受影响）"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.multicam",
@@ -235,7 +322,9 @@
         "components/Timeline.jsx|button|按当前切换结果摊回时间线：每段画面一个片段 + 一条取声片段",
         "components/Inspector.jsx|button|按当前切换结果摊回时间线：每段画面一个片段 + 一条取声片段"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "timeline.layer",
@@ -244,62 +333,109 @@
         "components/Timeline.jsx|ctx|上移一层",
         "components/Timeline.jsx|ctx|下移一层"
       ],
-      "mcp": ["yijing_timeline_op"]
+      "mcp": [
+        "yijing_timeline_op"
+      ]
     },
     {
       "id": "scene.split",
       "name": "按画面切换自动切段",
-      "ui": ["components/Timeline.jsx|ctx|按场景分割"],
-      "mcp": ["yijing_split_by_scenes"]
+      "ui": [
+        "components/Timeline.jsx|ctx|按场景分割"
+      ],
+      "mcp": [
+        "yijing_split_by_scenes"
+      ]
     },
     {
       "id": "subtitle.add",
       "name": "字幕（导入 SRT/VTT/LRC/ASS、语音分句、套样式）",
-      "ui": ["components/EditorTabs.jsx|tab|subtitle"],
-      "mcp": ["yijing_add_subtitles"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|subtitle"
+      ],
+      "mcp": [
+        "yijing_add_subtitles"
+      ]
     },
     {
       "id": "sticker.add",
       "name": "贴纸（内置 140 枚，放到叠加轨）",
-      "ui": ["components/EditorTabs.jsx|tab|sticker"],
-      "mcp": ["yijing_add_sticker"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|sticker"
+      ],
+      "mcp": [
+        "yijing_add_sticker"
+      ]
     },
     {
       "id": "material.list",
       "name": "列内置素材 key（贴纸 / 边框 / 模板）",
       "ui": [],
       "uiAbsentReason": "界面直接给你看卡片墙，不需要『先列出所有 key』；agent 必须先拿到 key 才能套用。",
-      "mcp": ["yijing_list_materials"]
+      "mcp": [
+        "yijing_list_materials"
+      ]
+    },
+    {
+      "id": "font.import",
+      "name": "导入本机字体（复制进 fonts 目录并写设置，界面与 agent 共用同一份列表）",
+      "ui": [
+        "components/Inspector.jsx|button|导入 .ttf / .otf / .ttc 字体文件（会复制进本机素材目录，原文件删了也不影响）"
+      ],
+      "mcp": [
+        "yijing_import_font",
+        "yijing_list_fonts"
+      ]
     },
     {
       "id": "border.set",
       "name": "给片段套/清边框",
-      "ui": ["components/EditorTabs.jsx|tab|effect"],
-      "mcp": ["yijing_set_border"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|effect"
+      ],
+      "mcp": [
+        "yijing_set_border"
+      ]
     },
     {
       "id": "template.apply",
       "name": "套成套模板（开场 / 结尾 / 字幕套）",
-      "ui": ["components/EditorTabs.jsx|tab|template"],
-      "mcp": ["yijing_apply_template"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|template"
+      ],
+      "mcp": [
+        "yijing_apply_template"
+      ]
     },
     {
       "id": "packaging.apply",
       "name": "智能包装（逐句字幕 / 每段画面 / 清除）",
-      "ui": ["components/EditorTabs.jsx|tab|packaging"],
-      "mcp": ["yijing_apply_packaging"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|packaging"
+      ],
+      "mcp": [
+        "yijing_apply_packaging"
+      ]
     },
     {
       "id": "facefx.apply",
       "name": "人物特效（人脸识别 + 套效果）",
-      "ui": ["components/EditorTabs.jsx|tab|effect"],
-      "mcp": ["yijing_apply_face_fx"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|effect"
+      ],
+      "mcp": [
+        "yijing_apply_face_fx"
+      ]
     },
     {
       "id": "plugin.manage",
       "name": "本地素材包（导入 / 启用 / 停用 / 卸载）",
-      "ui": ["components/EditorTabs.jsx|tab|plugin"],
-      "mcp": ["yijing_plugins"]
+      "ui": [
+        "components/EditorTabs.jsx|tab|plugin"
+      ],
+      "mcp": [
+        "yijing_plugins"
+      ]
     },
     {
       "id": "export.video",
@@ -309,26 +445,80 @@
         "components/SidePanels.jsx|button|只导出成片",
         "components/Timeline.jsx|button|只导出这一段区间（打开导出面板）"
       ],
-      "mcp": ["yijing_export_video"]
+      "mcp": [
+        "yijing_export_video"
+      ]
     },
     {
       "id": "export.cover",
       "name": "导出封面（播放头这一帧另存 JPG）",
-      "ui": ["components/SidePanels.jsx|button|除成片外，再把播放头这一帧另存为一张 JPG"],
-      "mcp": ["yijing_export_video"]
+      "ui": [
+        "components/SidePanels.jsx|button|除成片外，再把播放头这一帧另存为一张 JPG"
+      ],
+      "mcp": [
+        "yijing_export_video"
+      ]
     },
     {
       "id": "draft.pack",
       "name": "打包工程（草稿 + 素材 → .yjpack）",
-      "ui": ["components/TopBar.jsx|menu|pack-export"],
-      "mcp": ["yijing_pack_draft"]
+      "ui": [
+        "components/TopBar.jsx|menu|pack-export"
+      ],
+      "mcp": [
+        "yijing_pack_draft"
+      ]
+    },
+    {
+      "id": "pack.import",
+      "name": "导入 .yjpack 素材包（解出为一份新草稿，不覆盖原稿）",
+      "ui": [
+        "components/TopBar.jsx|menu|pack-import"
+      ],
+      "mcp": [
+        "yijing_unpack_draft"
+      ]
     },
     {
       "id": "plan.apply",
       "name": "一次执行一串操作（建草稿→加片段→调色→导出）",
       "ui": [],
       "uiAbsentReason": "它就是上面多个界面动作的组合，界面上不存在『批量执行剧本』这一个按钮；有人点十下的活，agent 一次调完更不容易中断。",
-      "mcp": ["yijing_apply_plan"]
+      "mcp": [
+        "yijing_apply_plan"
+      ]
+    },
+    {
+      "id": "subtitle.recognize",
+      "name": "语音转字幕（本机模型识别说话内容；缺模型时点它会自动打开设置页让你装）",
+      "ui": [
+        "components/SidePanels.jsx|button|把选中片段里的说话内容转成字幕（本机模型，不上传任何素材）"
+      ],
+      "mcp": [
+        "yijing_recognize_subtitles",
+        "yijing_models"
+      ]
+    },
+    {
+      "id": "tts.speak",
+      "name": "AI 配音（文字读成人声，本机合成后落成音频轨）",
+      "ui": [
+        "components/SidePanels.jsx|button|把文字读成人声（本机合成，不上传文字）"
+      ],
+      "mcp": [
+        "yijing_tts"
+      ]
+    },
+    {
+      "id": "audio.denoise",
+      "name": "AI 语音降噪（压掉环境噪声让人声更清楚，产物是一条新音轨）",
+      "ui": [
+        "components/SidePanels.jsx|button|把这一段的人声处理干净，生成一条新音轨放进素材库"
+      ],
+      "mcp": [
+        "yijing_denoise_audio",
+        "yijing_models"
+      ]
     }
   ],
   "uiOnly": [

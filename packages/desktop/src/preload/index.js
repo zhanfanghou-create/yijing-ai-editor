@@ -154,12 +154,98 @@ contextBridge.exposeInMainWorld('yjai', {
   },
 
   /**
+   * 智能抠像（人像分割）。
+   *
+   * 与 `facefx` 共用同一份 MediaPipe wasm 运行时，只是模型不同。
+   * `runtime()` 一次回三样：能不能用、缺哪个文件、地址在哪。
+   * 注意 `ok: false` 可能是缺 wasm（要装人物特效运行时）也可能是缺 0.25MB 分割模型，
+   * `missing` 会区分开 —— 面板据此说"缺哪几个"，而不是笼统的"加载失败"。
+   */
+  matte: {
+    runtime: () => ipcRenderer.invoke('matte:runtime'),
+    model: () => ipcRenderer.invoke('matte:model'),
+    /** 保存抠好的画面（base64，不带 data: 前缀）。主进程写盘 + 登记白名单。 */
+    save: (payload) => ipcRenderer.invoke('matte:save', payload),
+    /** 视频抠像：逐帧写进临时序列目录（seqId 由渲染层生成，只允许 [a-z0-9-]） */
+    seqFrame: (payload) => ipcRenderer.invoke('matte:seq-frame', payload),
+    /** 序列帧 → 透明视频（WebM / VP9 + alpha） */
+    encode: (payload) => ipcRenderer.invoke('matte:encode', payload)
+  },
+
+  /**
+   * 画面特效素材包（泡泡 / 问号 / 法阵 … 那批逐帧素材）。
+   *
+   * 只读：安装与解析全在主进程。渲染层拿 `state()` 的 `effects[key].sheetUrl`
+   * 去播预览，导出时主进程自己再解析一次帧目录 —— 两边读的是同一个包。
+   */
+  fxpack: {
+    state: () => ipcRenderer.invoke('fxpack:state'),
+    /** 素材包被人删了一半时的出口（界面上不会有常规入口，只在缺素材时提示里给） */
+    reinstall: () => ipcRenderer.invoke('fxpack:reinstall')
+  },
+
+  /**
+   * 本地 AI 模型：列表 / 下载 / 从文件安装 / 删除 / 打开目录。
+   *
+   * ⚠️ 全部只接受**组件 id**，不接受路径 —— 安装目录与文件清单都在主进程按注册表决定。
+   *    `import` 是唯一碰路径的动作，路径由系统文件对话框产生（用户亲手选的）。
+   */
+  models: {
+    list: () => ipcRenderer.invoke('models:list'),
+    download: (id) => ipcRenderer.invoke('models:download', id),
+    import: (id) => ipcRenderer.invoke('models:import', id),
+    remove: (id) => ipcRenderer.invoke('models:remove', id),
+    reveal: (id) => ipcRenderer.invoke('models:reveal', id),
+    /** 下载进度订阅，返回退订函数（与 render.onProgress 同一套约定） */
+    onProgress: (handler) => {
+      const listener = (_event, payload) => handler(payload)
+      ipcRenderer.on('models:progress', listener)
+      return () => ipcRenderer.removeListener('models:progress', listener)
+    }
+  },
+
+  /**
    * 自定义字体：pick 打开字体对话框（复制进 userData/fonts 并登记白名单），
    * allow 在恢复草稿时把已导入字体的路径重新登记（进程重启后白名单是空的）。
    *
    * ⚠️ 只暴露这两个方法，不暴露"任意路径进白名单"——那等于把访问控制交给渲染层。
    *    allow 只接受**已经导入过**的路径（主进程仍会校验它是不是一个存在的文件）。
    */
+  speech: {
+    /** 整条链路的状态：运行时缺不缺、哪个模型能跑。点识别前先看这个。 */
+    status: () => ipcRenderer.invoke('speech:status'),
+    /**
+     * 识别一组时间区间。
+     *
+     * 传的是 `{ url | path }` + `segments`，**不是**音频字节 —— 抽音轨、重采样、
+     * 解码都在主进程做完，渲染层只收文字。这样 228MB 的模型和几十 MB 的波形
+     * 一次都不用跨进程搬。
+     */
+    transcribe: (payload) => ipcRenderer.invoke('speech:transcribe', payload),
+    /* 取消：按 jobId 精确取消，连点两次时不会误停后一个 */
+    cancel: (jobId) => ipcRenderer.invoke('speech:cancel', jobId),
+    onProgress: (handler) => {
+      const listener = (_event, payload) => handler(payload)
+      ipcRenderer.on('speech:progress', listener)
+      return () => ipcRenderer.removeListener('speech:progress', listener)
+    },
+    /** 配音音色包的状态（装没装、默认用哪个） */
+    voiceStatus: () => ipcRenderer.invoke('speech:voice'),
+    /**
+     * AI 语音降噪：把一段音视频里的人声处理干净，返回落盘的 wav 绝对路径。
+     *
+     * 与识别/合成共用同一个运行时，但降噪模型是单体（0.5MB 的 gtcrn），
+     * 所以状态单独查一次 —— 界面上"能不能认字"和"能不能降噪"是两个独立的开关。
+     */
+    denoise: (payload) => ipcRenderer.invoke('speech:denoise', payload),
+    denoiseStatus: () => ipcRenderer.invoke('speech:denoise-status'),
+    /**
+     * 把文字读成人声，返回落盘的 wav 绝对路径。
+     * 传文字而不是样本：合成要加载 131MB 的音色包，那一层必须在主进程里常驻。
+     */
+    speak: (payload) => ipcRenderer.invoke('speech:tts', payload)
+  },
+
   font: {
     pick: () => ipcRenderer.invoke('font:pick'),
     allow: (paths) => ipcRenderer.invoke('font:allow', paths)

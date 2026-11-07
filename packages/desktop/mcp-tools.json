@@ -1,7 +1,7 @@
 {
   "server": "yijing-editor",
-  "version": "1.1.0",
-  "toolCount": 28,
+  "version": "1.3.0",
+  "toolCount": 37,
   "tools": [
     {
       "name": "yijing_status",
@@ -70,6 +70,23 @@
       "properties": []
     },
     {
+      "name": "yijing_models",
+      "description": "本机 AI 模型的查询与安装。语音转字幕要两个：先 speech-runtime（运行时，约 22MB），再 speech-paraformer（中文轻量，约 78MB）或 speech-sensevoice（中英日韩粤，约 228MB）。模型装在本机、推理也在本机，素材不上传。下载会一直等到装完（78MB 约 1 分钟，228MB 约 3 分钟），调用期间别重试。",
+      "required": [],
+      "properties": [
+        {
+          "name": "action",
+          "type": "string",
+          "description": "list（默认，只查）或 download（装）"
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "description": "download 时的模型 id：speech-runtime / speech-paraformer / speech-sensevoice / face-runtime"
+        }
+      ]
+    },
+    {
       "name": "yijing_list_drafts",
       "description": "列出已有草稿（项目）。开始编辑前先用它找到目标草稿，或确认还没有草稿。",
       "required": [],
@@ -105,6 +122,11 @@
           "description": "画面比例，默认 16:9"
         },
         {
+          "name": "resolution",
+          "type": "string",
+          "description": "输出分辨率档：480p/720p/1080p/2k/4k（上限 4K），默认 1080p"
+        },
+        {
           "name": "playhead",
           "type": "number",
           "description": "初始播放头秒数，默认 0"
@@ -113,7 +135,7 @@
     },
     {
       "name": "yijing_update_draft",
-      "description": "改草稿本身：改名、改画面比例、移动播放头、改预览音量与缩放。",
+      "description": "改草稿本身：改名、改画面比例与输出分辨率、移动播放头、改预览音量与缩放。",
       "required": [
         "draftId"
       ],
@@ -132,6 +154,11 @@
           "name": "aspect",
           "type": "string",
           "description": "新画面比例（1:1 / 1:2 / 3:4 / 9:16 / 16:9 / 4:3 / 2:1）"
+        },
+        {
+          "name": "resolution",
+          "type": "string",
+          "description": "新输出分辨率档：480p/720p/1080p/2k/4k（上限 4K）"
         },
         {
           "name": "playhead",
@@ -217,6 +244,30 @@
       ]
     },
     {
+      "name": "yijing_remove_media",
+      "description": "从草稿里删掉素材（素材库里的那条），**并连带删掉所有引用它的片段** —— 与界面左栏的垃圾桶同一个语义。只删素材不删片段会留下\"片段还在、源文件没了\"的坏行。不删磁盘上的原文件。",
+      "required": [
+        "draftId"
+      ],
+      "properties": [
+        {
+          "name": "draftId",
+          "type": "string",
+          "description": "草稿 id"
+        },
+        {
+          "name": "assetId",
+          "type": "string",
+          "description": "单个素材 id（取自 yijing_read_draft 的 assets[].id）"
+        },
+        {
+          "name": "assetIds",
+          "type": "array",
+          "description": "批量素材 id（与 assetId 二选一）"
+        }
+      ]
+    },
+    {
       "name": "yijing_add_clips",
       "description": "把音视频/图片追加到时间线。track：video=主轨、overlay=叠加轨（画中画）、audio=音频轨。不给 duration 就用素材真实时长；offset 是从素材第几秒开始取。每段还能带 patch 直接套调色/特效/位置（省一次 update）。",
       "required": [
@@ -287,6 +338,176 @@
           "name": "name",
           "type": "string",
           "description": "字幕轨显示名（可选）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_recognize_subtitles",
+      "description": "把某个片段里的说话内容认成字幕：软件自己按音量分句、逐句识别，默认直接写进字幕轨；只想先看结果就给 apply=false。识别在本机跑，素材不出本机。只支持 1× 速度的片段（变速片段的时间基准不一样）。模型没装会直接报错并告诉你装哪个。",
+      "required": [
+        "draftId",
+        "clipId"
+      ],
+      "properties": [
+        {
+          "name": "draftId",
+          "type": "string",
+          "description": "目标草稿 id"
+        },
+        {
+          "name": "clipId",
+          "type": "string",
+          "description": "要识别的片段 id（视频轨或音频轨上的片段）"
+        },
+        {
+          "name": "apply",
+          "type": "boolean",
+          "description": "默认 true：识别完写入字幕轨；false 只返回文字与时间，不改草稿"
+        },
+        {
+          "name": "modelId",
+          "type": "string",
+          "description": "识别模型 id，默认用已装好的轻量中文模型"
+        },
+        {
+          "name": "style",
+          "type": "string",
+          "description": "字幕样式 key，默认 sub-plain（取值查 yijing_catalog）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_denoise_audio",
+      "description": "把某个片段里的人声降噪（压掉环境噪声、风噪、键盘声），生成一条音频片段。本机推理，素材不出本机；处理 1 分钟音频约 3 秒。降噪在 16kHz 下进行、输出 48kHz 立体声，所以它适合\"噪声大到听不清词\"的素材，本身干净的声音会显得发闷。模型没装会直接报错并告诉你要装哪个。",
+      "required": [
+        "draftId",
+        "clipId"
+      ],
+      "properties": [
+        {
+          "name": "draftId",
+          "type": "string",
+          "description": "目标草稿 id"
+        },
+        {
+          "name": "clipId",
+          "type": "string",
+          "description": "要降噪的片段 id（视频轨或音频轨上的片段）"
+        },
+        {
+          "name": "apply",
+          "type": "boolean",
+          "description": "默认 true：生成音频片段并放进草稿；false 只返回 wav 路径与降噪量"
+        },
+        {
+          "name": "replace",
+          "type": "boolean",
+          "description": "默认 false。true 时把原片段静音（\"换成降噪版\"最省事的形态，避免原声与降噪版叠在一起）"
+        },
+        {
+          "name": "start",
+          "type": "number",
+          "description": "新音频片段的起点秒数，默认与原片段对齐"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": "片段显示名（可选）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_detect_beats",
+      "description": "抽某个片段的音频振幅包络、找重音（节拍）位置，返回片段内秒数列表；apply=true 时顺带按节拍生成一条变速曲线写进片段（卡点慢放/快进）。界面上的「按音频找节拍」走的是同一套包络与同一个检测函数，所以 agent 卡到的点和人对得上。需要本机 ffmpeg。",
+      "required": [
+        "draftId",
+        "clipId"
+      ],
+      "properties": [
+        {
+          "name": "draftId",
+          "type": "string",
+          "description": "草稿 id"
+        },
+        {
+          "name": "clipId",
+          "type": "string",
+          "description": "要分析的片段 id（视频轨或音频轨上的片段）"
+        },
+        {
+          "name": "sensitivity",
+          "type": "number",
+          "description": "灵敏度 0.2~3，越高越容易判成节拍；不给用默认值"
+        },
+        {
+          "name": "apply",
+          "type": "boolean",
+          "description": "默认 false 只返回节拍；true 时生成变速曲线并写进片段（会改 speed 与 speedCurve）"
+        },
+        {
+          "name": "fast",
+          "type": "number",
+          "description": "曲线快档速率（默认 2）"
+        },
+        {
+          "name": "slow",
+          "type": "number",
+          "description": "曲线慢档速率（默认 0.35）"
+        },
+        {
+          "name": "hold",
+          "type": "number",
+          "description": "每个节拍慢窗半宽秒数（默认 0.3）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_tts",
+      "description": "把一段文字读成人声，生成一条配音音轨（本机合成，文字与声音都不出本机）。默认直接写入时间线的音频轨；只想先拿到音频文件就给 apply=false。一次最多 500 字，长了就按句分批。装音色包用 yijing_models（id=speech-voice-zh，约 131MB）。",
+      "required": [
+        "draftId",
+        "text"
+      ],
+      "properties": [
+        {
+          "name": "draftId",
+          "type": "string",
+          "description": "目标草稿 id"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "要读的文字（最多 500 字）"
+        },
+        {
+          "name": "voiceId",
+          "type": "string",
+          "description": "音色包 id，默认用已装好的那个"
+        },
+        {
+          "name": "speed",
+          "type": "number",
+          "description": "语速 0.5~2，默认 1"
+        },
+        {
+          "name": "sid",
+          "type": "number",
+          "description": "音色编号（多说话人音色包才用得上，默认 0）"
+        },
+        {
+          "name": "start",
+          "type": "number",
+          "description": "放到时间线的第几秒，默认 0"
+        },
+        {
+          "name": "apply",
+          "type": "boolean",
+          "description": "默认 true：生成后直接写入音频轨；false 只返回 wav 路径"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": "片段显示名（可选）"
         }
       ]
     },
@@ -402,6 +623,26 @@
           "description": "sticker / border / all，默认 all"
         }
       ]
+    },
+    {
+      "name": "yijing_import_font",
+      "description": "导入字体文件（.ttf / .otf / .ttc）进本机字体库：复制进 userData/fonts 并记进设置，界面重启后出现在文字面板的字体列表里。原文件删掉也不影响。重复导入同一文件不会产生两条。",
+      "required": [
+        "paths"
+      ],
+      "properties": [
+        {
+          "name": "paths",
+          "type": "array",
+          "description": "字体文件绝对路径列表（Windows 直接写盘符，如 D:/fonts/思源黑体.otf）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_list_fonts",
+      "description": "列已入库的字体（扫 fonts 目录，不是读设置——设置里可能留着已被删掉的条目）。给文字片段指定字体前先看这里有什么。",
+      "required": [],
+      "properties": []
     },
     {
       "name": "yijing_add_sticker",
@@ -657,7 +898,7 @@
         {
           "name": "resolution",
           "type": "string",
-          "description": "分辨率档：480p/720p/1080p/2k/4k/8k，默认 1080p"
+          "description": "分辨率档：480p/720p/1080p/2k/4k（上限 4K），默认沿用草稿档位、没有则 1080p"
         },
         {
           "name": "width",
@@ -722,6 +963,25 @@
           "name": "outPath",
           "type": "string",
           "description": "输出 .yjpack 绝对路径（省略则落到用户数据目录）"
+        }
+      ]
+    },
+    {
+      "name": "yijing_unpack_draft",
+      "description": "打开一个 .yjpack 素材包，解成一份**新草稿**（不会覆盖本机同名草稿）。包里带的是草稿 + 它用到的素材，换机器接着剪用。返回新草稿 id 与媒体数；missing 是包里缺文件的条目。",
+      "required": [
+        "packPath"
+      ],
+      "properties": [
+        {
+          "name": "packPath",
+          "type": "string",
+          "description": ".yjpack 绝对路径"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": "新草稿的名字（省略则用包里记的工程名）"
         }
       ]
     },

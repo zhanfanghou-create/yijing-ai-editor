@@ -25,12 +25,22 @@ export default defineConfig({
         /* ⚠️ 新增 shared 下的 CJS 模块必须同时加进这张白名单，否则渲染层 import 到的是
            一个没有 default 的空对象 —— 症状是"面板里的调节永远显示 0/滑杆拖不动"，
            构建不报错、静态扫描也看不见。 */
+        /* 左栏「无线画布」的入口地址：漏了它 ⇒ appLinkOf 是 undefined，
+           左栏那一项连同右侧面板一起消失（不是报错，是"根本没有这个功能"）。 */
+        /shared[\\/]appLink\.js$/,
         /shared[\\/]adjust\.js$/,
         /shared[\\/]textOverrides\.js$/,
         /shared[\\/]effects\.js$/,
         /shared[\\/]crop\.js$/,
         /shared[\\/]audio\.js$/,
-        /* 文字动画：预览必须 import 到它（否则 readTextAnim 是空对象 ⇒ 动画永远是 none） */
+        /* 转场遮罩：预览（CSS）与导出（ffmpeg expr）共用同一组数字 */
+        /shared[\\/]transitionMask\.js$/,
+        /* 画面特效的参数轴：渲染层的 frameEffects.js 要 import 它取 --fx-* 变量。
+           漏了这一行 ⇒ frameEffectStyle 是 undefined，Stage 直接抛错白屏。 */
+        /shared[\\/]fxParams\.js$/,
+        /* 智能抠像的共用阈值：漏了它 matte.js 里的 MATTE_MIN_COVERAGE 是 undefined，
+           `coverage < undefined` 恒为 false ⇒ "抠不到人"永远判不出来，静默产出全透明素材。 */
+        /shared[\\/]matte\.js$/,        /* 文字动画：预览必须 import 到它（否则 readTextAnim 是空对象 ⇒ 动画永远是 none） */
         /shared[\\/]textAnim\.js$/,
         /shared[\\/]reverse\.js$/,
         /* 节拍检测：检查器里的「按音频检测」要调它。

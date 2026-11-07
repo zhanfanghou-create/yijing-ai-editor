@@ -233,8 +233,12 @@ async function main() {
     const gateCount = await page.locator('.mask, [role="dialog"], .dialog').count()
     check('2. 启动后没有账号 / 授权弹窗', gateCount === 0, `遮罩·弹窗 ${gateCount} 个`)
 
-    const navCount = await page.locator('.home-nav-item').count()
-    check('3. 侧栏导航两项（创作视频 / 最近草稿）', navCount === 2, `${navCount} 项`)
+    const navLabels = (await page.locator('.home-nav-item').allTextContents()).map((s) => s.trim())
+    check(
+      '3. 侧栏导航三项（创作视频 / 最近草稿 / 无线画布）',
+      navLabels.length === 3 && navLabels[0] === '创作视频' && navLabels[1] === '最近草稿' && navLabels[2] === '无线画布',
+      navLabels.join(' / ')
+    )
 
     const heroCount = await page.locator('.home-hero').count()
     check('4. 首页大卡两张', heroCount === 2, `${heroCount} 张`)

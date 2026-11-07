@@ -54,6 +54,10 @@ export const ATTR_GROUPS = [
       'fadeOut',
       'denoise',
       'audioDenoise',
+      /* 人声增强 / 变声（都是导出阶段生效）。漏了它们，「复制属性 → 粘贴属性」
+         会把降噪、防抖、淡入淡出全带过去，唯独音色不变 —— 用户听不出来是哪一项没搬。 */
+      'voiceBoost',
+      'voiceFx',
       'beauty',
       'keepPitch',
       'pitch',

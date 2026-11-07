@@ -24,10 +24,20 @@
  */
 
 :root {
-  /* 行高（实测） */
-  --wb-menu-h: 35px;
+  /* 行高。
+   *
+   * 2026-11-02 起顶栏由 35px 压到 **32px**：参考开源剪辑软件 Concat 的
+   * title-bar 就是 32px，且它的条上只有菜单与窗口键 —— 35px 是上一个
+   * 参考客户端（带品牌字）的量法，品牌字去掉后多出来的 3px 只是空带。
+   * 页签行 42px 保持不变：它现在是「上区卡片」的头带，不再是独立的一行。 */
+  --wb-menu-h: 32px;
   --wb-tabs-h: 42px;
-  --wb-tlbar-h: 36px;
+  --wb-tlbar-h: 40px;
+  /* 面板卡片的圆角。Concat 口径：r-lg = 12px，
+   * 我们原来只有 4 / 8 两档，8px 在 1920 宽的窗口上读作"没圆角"。 */
+  --wb-pane-r: 12px;
+  /* 卡片之间的缝：Concat 的 workspace 用 8px，且与四周留白同一个值 */
+  --wb-pane-gap: 8px;
   /* 左栏宽（实测：内容区从 x=8 起，右分隔线落在 x=157 → 150px） */
   --wb-tree-w: 150px;
   /* 参考窗口在左/右/下各有一条 8px 的 #141414 内框（顶部被同色菜单栏吃掉看不出来），
@@ -119,7 +129,7 @@
 
 .app.is-editor {
   display: grid;
-  /* 可用高 1024 = 35 菜单 + 44 标签 + 剩余（主体）+ 时间线。
+  /* 可用高 1024 = 32 菜单 + 42 标签 + 剩余（主体）+ 时间线。
      时间线高由 --wb-tl-h 决定：默认跟窗口高走（约 32%），拖过分隔条后固定 px；
      主体吃剩余空间（1fr），不再写死 616:329 —— 四块区域现在都可拖。 */
   --wb-tl-h: clamp(140px, 32vh, 70vh);
@@ -144,7 +154,9 @@
      逐像素比对时表现成一整排 1px 亮边（底板实测 y4..31 vs y3..30）。
      ⚠️ 菜单项文字要单独补回 1px（见 `.wb-menu-items button` 的 padding-top），
      因为 CJK 墨迹在行盒里天生偏高半个像素，参考那边文字墨迹中心是 y17 而不是 16.5。 */
-  padding: 0 0 2px;
+  /* 32px 的条上不再留 2px 底边：那 2px 是给 35px 条把内容中心从 17.5 拉到 16.5 用的。
+     条本身变成 32 之后，内容中心就是 16 —— 24px 控件、46px 窗口键都落在这里。 */
+  padding: 0;
   background: var(--wb-deep);
   /* ⚠️ 元素是 `className="wb-menu topbar"`，styles.css 里那条
      `.topbar { border-bottom: 1px solid var(--line) }` 一直在生效（--line = #464651）。
@@ -172,20 +184,18 @@
   border-bottom: 0;
 }
 
-/* 宽度对齐参考：参考的品牌块到「文件」左沿是 x=152，我们品牌文字更短，
-   所以用 min-width 把整块撑到同样宽度，后面三个菜单项才会落在同一个位置 */
+/* 宽度对齐：参考开源剪辑软件 Concat 的标题条**不印品牌字**，条上从第一像素
+   起就是菜单。我们的品牌不需要在这一行自我介绍 —— 首页的标题已经承担了它。
+   徽章留 24px 当「回创作中心」的入口，宽度按徽章自己算，不再撑到 126。 */
 .wb-menu-brand {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0;
-  /* 宽度实测：参考「文件」墨迹左沿 x=156，扣掉 brand 与 items 之间 16px 的 gap
-     和 items 按钮自身 6px 内边距 ⇒ brand 到 x=134 结束 ⇒ min-width 126（从 x=8 起）。
-     之前写 128 会让整条菜单项右移 2px。 */
-  min-width: 126px;
-  height: 26px;
+  min-width: 0;
+  height: 24px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   background: transparent;
   -webkit-app-region: no-drag;
 }
@@ -457,8 +467,10 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 26px;
+  /* 24px 高：顶栏压到 32 之后，28px 的主按钮只剩 4px 上下呼吸，
+     在窗口键（全高 32）旁边读作"顶满了"。开源参考项目的导出键也是 24。 */
+  height: var(--ctl-sm);
+  padding: 0 14px;
   border: 0;
   border-radius: var(--r-lg);
   background: linear-gradient(to right, #261a3f, #301b3d);
@@ -516,20 +528,24 @@
   display: flex;
   align-items: center;
   margin-left: 6px;
-  margin-right: -4px;
+  /* 抵消外层 8px 内框：三个窗口键要贴到窗口右上角本身，而不是缩在框里 ——
+     这是 caption 按钮唯一能被"甩过去"命中的姿势。开源参考项目的窗口键同样贴角。 */
+  margin-right: calc(-1 * var(--wb-frame));
 }
 
 .wb-winbtns button {
   /* padding 必须显式写 0 —— 同上，全局 `button { padding: 1px 6px }` 会把内容盒
      从 32 挤到 20，而字形 svg 宽到 27 ⇒ 溢出后居中失效（实测最大化字形偏右 3px） */
-  width: 32px;
+  width: 46px;
   height: var(--wb-menu-h);
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
   color: #cfcfd4;
   display: grid;
   place-items: center;
+  transition: background-color 100ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .wb-winbtns button:hover {
@@ -570,6 +586,12 @@
   height: var(--wb-tabs-h);
   background: var(--wb-bar);
   align-items: stretch;
+  /* 上区卡片的头带：两角圆、两角方。它与下面 .workbench 拼成同一张卡，
+   * 所以圆角只能加在这两处，不能给整块上区套一层容器（DOM 里没有那一层，
+   * 也不该为了画个圆角多造一层）。overflow 是必须的：缝列（列 2/4/6）在
+   * 这一行是空的，会露出本行底色并一路顶到窗口上沿，直角会把圆角切掉。 */
+  border-radius: var(--wb-pane-r) var(--wb-pane-r) 0 0;
+  overflow: hidden;
 }
 
 /* 缝就是独立的 grid 列（背景同 --wb-deep），不再用 border 画 ——
@@ -581,7 +603,19 @@
   align-items: stretch;
   /* 参考实测：首个页签槽与内容区左沿对齐（x8），槽宽 = 文字墨迹宽 + 20 */
   padding: 0;
-  overflow: hidden;
+  /* ⚠️ 不能再是 `overflow: hidden`。页签条的可视宽 = 左栏 + 缝 + 中栏，
+     窗口压到 minWidth(1180) 时只有 430px 左右，而 12 枚页签需要 700px 上下；
+     隐藏溢出的后果是**末尾几枚直接消失且点不到**（「智能包装」「插件」首当其冲）。
+     改成横向滚动 + 隐藏滚动条：窄窗下能划过去，宽窗下没有滚动条痕迹。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  /* 弹性收缩时要能低于内容宽，否则 flex 容器自己不收缩、滚动条也不出现 */
+  min-width: 0;
+}
+
+.wb-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 /* 播放器 / 信息 两列的标题，与标签同一行 */
@@ -645,11 +679,46 @@
   white-space: nowrap;
 }
 
+/* 与功能页签同一口径：选中是"比条底亮一档的实心 chip + 白字"，不用品牌紫、
+   不画下划线。两排页签用同一种话说同一件事，否则左排灰、右排紫，看着像两拨人做的。 */
 .wb-coltab.on {
-  background: var(--wb-panel);
-  color: var(--wb-accent);
-  /* 下划线用 inset 阴影而不是 border —— 真加 2px border 会让这枚比旁边那枚矮 2px */
-  box-shadow: inset 0 -2px 0 var(--wb-accent-hi);
+  background: var(--wb-card);
+  color: var(--wb-text);
+  box-shadow: none;
+}
+
+/* 窄窗口：右栏这一排要**收得下六枚**。
+ *
+ * 2026-11-02 加了轨级页签「字幕轨」（排在「信息」后面）之后，最宽的一组变成
+ * 信息 / 字幕轨 / 画面 / 音频 / 变速 / 调整。实测：原尺寸下这一排要 323px，
+ * 而右栏在窗口 1280 时只有 290px、在窗口最小宽 1180（见主进程 minWidth）时约 264px ——
+ * `.wb-coltabs` 是 `overflow: hidden`，收不下就是**最后一枚「调整」被裁掉且点不到**，
+ * 而它正是调色的入口。
+ *
+ * 所以按窗口宽度分两档收内缩，不裁字、不改顺序。实测右栏这一栏的宽度 ≈ 0.5×窗宽 − 350：
+ *   窗宽 ≥1350（栏宽 ≥325）：原尺寸（六枚 323）刚好收下；
+ *   窗宽 1230–1350（栏宽 265–325）：左右内缩 12 → 7（六枚 263）；
+ *   窗宽 1180–1230（栏宽 240–265）：再收字号 13 → 12（六枚 240，正好贴着最小宽）。
+ * ⚠️ 不许改成 `overflow-x: auto` 了事：滚动条是隐藏的，切掉的页签看不见也点不着。
+ */
+@media (max-width: 1350px) {
+  .wb-coltab {
+    /* 底宽也要一起降：两字的页签实测宽度由 min-width 决定（26+14 < 48），
+       只收内缩的话六枚还是 288，照样溢出。 */
+    min-width: 40px;
+    padding: 0 7px;
+  }
+}
+
+@media (max-width: 1230px) {
+  .wb-coltabs {
+    gap: 0;
+  }
+
+  .wb-coltab {
+    min-width: 38px;
+    font-size: var(--fs-12);
+  }
 }
 
 .wb-colhead .wb-grow {
@@ -686,25 +755,32 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px 4px;
+  gap: 2px;
+  padding: 6px 10px;
   border: 0;
+  /* ⚠️ flex:none + nowrap 缺一不可。
+     页签是 flex 项，默认 `flex: 0 1 auto` 会被压到内容宽以下；而标签文字是
+     一个 `<span>`（column 方向的 flex 项，宽 = 页签名宽），一旦页签被压窄，
+     文字就逐字折行 —— 这就是「小窗口下标签变竖排」的成因。
+     nowrap 管住不折行，flex:none 管住不压缩，两者一起才成立。 */
+  flex: none;
+  white-space: nowrap;
   /* 圆角走 8：参考侧栏项选中底就是 8（LVTabItem），原先自造的 6 已删档 */
   border-radius: var(--r-lg);
   background: transparent;
   color: #d6d6d7;
-  /* 文字降到 12px：参考 11.6 实测页签文字字面高 12px（局部放大图 zoom/z1，2 倍下 24px）。
-     旧值 13px 是按上一套参考量的，四个字的「媒体文件」会被撑到 52px，
-     一排放不下 13 枚页签 —— 而参考那边正是靠"小而密"才排得满。 */
+  /* 文字 12px（--fs-12）：闸门 ui-spec 钉住这一档，而且 13 枚在 16px 图标下
+     用 12px 也排得下（末尾到 x≈310），11px 只是上一轮图标 22px 时的权宜。 */
   font-size: var(--fs-12);
   line-height: 1;
-  transition: color 0.14s ease;
+  transition: color 0.14s ease, background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .wb-tab svg {
-  /* 参考 11.6 实测页签图标 20px（zoom/z1 放大 2 倍下 40px） */
-  width: 20px;
-  height: 20px;
+  /* 16px：图标与文字同属一枚 chip，8px 的字配 20px 的图标会读成"图标是主角"。
+     开源参考项目此处图标墨迹约 13，我们是 24 视框的线性字形，16 落地后墨迹接近。 */
+  width: 16px;
+  height: 16px;
   color: #dcdcde;
   flex: none;
 }
@@ -730,19 +806,44 @@
   box-shadow: var(--state-ring);
 }
 
+/**
+ * 页签的选中态：**中性色阶，不用品牌紫**。
+ *
+ * 开源参考项目的整窗只有两处彩色 —— 导出键与播放键。侧栏的页签选中是
+ * 「比条底亮一档的实心 chip + 白字」，靠明度差说话。我们原来用紫底 + 紫字 +
+ * 2px 紫下划线，等于把品牌色摊到每一个分类上：一屏十几个紫块，主按钮
+ * 反而压不住，这也是"看着不像一个软件"的来源之一。
+ *
+ * 明度阶梯（参考实测）：条底 #303030 → chip 选中 #3B3B3B → 文字 #FFFFFF。
+ * 下划线去掉：chip 自己已经是"抬起来的那一块"，再加条会把话说两遍。
+ */
 .wb-tab.active {
-  color: var(--wb-accent);
-  background: var(--wb-accent-glow);
-  /* 用 inset 阴影画亮条，不加 border —— 加 2px 边框会让这枚比旁边矮 2px（踩过） */
-  box-shadow: inset 0 -2px 0 var(--wb-accent-hi);
+  color: var(--wb-text);
+  background: var(--wb-card);
+  box-shadow: none;
 }
 
 .wb-tab.active svg {
-  color: var(--wb-accent);
+  color: var(--wb-text);
 }
 
 .wb-tabs-grow {
   flex: 1;
+}
+
+/* 窄窗（<= 1500px）时页签条只有 450px 上下（它只跨「左栏 + 缝 + 中栏」三列），
+   12 枚页签装不下是必然的。这里做两件事让"装不下"变得可读：
+   · 左右内缩 10 → 7：同样的字宽下能多挤进一枚半；
+   · 右沿渐隐：否则末尾被切在框外，画面上看着"这排就只有 11 个"，
+     而滚动条是隐藏的 —— 没有任何线索告诉用户还能横向划过去。 */
+@media (max-width: 1500px) {
+  .wb-tab {
+    padding: 6px 7px;
+  }
+
+  .wb-tabs {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
+  }
 }
 
 /* ============================== 主体四栏 ============================== */
@@ -754,6 +855,21 @@
     var(--wb-player-col) var(--wb-gutter) var(--wb-info-col);
   min-height: 0;
   background: var(--wb-deep);
+  /* 上区卡片的身体：与头带拼成同一张卡，底部两角圆。
+   * 卡片与时间线之间的那道缝由 margin-bottom 画 —— 用 grid row-gap 会把
+   * 头带也一起推开，上区就裂成两张卡了。 */
+  border-radius: 0 0 var(--wb-pane-r) var(--wb-pane-r);
+  margin-bottom: var(--wb-pane-gap);
+}
+
+/* 底部两角挖在首尾两栏自己身上：.workbench 的底色是缝色（--wb-deep），
+ * 若只圆外层，露出来的会是两道深色直角，看着像卡片缺了两块。 */
+.workbench .wb-tree {
+  border-bottom-left-radius: var(--wb-pane-r);
+}
+
+.workbench .wb-info {
+  border-bottom-right-radius: var(--wb-pane-r);
 }
 
 /* 内容元素显式认列（列序里插了缝，不能靠自然流填充） */
@@ -2879,6 +2995,11 @@
   background: var(--wb-deep2);
   /* 缝里的水平分隔条以这里为定位上下文 */
   position: relative;
+  /* 时间线是下半区的独立卡片：四角圆，与上区同一档圆角、同一条缝宽。
+   * overflow 必须有：头带（工具条）底色比轨道区亮一档，不裁的话四个角
+   * 会各多出一个直角亮块。 */
+  border-radius: var(--wb-pane-r);
+  overflow: hidden;
 }
 
 /* 全屏时间线（工具栏最右那个键）：把整块工作台让给时间线。
@@ -2912,7 +3033,10 @@
 .wb-tlbar button {
   height: 26px;
   min-width: 26px;
-  padding: 0 7px;
+  /* 26 = 16 图标 + 两侧 5：纯图标键正好落成 Concat 那种 26×26 的方槽，
+     一排八个之间的节距才是等距的。原来 7px 内边距把每个键撑到 30，
+     一排下来比参考宽出 60px，右端那组开关就被挤出可视区了。 */
+  padding: 0 5px;
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
@@ -2960,8 +3084,11 @@
 }
 
 .wb-tlbar .wb-sep {
+  /* 18px 高、1px 宽，两边 5px 空气（合计 11px 的分组缝）。
+     参考的分隔线是 "9px 宽 + 居中 1px 线"，视觉上与本条等价，
+     但我们这里 .wb-sep 是真元素，直接给宽度更省一层盒子。 */
   width: 1px;
-  height: 16px;
+  height: 18px;
   margin: 0 5px;
   background: rgba(255, 255, 255, 0.14);
 }
@@ -2992,9 +3119,16 @@
      占位，换过来后整体高度与之前完全一致。 */
   border-top: 2px solid var(--wb-deep);
   display: grid;
-  /* 轨道头列宽按参考 11.6 重测：实测 x9..132 = 124px（旧值 130 是上一套参考的量法）。
-     参考的轨头**没有文字**，纯图标行，124px 够放「轨类型 + 锁/眼/喇叭/S」四枚开关。 */
-  grid-template-columns: 124px minmax(0, 1fr);
+  /* 轨道头列宽 150px。
+   *
+   * 124px 是上一套参考（轨头只有 19px 小开关）的量法。改成开源参考项目的口径后
+   * 每个开关是 **26×26 的方槽**（它那边 header-width 默认 188、下限 150，
+   * 一排五个槽 + 两端 8/4 内边距）—— 19px 的键在 26px 的时代里点不中，
+   * 一排四个挤在 124 里也没有呼吸。
+   *
+   * 我们保留类型图标（只有四条固定轨，图标就是身份），所以取它的**下限** 150：
+   * 8 + 20(图标) + 6 + 4×26 + 3×1 + 4 = 147，正好落在 150 里还余 3px。 */
+  grid-template-columns: 150px minmax(0, 1fr);
 }
 
 .wb-tllabels {
@@ -3031,9 +3165,11 @@
 .wb-tllabel {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   height: 52px;
-  padding: 0 10px;
+  /* 左 8 / 右 4：与开源参考项目的轨道头一致（它那一排槽贴着左右边，
+     行内的余量全给中间的空档，而不是两端）。 */
+  padding: 0 4px 0 8px;
   border-bottom: 1px solid #141414;
   color: var(--wb-faint);
   font-size: 12px;
@@ -3050,18 +3186,27 @@
 
 .wb-tllabel .wb-tllabel-tools {
   display: flex;
-  gap: 3px;
+  /* 槽之间 1px：26 的方槽彼此挨着，靠比值几乎为零的缝成一排"开关条"，
+     而不是四个各自为政的小圆角块。 */
+  gap: 1px;
 }
 
 .wb-tllabel .wb-tllabel-tools button {
-  width: 19px;
-  height: 19px;
+  /* 26×26 的方槽：开源参考项目里轨道头的每个开关就是这个尺寸
+     （IconButton 的 side 默认 26），19px 的点按热区在触控板/高分屏上手感很差。 */
+  width: 26px;
+  height: 26px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   background: transparent;
-  color: var(--wb-faint);
+  /* 亮档而不是最暗档：这排开关自己占着一条 150px 的带子，旁边没有别的东西
+     跟它抢；用 faint(#808080) 在 #262626 上几乎读不出来（放大图里就是一排灰点）。
+     开源参考项目的轨道头也是亮图标（idle: Theme.fg），理由是"muted 读作关着的"，
+     而这一排的默认状态是"开着"。 */
+  color: var(--wb-muted);
   display: grid;
   place-items: center;
+  transition: background-color 110ms cubic-bezier(0.4, 0, 0.2, 1), color 110ms;
 }
 
 .wb-tllabel .wb-tllabel-tools button:hover {
@@ -3069,8 +3214,14 @@
   color: var(--wb-text);
 }
 
+/* 「被关掉」的开关：红图标 + 一层淡红底。
+ * 只把颜色改红是不够的 —— 12px 的描边图标在一排里本来就小，颜色一变读者要
+ * 凑近才分得清哪条轨被静音了；加一层 12% 的红底之后，整行扫过去就能看出
+ * 哪一格是"按下去"的。这也是开源参考项目的做法：checked 是一个深 chip，
+ * 不是只换字形颜色。 */
 .wb-tllabel .wb-tllabel-tools button.off {
   color: #ff5c5c;
+  background: rgba(255, 92, 92, 0.12);
 }
 
 .wb-tltracks {
@@ -3341,15 +3492,21 @@
   right: 49px;
   top: 33px;
   bottom: 33px;
-  border-radius: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  /* 图标与一行字之间 8px：Concat 的空态就是这两件东西（padding 16、间距 8），
+     读作一句安静的提示，而不是一个"待填的空槽"。 */
+  gap: var(--gap-2);
   color: var(--wb-faint);
-  font-size: 13px;
+  font-size: var(--fs-12);
   pointer-events: none;
+}
+
+/* 空态图标再淡一档：它只是给这行字一个引子，不该比轨道上的片段还显眼。 */
+.wb-tlempty svg {
+  color: #4a4a4f;
 }
 
 /* 虚线框本身用 SVG 描边画，不用 `border: 1px dashed`。
@@ -3660,4 +3817,136 @@ kbd {
   margin-right: auto;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* ===================== 右栏「字幕轨」页（轨级清单） =====================
+ *
+ * 2026-11-02 Jason：「字幕轨单独放到右侧窗口信息标签后面」。
+ * 这块清单原先挂在左栏「文字 / 字幕」两页底部（同一个组件被调两遍），
+ * 现在独立成右栏的一枚页签，紧跟在「信息」之后。
+ *
+ * 排的是"一行一句"：正文在上、时间与样式在下。
+ * ⚠️ 正文必须 `nowrap + ellipsis`：字幕可以整段贴进来，一行几十个字会把卡片撑到
+ *    几百像素高，24 段就要滚半天才看完 —— 而这一页的用途是"扫一眼有几段、在哪"。
+ * ⚠️ 颜色一律走令牌（`check-ui-accent` 会扫裸十六进制，连兜底值也算命中）。
+ */
+.wb-caps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-1);
+}
+
+.wb-caps-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-2);
+  margin-bottom: var(--gap-1);
+}
+
+.wb-caps-count {
+  color: var(--wb-faint);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-caps-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--ctl-sm);
+  padding: 0 var(--gap-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.wb-caps-clear:hover:not(:disabled) {
+  background: var(--state-hover);
+  color: var(--wb-text);
+}
+
+.wb-caps-clear:disabled {
+  color: var(--wb-faint);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.wb-caps-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-1);
+}
+
+/* 一行 = 一张卡。选中态只换**描边**，不换底色：
+   底色一换，紧挨着的两张卡看着像"一整块里有两种材质"。 */
+.wb-caps-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--gap-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  background: var(--wb-card);
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wb-caps-row:hover {
+  border-color: var(--state-active);
+}
+
+.wb-caps-row.on {
+  border-color: var(--wb-accent);
+}
+
+.wb-caps-text {
+  overflow: hidden;
+  font-size: var(--fs-13);
+  line-height: var(--lh-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-caps-meta {
+  color: var(--wb-faint);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-caps-empty {
+  margin: 0;
+  padding: var(--gap-3);
+  border-radius: var(--r-lg);
+  background: var(--wb-card);
+  color: var(--wb-faint);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
+
+/* ===================== 字幕页 · AI 识别进度条 =====================
+ *
+ * 识别是"按句推进"的（主进程每解完一句推一条 `{done, total}`），
+ * 所以这里是一条**离散推进**的进度，不是平滑动画 —— 动画会让人以为还在跑，
+ * 而实际早就卡在某一句话上了。
+ * 高度 3px：这是页内的一行状态，不是面板级的大进度，再高就抢了「导入/导出」的位置。
+ * ⚠️ 颜色走令牌（`check-ui-accent` 会把裸十六进制和它的兜底值一起判红）。
+ */
+.wb-speech-bar {
+  height: 3px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--wb-card);
+}
+
+.wb-speech-bar i {
+  display: block;
+  height: 100%;
+  background: var(--wb-accent);
+  transition: width 0.16s linear;
 }

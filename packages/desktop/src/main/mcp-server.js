@@ -34,7 +34,7 @@ const { createDraftStore } = require('./drafts')
 const { createOps } = require('./mcp-ops')
 
 const SERVER_NAME = 'yijing-editor'
-const SERVER_VERSION = '1.1.0'
+const SERVER_VERSION = '1.3.0'
 const PROTOCOL_VERSION = '2024-11-05'
 
 /* ------------------------------ 基础环境 ------------------------------ */
@@ -113,6 +113,19 @@ const TOOLS = {
     handler: () => ops.catalog()
   },
 
+  /* ============================== 本机模型 ============================== */
+
+  yijing_models: {
+    ...S(
+      '本机 AI 模型的查询与安装。语音转字幕要两个：先 speech-runtime（运行时，约 22MB），再 speech-paraformer（中文轻量，约 78MB）或 speech-sensevoice（中英日韩粤，约 228MB）。模型装在本机、推理也在本机，素材不上传。下载会一直等到装完（78MB 约 1 分钟，228MB 约 3 分钟），调用期间别重试。',
+      {
+        action: str('list（默认，只查）或 download（装）'),
+        id: str('download 时的模型 id：speech-runtime / speech-paraformer / speech-sensevoice / face-runtime')
+      }
+    ),
+    handler: (args) => ops.models(args)
+  },
+
   /* ================================ 草稿 ================================ */
 
   yijing_list_drafts: {
@@ -135,6 +148,7 @@ const TOOLS = {
       {
         name: str('草稿名（省略则叫「未命名项目」加日期）'),
         aspect: str('画面比例，默认 16:9'),
+        resolution: str('输出分辨率档：480p/720p/1080p/2k/4k（上限 4K），默认 1080p'),
         playhead: num('初始播放头秒数，默认 0')
       }
     ),
@@ -143,11 +157,12 @@ const TOOLS = {
 
   yijing_update_draft: {
     ...S(
-      '改草稿本身：改名、改画面比例、移动播放头、改预览音量与缩放。',
+      '改草稿本身：改名、改画面比例与输出分辨率、移动播放头、改预览音量与缩放。',
       {
         draftId: str('草稿 id'),
         name: str('新名字'),
         aspect: str('新画面比例（1:1 / 1:2 / 3:4 / 9:16 / 16:9 / 4:3 / 2:1）'),
+        resolution: str('新输出分辨率档：480p/720p/1080p/2k/4k（上限 4K）'),
         playhead: num('播放头秒数'),
         volume: num('预览音量 0..200，默认 100'),
         zoom: num('时间线缩放 0.1..20，默认 1')
@@ -205,6 +220,19 @@ const TOOLS = {
       ['draftId']
     ),
     handler: (args) => ops.importMedia(args)
+  },
+
+  yijing_remove_media: {
+    ...S(
+      '从草稿里删掉素材（素材库里的那条），**并连带删掉所有引用它的片段** —— 与界面左栏的垃圾桶同一个语义。只删素材不删片段会留下"片段还在、源文件没了"的坏行。不删磁盘上的原文件。',
+      {
+        draftId: str('草稿 id'),
+        assetId: str('单个素材 id（取自 yijing_read_draft 的 assets[].id）'),
+        assetIds: { type: 'array', items: { type: 'string' }, description: '批量素材 id（与 assetId 二选一）' }
+      },
+      ['draftId']
+    ),
+    handler: (args) => ops.removeMedia(args)
   },
 
   /* =============================== 时间线 =============================== */
@@ -266,6 +294,87 @@ const TOOLS = {
     handler: (args) => ops.addSubtitles(args)
   },
 
+  yijing_recognize_subtitles: {
+    ...S(
+      '把某个片段里的说话内容认成字幕：软件自己按音量分句、逐句识别，默认直接写进字幕轨；只想先看结果就给 apply=false。识别在本机跑，素材不出本机。只支持 1× 速度的片段（变速片段的时间基准不一样）。模型没装会直接报错并告诉你装哪个。',
+      {
+        draftId: str('目标草稿 id'),
+        clipId: str('要识别的片段 id（视频轨或音频轨上的片段）'),
+        apply: {
+          type: 'boolean',
+          description: '默认 true：识别完写入字幕轨；false 只返回文字与时间，不改草稿'
+        },
+        modelId: str('识别模型 id，默认用已装好的轻量中文模型'),
+        style: str('字幕样式 key，默认 sub-plain（取值查 yijing_catalog）')
+      },
+      ['draftId', 'clipId']
+    ),
+    handler: (args) => ops.recognizeSubtitles(args)
+  },
+
+  yijing_denoise_audio: {
+    ...S(
+      '把某个片段里的人声降噪（压掉环境噪声、风噪、键盘声），生成一条音频片段。本机推理，素材不出本机；处理 1 分钟音频约 3 秒。降噪在 16kHz 下进行、输出 48kHz 立体声，所以它适合"噪声大到听不清词"的素材，本身干净的声音会显得发闷。模型没装会直接报错并告诉你要装哪个。',
+      {
+        draftId: str('目标草稿 id'),
+        clipId: str('要降噪的片段 id（视频轨或音频轨上的片段）'),
+        apply: {
+          type: 'boolean',
+          description: '默认 true：生成音频片段并放进草稿；false 只返回 wav 路径与降噪量'
+        },
+        replace: {
+          type: 'boolean',
+          description: '默认 false。true 时把原片段静音（"换成降噪版"最省事的形态，避免原声与降噪版叠在一起）'
+        },
+        start: num('新音频片段的起点秒数，默认与原片段对齐'),
+        name: str('片段显示名（可选）')
+      },
+      ['draftId', 'clipId']
+    ),
+    handler: (args) => ops.denoise(args)
+  },
+
+  yijing_detect_beats: {
+    ...S(
+      '抽某个片段的音频振幅包络、找重音（节拍）位置，返回片段内秒数列表；apply=true 时顺带按节拍生成一条变速曲线写进片段（卡点慢放/快进）。界面上的「按音频找节拍」走的是同一套包络与同一个检测函数，所以 agent 卡到的点和人对得上。需要本机 ffmpeg。',
+      {
+        draftId: str('草稿 id'),
+        clipId: str('要分析的片段 id（视频轨或音频轨上的片段）'),
+        sensitivity: num('灵敏度 0.2~3，越高越容易判成节拍；不给用默认值'),
+        apply: {
+          type: 'boolean',
+          description: '默认 false 只返回节拍；true 时生成变速曲线并写进片段（会改 speed 与 speedCurve）'
+        },
+        fast: num('曲线快档速率（默认 2）'),
+        slow: num('曲线慢档速率（默认 0.35）'),
+        hold: num('每个节拍慢窗半宽秒数（默认 0.3）')
+      },
+      ['draftId', 'clipId']
+    ),
+    handler: (args) => ops.detectBeats(args)
+  },
+
+  yijing_tts: {
+    ...S(
+      '把一段文字读成人声，生成一条配音音轨（本机合成，文字与声音都不出本机）。默认直接写入时间线的音频轨；只想先拿到音频文件就给 apply=false。一次最多 500 字，长了就按句分批。装音色包用 yijing_models（id=speech-voice-zh，约 131MB）。',
+      {
+        draftId: str('目标草稿 id'),
+        text: str('要读的文字（最多 500 字）'),
+        voiceId: str('音色包 id，默认用已装好的那个'),
+        speed: num('语速 0.5~2，默认 1'),
+        sid: num('音色编号（多说话人音色包才用得上，默认 0）'),
+        start: num('放到时间线的第几秒，默认 0'),
+        apply: {
+          type: 'boolean',
+          description: '默认 true：生成后直接写入音频轨；false 只返回 wav 路径'
+        },
+        name: str('片段显示名（可选）')
+      },
+      ['draftId', 'text']
+    ),
+    handler: (args) => ops.tts(args)
+  },
+
   yijing_update_clip: {
     ...S(
       '改一个片段的任何属性 —— 位置/缩放/旋转/透明度/速度/音量/淡入淡出、滤镜与强度、转场、画面特效、调色（adjust/curves/wheels/hslBands）、变形（warp/crop）、高级效果 effects（圆角/蒙版/抠像/描边/阴影/混合模式）、文字样式与动画、关键帧、画中画、边框、人物特效、停用（enabled:false，可逆，片段仍占位）。只传要改的字段；字段名写错会**报错**，不会静默无效。',
@@ -318,6 +427,29 @@ const TOOLS = {
       { kind: str('sticker / border / all，默认 all') }
     ),
     handler: (args) => ops.listMaterials(args)
+  },
+
+  yijing_import_font: {
+    ...S(
+      '导入字体文件（.ttf / .otf / .ttc）进本机字体库：复制进 userData/fonts 并记进设置，界面重启后出现在文字面板的字体列表里。原文件删掉也不影响。重复导入同一文件不会产生两条。',
+      {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '字体文件绝对路径列表（Windows 直接写盘符，如 D:/fonts/思源黑体.otf）'
+        }
+      },
+      ['paths']
+    ),
+    handler: (args) => ops.importFont(args)
+  },
+
+  yijing_list_fonts: {
+    ...S(
+      '列已入库的字体（扫 fonts 目录，不是读设置——设置里可能留着已被删掉的条目）。给文字片段指定字体前先看这里有什么。',
+      {}
+    ),
+    handler: () => ops.listFonts()
   },
 
   yijing_add_sticker: {
@@ -439,7 +571,7 @@ const TOOLS = {
         draftId: str('草稿 id'),
         outPath: str('输出绝对路径（扩展名要与编码匹配：.mp4 / .mov）'),
         codec: str('编码：h264 / h265 / h265-10 / prores-422 / prores-4444，默认 h264'),
-        resolution: str('分辨率档：480p/720p/1080p/2k/4k/8k，默认 1080p'),
+        resolution: str('分辨率档：480p/720p/1080p/2k/4k（上限 4K），默认沿用草稿档位、没有则 1080p'),
         width: num('精确输出宽度像素（覆盖 resolution 档；与 height 一起给）'),
         height: num('精确输出高度像素（覆盖 resolution 档）'),
         fps: num('帧率：24/25/29.97/30/50/59.94/60，默认 30'),
@@ -465,6 +597,18 @@ const TOOLS = {
       ['draftId']
     ),
     handler: (args) => ops.packDraft(args)
+  },
+
+  yijing_unpack_draft: {
+    ...S(
+      '打开一个 .yjpack 素材包，解成一份**新草稿**（不会覆盖本机同名草稿）。包里带的是草稿 + 它用到的素材，换机器接着剪用。返回新草稿 id 与媒体数；missing 是包里缺文件的条目。',
+      {
+        packPath: str('.yjpack 绝对路径'),
+        name: str('新草稿的名字（省略则用包里记的工程名）')
+      },
+      ['packPath']
+    ),
+    handler: (args) => ops.unpackDraft(args)
   },
 
   /* ============================== 一次成型 ============================== */

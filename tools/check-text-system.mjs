@@ -247,7 +247,19 @@ const stage = read('renderer/components/Stage.jsx')
 const fontsSrc = read('renderer/fonts.js')
 
 check('preload 暴露 font.pick 与 font.allow', /font:\s*\{[\s\S]{0,200}pick:/.test(preload) && /allow:/.test(preload))
-check('主进程实现了 font:pick（复制入库 + 进白名单）', /ipcMain\.handle\('font:pick'/.test(mainIndex) && /allowedMedia\.add\(target\)/.test(mainIndex))
+/* 字体复制与命名的唯一实现在 `main/fonts.js`（MCP 工具 `yijing_import_font` 走同一份），
+   主进程只负责"委派 + 把落地路径加进白名单 + 算 url"。所以这条要**两半都钉**：
+   主进程真的委派并加白名单、fonts.js 真的复制。
+   ⚠️ 原来这里写死 `allowedMedia.add(target)` —— 变量改名就假红，而真正该管的是
+   "复制出来的那个路径进了白名单"，不是它叫什么名字。 */
+const mainFonts = read('main/fonts.js')
+check(
+  '主进程实现了 font:pick（复制入库 + 进白名单）',
+  /ipcMain\.handle\('font:pick'/.test(mainIndex) &&
+    /fontsMod\.importFontFile\(/.test(mainIndex) &&
+    /allowedMedia\.add\(font\.path\)/.test(mainIndex) &&
+    /copyFileSync\(/.test(mainFonts)
+)
 check('主进程实现了 font:allow（重启后重新登记白名单）', /ipcMain\.handle\('font:allow'/.test(mainIndex))
 check('App 启动时既登记白名单也注册 FontFace', /allowFontPaths/.test(appSrc) && /registerFonts/.test(appSrc))
 check('检查器有字体下拉与导入按钮', /data-text-font="1"/.test(inspector) && /data-text-font-import="1"/.test(inspector))

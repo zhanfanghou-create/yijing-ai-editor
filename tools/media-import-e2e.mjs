@@ -168,8 +168,13 @@ const WAV = path.join(FIX, 'tone.wav')
 const TXT = path.join(FIX, 'note.txt') // 扩展名不支持
 const ORPHAN = path.join(FIX, 'never-registered.mp4') // 存在但从未登记 → 协议应 403
 const MP4 = path.join(FIX, 'clip.mp4')
+/* 4K 夹具：用户要的是"最高支持 4K 导入导出"，所以导入这一侧也得真的拿 4K 文件过一遍。
+   3840×2160 的 PNG 手写出来约 25MB 原始像素、压缩后只有几百 KB，构造成本可以接受。 */
+const PNG4K = path.join(FIX, '4k-3840x2160.png')
+const MP4_4K = path.join(FIX, 'clip-4k.mp4')
 
 fs.writeFileSync(PNG, makePng(64, 48))
+fs.writeFileSync(PNG4K, makePng(3840, 2160))
 fs.writeFileSync(WAV, makeWav(0.6))
 fs.writeFileSync(TXT, 'just text')
 fs.writeFileSync(ORPHAN, Buffer.alloc(2048, 7))
@@ -211,6 +216,15 @@ if (ffmpeg) {
     '-pix_fmt', 'yuv420p', MP4
   ], { tag: 'mk' })
   hasVideo = r.status === 0 && fs.existsSync(MP4)
+  /* 4K 视频夹具：1 秒就够（验的是"导入后元数据是不是 3840×2160"，不是解码性能）。
+     ultrafast 造 1 秒 4K 约半秒，不值当为它单开一道闸门。 */
+  if (hasVideo) {
+    spawnCapture(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=3840x2160:rate=15:duration=1',
+      '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', MP4_4K
+    ], { tag: 'mk4k' })
+  }
 }
 
 /**
@@ -230,13 +244,17 @@ const VIDEO_CHECKS = [
 ]
 
 /** 「导入按钮 → 媒体库」这条链路的断言名。contextBridge 冻结时无法打桩，整组记 SKIP。 */
+const CHECK_4K_IMAGE = '4K 图片导入后元数据是 3840×2160（导入侧也真的吃 4K）'
+const CHECK_4K_VIDEO = '4K 视频导入后元数据是 3840×2160（解码器这条路径与导出侧的 ffprobe 是两套）'
 const UI_CHECKS = [
   '导入后素材进入媒体库',
   '素材自动选中（属性面板能显示）',
   '卡片显示文件名与元数据（含 64×48）',
   '缩略图经协议真的渲染出来',
   '给出导入成功的轻提示',
-  '同一文件重复导入不产生重复卡片'
+  '同一文件重复导入不产生重复卡片',
+  CHECK_4K_IMAGE,
+  CHECK_4K_VIDEO
 ]
 
 /* ------------------------------ 启动 ------------------------------ */
@@ -579,6 +597,44 @@ try {
     check('已有素材时工具区不再自称「没有媒体文件」',
       Boolean(toolsSplit.text) && !/没有媒体文件/.test(toolsSplit.text) && toolsSplit.hook === 'filled',
       `「${toolsSplit.text}」hook=${toolsSplit.hook || '-'}`)
+
+    /* ---------------- 4K 导入（导入侧与导出侧是两条读取路径） ----------------
+     *
+     * 导出侧已经有 4K 档，`check-4k-io` 会真导一遍再读成片尺寸；但**导入**这一侧的
+     * 元数据来自 `<img>` / `<video>` 解码器（assets.js 的 probeMedia），而不是 ffprobe。
+     * 两条路里任意一条把 4K 降成 1080P，症状都是"素材能用、时间线正常、成片也出得来"，
+     * 唯一的差别是素材卡上那个「宽×高」—— 所以判据读卡片文案，不读我们传下去的参数。
+     */
+    const pickFile = async (target) =>
+      app.evaluate((electronModule, filePath) => {
+        const { dialog } = electronModule || {}
+        if (!dialog) return false
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] })
+        return true
+      }, target)
+
+    const cardMetaOf = (name) =>
+      page.evaluate((wanted) => {
+        const cards = Array.from(document.querySelectorAll('.media-card'))
+        const hit = cards.find((card) => (card.querySelector('strong')?.textContent || '') === wanted)
+        return hit ? hit.querySelector('small')?.textContent || '' : ''
+      }, name)
+
+    await pickFile(PNG4K)
+    await page.click('[data-import-btn]')
+    await page.waitForTimeout(2000)
+    const png4kMeta = await cardMetaOf('4k-3840x2160.png')
+    check(CHECK_4K_IMAGE, /3840×2160/.test(png4kMeta), png4kMeta || '没有这张卡片')
+
+    if (hasVideo && fs.existsSync(MP4_4K)) {
+      await pickFile(MP4_4K)
+      await page.click('[data-import-btn]')
+      await page.waitForTimeout(2500)
+      const mp4_4kMeta = await cardMetaOf('clip-4k.mp4')
+      check(CHECK_4K_VIDEO, /3840×2160/.test(mp4_4kMeta), mp4_4kMeta || '没有这张卡片')
+    } else {
+      skip(CHECK_4K_VIDEO, '本机没有 ffmpeg，造不出 4K mp4 夹具')
+    }
   }
 
   /* ---------------- 缩略图与像素比例（视频 / 音频这两条真实分支） ----------------

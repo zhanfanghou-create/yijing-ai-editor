@@ -2030,18 +2030,10 @@ input[type='range']::-webkit-slider-thumb {
 }
 
 /**
- * 「调节」预设的预览层：不是一个 <img>，而是一块用参数**算出来**的渐变。
- * 铺在 `.look-preview.is-photo` 里（那一层已经是 position:relative + 100×100），
- * 用 inset:0 撑满、圆角跟随卡片 —— 6px 与 .look-preview 一致，否则卡片会露出直角。
+ * 「调节」预设的预览已改成真实的 <img>（与滤镜同一张取景底片、同一套画法），
+ * 原来那块用 CSS 渐变凑出来的假风景连同 `.look-adjust-art` 一起删掉 ——
+ * 留着它只会让人以为"这里还有一条可选路径"，而那条路径画的是抽象色块。
  */
-.look-adjust-art {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  background-size: cover;
-  background-position: center;
-  pointer-events: none;
-}
 
 .mat-search {
   display: flex;
@@ -2421,7 +2413,15 @@ input[type='range']::-webkit-slider-thumb {
   width: 100%;
   height: 100%;
   container-type: size;
-  background: linear-gradient(135deg, #6f6f79 0%, #a9a9b2 48%, #55555e 100%);
+  /* 文字样式的卡面底图 = 与滤镜/调节**同一张取景底片**（plate.webp）。
+     这样一眼能看出"这行字压在画面上是什么样"，而不是压在一条灰渐变上 ——
+     灰底看不出描边/发光/投影这些只有叠在真实画面上才成立的样式。
+     上面那层压暗是为了保住可读性：白字落在大片天空上会糊掉。 */
+  background-image:
+    linear-gradient(180deg, rgba(10, 10, 14, 0.52) 0%, rgba(10, 10, 14, 0.24) 46%, rgba(10, 10, 14, 0.60) 100%),
+    url('./assets/plate.webp');
+  background-size: cover;
+  background-position: center;
   overflow: hidden;
 }
 
@@ -2719,39 +2719,48 @@ input[type='range']::-webkit-slider-thumb {
  *    一起抖 —— 用户看到"整个播放器在动"，而**成片里根本没有画框**（导出只有画面在动）。
  *    于是预览与成片对不上，且两边单独看都合理。这条由 tools/check-preview-effects.mjs
  *    双向钉住：必须有动画挂在内容层、且不许有动画挂在画框上。
+ *
+ * ⚠️ 2026-11-03：所有族的可见参数改走内联 `--fx-*` 变量，真源 = shared/fxParams.json。
+ *    起因：特效页 343 张卡 / 267 个名字此前只落在 24 个键上（fx-glow 一个键就占 83 张卡），
+ *    点 20 张名字完全不同的卡出来是同一个效果 —— 而所有静态判据都是绿的。
+ *    参数化后**一族一条规则**，参数由 Stage.jsx 内联给；卡片示意 .fx-demo-art 与画面
+ *    共用同一条规则，所以"卡片上在动"与"画面上在动"永远是同一个东西。
+ *    ⚠️ `var()` 的兜底值必须等于该族**第一档**（fxParams.json 里 values[0]）：
+ *       漏给变量时表现为"默认外观"，而不是把画面写成透明/纯黑 —— 后者看着像"没加特效"，
+ *       属于最难查的一类静默。tools/check-fx-params.mjs 把兜底值与轴表逐条对拍。
  */
 @keyframes fx-shake {
   0%, 100% { transform: translate3d(0, 0, 0); }
-  20% { transform: translate3d(-0.8%, 0.5%, 0); }
-  40% { transform: translate3d(0.7%, -0.6%, 0); }
-  60% { transform: translate3d(-0.5%, -0.4%, 0); }
-  80% { transform: translate3d(0.6%, 0.5%, 0); }
+  20% { transform: translate3d(calc(var(--fx-t, 0.5) * -1%), calc(var(--fx-t, 0.5) * 0.62%), 0); }
+  40% { transform: translate3d(calc(var(--fx-t, 0.5) * 0.88%), calc(var(--fx-t, 0.5) * -0.75%), 0); }
+  60% { transform: translate3d(calc(var(--fx-t, 0.5) * -0.62%), calc(var(--fx-t, 0.5) * -0.5%), 0); }
+  80% { transform: translate3d(calc(var(--fx-t, 0.5) * 0.75%), calc(var(--fx-t, 0.5) * 0.62%), 0); }
 }
 
 @keyframes fx-pulse {
   0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.035); }
+  50% { transform: scale(var(--fx-t, 1.02)); }
 }
 
 @keyframes fx-flash {
   0%, 100% { opacity: 0; }
-  8% { opacity: 0.85; }
-  16% { opacity: 0.1; }
-  24% { opacity: 0.7; }
+  8% { opacity: 1; }
+  16% { opacity: 0.14; }
+  24% { opacity: 0.82; }
   40% { opacity: 0; }
 }
 
 @keyframes fx-glitch {
   0%, 100% { opacity: 0; transform: translateX(0); }
-  10% { opacity: 0.9; transform: translateX(-1.2%); }
-  22% { opacity: 0.25; transform: translateX(1%); }
-  38% { opacity: 0.75; transform: translateX(-0.6%); }
+  10% { opacity: 0.9; transform: translateX(calc(var(--fx-t, 0.4) * -3%)); }
+  22% { opacity: 0.25; transform: translateX(calc(var(--fx-t, 0.4) * 2.5%)); }
+  38% { opacity: 0.75; transform: translateX(calc(var(--fx-t, 0.4) * -1.5%)); }
   58% { opacity: 0; }
 }
 
 @keyframes fx-scan {
   from { background-position: 0 0; }
-  to { background-position: 0 4px; }
+  to { background-position: 0 calc(var(--fx-n, 4) * 1px); }
 }
 
 @keyframes fx-lightleak {
@@ -2760,52 +2769,224 @@ input[type='range']::-webkit-slider-thumb {
 }
 
 @keyframes fx-vignette {
-  from { opacity: 0.45; }
-  to { opacity: 0.9; }
+  from { opacity: 0.72; }
+  to { opacity: 1; }
 }
 
-.canvas-content.fx-shake { animation: fx-shake 420ms linear infinite; }
-.canvas-content.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
+@keyframes fx-glow {
+  from { opacity: 0.62; }
+  to { opacity: 1; }
+}
 
-.canvas-fx.fx-flash {
-  background: #ffffff;
+@keyframes fx-fire {
+  from { opacity: 0.74; transform: scaleY(0.94); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+@keyframes fx-cold {
+  from { opacity: 0.62; }
+  to { opacity: 1; }
+}
+
+@keyframes fx-noise {
+  from { background-position: 0 0; }
+  to { background-position: 37px 29px; }
+}
+
+.canvas-content.fx-shake { animation: fx-shake var(--fx-d, 420ms) linear infinite; }
+.canvas-content.fx-pulse { animation: fx-pulse var(--fx-d, 1100ms) ease-in-out infinite; }
+
+/* ---- 闪光：一片径向衰减的亮斑。颜色 / 强度 / 扩散都可调，
+        三个轴之外还借 x/y 让"炸开的位置"也能变（120 个卡位各炸一处） ---- */
+.canvas-fx.fx-flash,
+.fx-demo-art.fx-flash {
+  background: radial-gradient(
+    circle at var(--fx-x, 50%) var(--fx-y, 46%),
+    hsl(var(--fx-h, 0) 96% 96% / var(--fx-a, 0.55)) 0%,
+    hsl(var(--fx-h, 0) 90% 82% / calc(var(--fx-a, 0.55) * 0.46)) var(--fx-r, 42%),
+    transparent calc(var(--fx-r, 42%) * 1.32)
+  );
   mix-blend-mode: screen;
-  animation: fx-flash 900ms linear infinite;
+  animation: fx-flash var(--fx-d, 900ms) linear infinite;
 }
 
-.canvas-fx.fx-glitch {
+.canvas-fx.fx-glitch,
+.fx-demo-art.fx-glitch {
   mix-blend-mode: screen;
   background:
-    repeating-linear-gradient(0deg, rgba(255, 0, 80, 0.55) 0 2px, transparent 2px 6px),
-    repeating-linear-gradient(0deg, rgba(0, 220, 255, 0.5) 6px, transparent 6px 12px);
-  animation: fx-glitch 700ms steps(6, end) infinite;
+    repeating-linear-gradient(
+      0deg,
+      hsl(var(--fx-h, 344) 88% 56% / calc(var(--fx-a, 0.5) + 0.2)) 0 calc(var(--fx-n, 6) * 1px),
+      transparent calc(var(--fx-n, 6) * 1px) calc(var(--fx-n, 6) * 2px)
+    ),
+    repeating-linear-gradient(
+      0deg,
+      hsl(calc(var(--fx-h, 344) + 210) 86% 58% / 0.5) calc(var(--fx-n, 6) * 2px),
+      transparent calc(var(--fx-n, 6) * 2px) calc(var(--fx-n, 6) * 4px)
+    );
+  animation: fx-glitch var(--fx-d, 700ms) steps(6, end) infinite;
 }
 
-.canvas-fx.fx-scan {
-  /* 1px 线 + 3px 间隙 = 4px 一格；位移正好走一格，循环处才看不出来 */
-  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.16) 0 1px, transparent 1px 4px);
-  background-size: 100% 4px;
-  animation: fx-scan 1600ms linear infinite;
+.canvas-fx.fx-scan,
+.fx-demo-art.fx-scan {
+  /* 1px 线 + (n-1)px 间隙；位移正好走一格，循环处才看不出来 */
+  background: repeating-linear-gradient(
+    0deg,
+    hsl(var(--fx-h, 0) 24% 92% / 0.2) 0 1px,
+    transparent 1px calc(var(--fx-n, 4) * 1px)
+  );
+  background-size: 100% calc(var(--fx-n, 4) * 1px);
+  animation: fx-scan var(--fx-d, 1600ms) linear infinite;
 }
 
-.canvas-fx.fx-lightleak {
+.canvas-fx.fx-lightleak,
+.fx-demo-art.fx-lightleak {
   /* 用 background-position 扫而不是 transform：
      transform 会把整层挪出画布边界，扫到两头就露边 */
   background: linear-gradient(
     78deg,
     transparent 30%,
-    rgba(255, 196, 120, 0.5) 48%,
-    rgba(255, 236, 190, 0.25) 56%,
+    hsl(var(--fx-h, 32) 92% 72% / var(--fx-a, 0.42)) 48%,
+    hsl(var(--fx-h, 32) 96% 88% / calc(var(--fx-a, 0.42) * 0.5)) 56%,
     transparent 72%
   );
   background-size: 200% 100%;
   mix-blend-mode: screen;
-  animation: fx-lightleak 2200ms ease-in-out infinite;
+  animation: fx-lightleak var(--fx-d, 2200ms) ease-in-out infinite;
 }
 
-.canvas-fx.fx-vignette {
-  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.72) 100%);
-  animation: fx-vignette 2600ms ease-in-out infinite alternate;
+/*
+ * 暗角 = 椭圆暗角（下层）+ 上下压边（上层，强度由 --fx-t 控制）。
+ * 为什么需要"上下压边"这一层：只调深浅时，27 个档位在 192px 卡片上挤不出足够差异
+ * （实测两两中位只差 6.7/255、p10 差 2.1），而"上下压一条黑边"是**结构差别**，
+ * 一眼就能分辨。两层写在同一条 background 里：后写的在下层。
+ */
+.canvas-fx.fx-vignette,
+.fx-demo-art.fx-vignette {
+  background:
+    linear-gradient(
+      180deg,
+      hsl(var(--fx-h, 0) 34% 5% / calc(var(--fx-a, 0.45) * var(--fx-t, 0))) 0%,
+      transparent 30%,
+      transparent 70%,
+      hsl(var(--fx-h, 0) 34% 5% / calc(var(--fx-a, 0.45) * var(--fx-t, 0))) 100%
+    ),
+    radial-gradient(
+      ellipse at 50% var(--fx-y, 50%),
+      transparent var(--fx-r, 46%),
+      hsl(var(--fx-h, 0) 34% 5% / var(--fx-a, 0.45)) 100%
+    );
+  animation: fx-vignette var(--fx-d, 2600ms) ease-in-out infinite alternate;
+}
+
+/*
+ * ---- 「改像素」的四种：柔化 / 黑白 / 复古 / 颗粒 ----
+ *
+ * 全部做在**覆盖层自己的 backdrop-filter** 上，不是 .canvas-content 的 filter ——
+ * 上面的注释说过原因：动 content 的 filter 会静默顶掉调色。backdrop-filter 改的是
+ * 这个覆盖元素背后的像素，与 `.canvas-content` 的内联 filter 互不相干，两者可以同时生效。
+ */
+.canvas-fx.fx-blur,
+.fx-demo-art.fx-blur {
+  -webkit-backdrop-filter: blur(var(--fx-b, 3px)) brightness(calc(1 + var(--fx-t, 0))) saturate(var(--fx-s, 1));
+  backdrop-filter: blur(var(--fx-b, 3px)) brightness(calc(1 + var(--fx-t, 0))) saturate(var(--fx-s, 1));
+}
+
+.canvas-fx.fx-mono,
+.fx-demo-art.fx-mono {
+  -webkit-backdrop-filter: grayscale(1) contrast(var(--fx-t, 1.04));
+  backdrop-filter: grayscale(1) contrast(var(--fx-t, 1.04));
+}
+
+.canvas-fx.fx-vintage,
+.fx-demo-art.fx-vintage {
+  /* 褪色轴直接当 sepia 的强度；浓淡轴压饱和与对比 */
+  -webkit-backdrop-filter: sepia(var(--fx-t, 0.42)) saturate(calc(0.92 * var(--fx-s, 0.86)))
+    contrast(0.95) brightness(1.02);
+  backdrop-filter: sepia(var(--fx-t, 0.42)) saturate(calc(0.92 * var(--fx-s, 0.86)))
+    contrast(0.95) brightness(1.02);
+}
+
+.canvas-fx.fx-noise,
+.fx-demo-art.fx-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+  opacity: var(--fx-a, 0.4);
+  animation: fx-noise var(--fx-d, 600ms) steps(6, end) infinite;
+}
+
+.canvas-fx.fx-glow,
+.fx-demo-art.fx-glow {
+  background: radial-gradient(
+    ellipse at var(--fx-x, 50%) var(--fx-y, 46%),
+    hsl(var(--fx-h, 38) 72% 96% / var(--fx-a, 0.3)) 0%,
+    hsl(var(--fx-h, 38) 64% 86% / calc(var(--fx-a, 0.3) * 0.44)) calc(var(--fx-r, 32%) * 0.58),
+    hsl(var(--fx-h, 38) 58% 76% / calc(var(--fx-a, 0.3) * 0.12)) var(--fx-r, 32%),
+    transparent calc(var(--fx-r, 32%) * 1.42)
+  );
+  mix-blend-mode: screen;
+  animation: fx-glow var(--fx-d, 3000ms) ease-in-out infinite alternate;
+}
+
+.canvas-fx.fx-fire,
+.fx-demo-art.fx-fire {
+  /* 火光从下缘往上舔：transform-origin 放底部，scaleY 才是"火苗窜高"而不是"整体放大" */
+  transform-origin: 50% 100%;
+  background: linear-gradient(
+    0deg,
+    hsl(var(--fx-h, 24) 94% 54% / var(--fx-a, 0.4)) 0%,
+    hsl(calc(var(--fx-h, 24) + 6) 92% 58% / calc(var(--fx-a, 0.4) * 0.58)) calc(var(--fx-r, 55%) * 0.48),
+    hsl(calc(var(--fx-h, 24) + 18) 88% 72% / calc(var(--fx-a, 0.4) * 0.2)) var(--fx-r, 55%),
+    transparent calc(var(--fx-r, 55%) * 1.38)
+  );
+  mix-blend-mode: screen;
+  animation: fx-fire var(--fx-d, 520ms) ease-in-out infinite alternate;
+}
+
+.canvas-fx.fx-cold,
+.fx-demo-art.fx-cold {
+  /* 角度由 --fx-deg 给（180deg 是从上往下铺，132deg 是斜铺）—— 方向差别是这一族
+     少数能"一眼看出"的维度，纯靠浓淡挤不出 27 个互不相同的档位 */
+  background: linear-gradient(
+    var(--fx-deg, 180deg),
+    hsl(var(--fx-h, 200) 72% 80% / calc(var(--fx-a, 0.22) * 0.85)) 0%,
+    hsl(var(--fx-h, 200) 64% 70% / calc(var(--fx-a, 0.22) * 0.34)) var(--fx-y, 14%),
+    hsl(var(--fx-h, 200) 74% 88% / calc(var(--fx-a, 0.22) * 0.9)) 100%
+  );
+  mix-blend-mode: screen;
+  animation: fx-cold var(--fx-d, 3600ms) ease-in-out infinite alternate;
+}
+
+/* ---- 素材类特效（kind: "pack"）：像素来自素材包的雪碧图，这里只负责"怎么播" ----
+
+   一张雪碧图里横向排着全部 N 帧。播放靠两件事配合：
+     · background-size 放大到 N 倍宽（内联给，N 因包而异）
+     · background-position 从 0% 走到 100%（百分比基准是「容器宽 − 图宽」，
+       所以 100% 正好停在最后一帧）
+   配内联的 `steps(N)` ⇒ 一格一跳，不会把帧糊成渐变。
+
+   ⚠️ 这里**不写** background-image / animation-duration / steps 的数字：
+      它们全在 Stage.jsx 内联给。写死在这儿的话，换一个帧数的包就播不动，
+      而且 CSS 与运行时不一致时不会报错，只是"动画不动"。
+   ⚠️ `animation-timing-function` 的兜底写 linear 是刻意的：万一内联的 steps 被
+      某条更高优先级的规则顶掉，linear 至少还是"在动"，而不是变成静止图。 */
+.canvas-fx.fx-pack,
+.fx-demo-art.fx-pack {
+  background-repeat: no-repeat;
+  background-position: 0% 0;
+  animation-name: fx-pack-run;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  /* 素材类唯一能参数化的维度：整层缩放（元素变大/变小，个数不变）+ 叠加强度。
+     `--fx-t` / `--fx-a` 来自 fxParams.json 的 fm-* 族；没有该轴的键取兜底 1（原样）。 */
+  transform: scale(var(--fx-t, 1));
+  transform-origin: 50% 50%;
+  opacity: var(--fx-a, 1);
+}
+
+@keyframes fx-pack-run {
+  from { background-position: 0% 0; }
+  to { background-position: 100% 0; }
 }
 
 /*
@@ -2825,45 +3006,15 @@ input[type='range']::-webkit-slider-thumb {
 .fx-demo-art.fx-pulse {
   background: rgba(255, 255, 255, 0.42);
 }
-.fx-demo-art.fx-pulse { animation: fx-pulse 1100ms ease-in-out infinite; }
+.fx-demo-art.fx-shake { animation: fx-shake var(--fx-d, 420ms) linear infinite; }
+.fx-demo-art.fx-pulse { animation: fx-pulse var(--fx-d, 1100ms) ease-in-out infinite; }
 
-.fx-demo-art.fx-flash {
-  background: #ffffff;
-  mix-blend-mode: screen;
-  animation: fx-flash 900ms linear infinite;
-}
-
-.fx-demo-art.fx-glitch {
-  mix-blend-mode: screen;
-  background:
-    repeating-linear-gradient(0deg, rgba(255, 0, 80, 0.55) 0 2px, transparent 2px 6px),
-    repeating-linear-gradient(0deg, rgba(0, 220, 255, 0.5) 6px, transparent 6px 12px);
-  animation: fx-glitch 700ms steps(6, end) infinite;
-}
-
-.fx-demo-art.fx-scan {
-  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.16) 0 1px, transparent 1px 4px);
-  background-size: 100% 4px;
-  animation: fx-scan 1600ms linear infinite;
-}
-
-.fx-demo-art.fx-lightleak {
-  background: linear-gradient(
-    78deg,
-    transparent 30%,
-    rgba(255, 196, 120, 0.5) 48%,
-    rgba(255, 236, 190, 0.25) 56%,
-    transparent 72%
-  );
-  background-size: 200% 100%;
-  mix-blend-mode: screen;
-  animation: fx-lightleak 2200ms ease-in-out infinite;
-}
-
-.fx-demo-art.fx-vignette {
-  background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, 0.72) 100%);
-  animation: fx-vignette 2600ms ease-in-out infinite alternate;
-}
+/*
+ * 其余 11 族的卡片示意**不在这里重复**：它们与画面共用同一条规则
+ * （`.canvas-fx.fx-glow, .fx-demo-art.fx-glow { … }` 写在上面「画面特效」那一节里）。
+ * 早先这里有一份写死数字的副本，参数化之后它会把变量顶掉 —— 同一个效果两套数值，
+ * 卡片一个样、画面另一个样，而且后写的赢，参数化看起来"完全没生效"。
+ */
 
 /* --------------------------- 子标签页 --------------------------- */
 
@@ -3664,4 +3815,284 @@ input[type='range']::-webkit-slider-thumb {
 .plug-tip strong {
   color: var(--wb-muted);
   font-weight: 500;
+}
+
+/* ------------------------------ 设置 · AI 模型 ------------------------------ */
+
+/* 一行一个模型：左文右按钮。按钮换行而不是挤压文字 ——
+   四个按钮横排会把这行撑到 520px，弹窗一窄就把「删除本机副本」挤成两行。 */
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.model-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel-2, rgba(255, 255, 255, 0.02));
+}
+
+.model-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.model-purpose {
+  color: var(--muted, #9a9a9f);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.model-meta {
+  color: var(--faint, #7d7d83);
+  font-size: 11px;
+}
+
+.model-missing {
+  color: var(--warning);
+  font-style: normal;
+}
+
+/* 状态用中性色阶 + 一处绿：整个应用只在"真的可用"这件事上用彩色，
+   未安装用灰、缺文件用橙，扫一眼就知道哪一行要处理。 */
+.model-chip {
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #b8b8bd;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.model-chip.on {
+  background: rgba(77, 166, 116, 0.18);
+  color: var(--green);
+}
+
+.model-chip.bad {
+  background: rgba(250, 183, 3, 0.16);
+  color: var(--warning);
+}
+
+.model-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 300px;
+}
+
+.model-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted, #9a9a9f);
+}
+
+.model-progress-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.model-progress-bar i {
+  display: block;
+  height: 100%;
+  background: var(--violet);
+  transition: width 0.16s linear;
+}
+
+/* 路径可能很长：单行省略，title 挂全文 */
+.model-path {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* ========================= 导出面板：摘要条 / 分屏 / 两列栅格 =========================
+ *
+ * 2026-11-02 Jason：「导出弹窗显示内容太多太乱了优化一下」。
+ * 改前是一列平铺 11 个控件 + 两张键值表（7 行）+ 3 段说明，
+ * 首屏根本看不到「导出成片」—— 而那是这个面板唯一的目的。
+ *
+ * 三件事：
+ *   ① 摘要条把 7 行键值表压成 1 行（时长 / 尺寸 / 帧率 / 容器 / 段数 / 区间 / 引擎）；
+ *   ② 「基本 / 高级」两屏切换，定好就不动的设置离开首屏；
+ *   ③ 同类控件并排两列（分辨率 + 帧率），而不是各占一整行。
+ *
+ * ⚠️ 颜色一律走令牌：这道面板的强调色必须与全窗同一套（见 check-ui-accent.mjs）。
+ */
+
+.export-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin-bottom: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.export-summary b {
+  color: var(--text);
+  font-weight: 600;
+  /* 时长是这行里最该被一眼读到的东西，等宽字形避免数字跳动时整行抖 */
+  font-variant-numeric: tabular-nums;
+}
+
+.export-summary em {
+  color: var(--text);
+  font-style: normal;
+  font-weight: 550;
+}
+
+/* 分隔点：不占语义，所以用 aria-hidden 的 <i> 而不是伪元素（换行时它才跟着走） */
+.export-summary i {
+  color: var(--faint);
+  font-style: normal;
+}
+
+.export-summary .export-engine {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(77, 166, 116, 0.16);
+  color: var(--green);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.export-summary .export-engine.bad {
+  background: rgba(250, 183, 3, 0.16);
+  color: var(--warning);
+}
+
+/* 两屏切换：分段控件，选中是"抬起来的那一块"，与工作台页签同一套明度语言 ——
+   不再另造一种紫，否则同一扇窗里会出现两套"选中"。 */
+.export-seg {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.export-seg button {
+  flex: 1;
+  height: 24px;
+  border: 0;
+  /* 圆角只有 4/8 两档（check-ui-spec 钉住的量表）：分段控件用 4 */
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.export-seg button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.export-seg button.on {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.export-seg button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--violet);
+}
+
+/* 同类控件并排：分辨率 / 帧率是同一类事（"出多大的片"），各占一整行只是白占高度。 */
+.export-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 8px;
+}
+
+.export-grid > .field {
+  min-width: 0;
+}
+
+.export-grid .select {
+  width: 100%;
+}
+
+/* ================= 设置 → AI 模型：分组标题 / 定位高亮 =================
+ *
+ * 2026-11-03：模型从 1 个变成 4 个（含语音识别的运行时与两个识别模型）之后，
+ * 平铺一列分不清"哪个是运行时、哪个是模型"。分组标题把这件事说清：
+ * 先装运行时（不装它模型跑了也没用），再装模型。
+ *
+ * `.focus` 是**从功能跳进来**时的落点高亮（点了「AI 识别字幕」却没模型）。
+ * 只用边框与一圈描边，不用整块底色 —— 底色一加，那一行看起来像"已选中"，
+ * 而它其实只是"你要装的是这个"。
+ */
+.model-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-group + .model-group {
+  margin-top: 14px;
+}
+
+.model-group-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.model-group-head strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-group-head span {
+  color: var(--muted, #9a9a9f);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.model-row.focus {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 1px var(--violet);
 }

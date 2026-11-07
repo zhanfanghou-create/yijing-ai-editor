@@ -14,7 +14,10 @@ import {
   appInfo, getSetting, setSetting,
   pickMedia, statMedia, pathForFile,
   pickFonts, allowFontPaths,
-  listDrafts, saveDraft, loadDraft, removeDraft
+  listDrafts, saveDraft, loadDraft, removeDraft,
+  /* 语音识别与配音：状态 / 识别 / 进度 / 合成。都走 platform.js 这一层，
+     浏览器预览下它们返回"不可用"而不是抛错。 */
+  speechStatus, transcribeSpeech, onSpeechProgress, voiceStatus, speakText
 } from './platform.js'
 /* 自定义字体：注册进 document.fonts（预览靠家族名，导出靠片段上的字体路径） */
 import { registerFonts } from './fonts.js'
@@ -70,6 +73,8 @@ import * as proxyTable from '../shared/proxy.js'
 import Recorder from './components/Recorder.jsx'
 /** 画面比例真源（与导出共用同一份表） */
 import { DEFAULT_ASPECT, normalizeAspect } from '../shared/aspect.js'
+/** 导出规格（分辨率档）：它现在是**草稿属性**，与画面比例同一套持久化 */
+import { DEFAULT_RESOLUTION, readResolution } from '../shared/exportRate.js'
 /** 复合片段：新建 / 展开 / 解除。展开这一支是预览与导出**同一个出口** */
 import { expandCompounds, isCompound, makeCompound, ungroupCompound } from '../shared/compound.js'
 /* 多机位：与复合片段同一套"展开"思路，但内部时间线是**由切换点算出来**的 */
@@ -105,7 +110,7 @@ import AssetTree, { defaultNodeOf, nodeOf, treeOf } from './components/AssetTree
 import MediaPanel from './components/MediaPanel.jsx'
 import SidePanels from './components/SidePanels.jsx'
 import Stage from './components/Stage.jsx'
-import Inspector, { inspectorTabsFor } from './components/Inspector.jsx'
+import Inspector, { CAPTION_TAB, inspectorTabsFor } from './components/Inspector.jsx'
 import Timeline from './components/Timeline.jsx'
 import { AboutDialog, GuideDialog, SettingsDialog } from './components/Dialogs.jsx'
 import Splitter from './components/Splitter.jsx'
@@ -266,6 +271,17 @@ export default function App() {
   const [aspect, setAspect] = useState(DEFAULT_ASPECT)
 
   /**
+   * 输出分辨率档（480p / 720p / 1080p / 2K / 4K，上限 4K）。
+   *
+   * ⚠️ 与比例一样**必须进草稿**，不能只活在导出面板的 useState 里。
+   *    只活在外面时：关掉面板再打开就回到 1080p，用户以为"选过 4K"、
+   *    实际每次导出都在导 1080p —— 面板上看不出任何异常，成片也不报错。
+   * ⚠️ 值一律过 `readResolution(...).id`：旧草稿没有这个字段，
+   *    它同时负责把已经下架的 `8k` 归到 `4k`（不归的话会落到 1080P，连降两档）。
+   */
+  const [resolution, setResolution] = useState(DEFAULT_RESOLUTION)
+
+  /**
    * 时间线名称（信息面板「草稿参数 · 时间线名称」）。
    * 与项目名分开设：一个草稿里可以有若干条时间线，参考客户端的播放条标题
    * 也写成「播放器 · 时间线01」这种组合。它是真字段（写进设置并落草稿），
@@ -343,6 +359,45 @@ export default function App() {
   /* ------------------------------ 弹窗 ------------------------------ */
 
   const [dialog, setDialog] = useState(null) // 'settings' | 'about' | 'guide'
+  /**
+   * 设置弹窗打开时要聚焦到哪个模型条目。
+   *
+   * 存在 App 而不是 Dialogs 里：**触发方是功能本身**（点了「AI 识别字幕」却没模型时
+   * 自动把用户送进设置）。如果这个焦点由弹窗自己记，那么"从功能触发"这条路
+   * 就只能靠一句 toast 让用户自己找，等于没做。
+   */
+  const [settingsFocus, setSettingsFocus] = useState(null)
+  /**
+   * 正在跑的识别任务：
+   * `{ busy, jobId, done, total }`。放这里而不是 SubtitleTools 里 ——
+   * 面板会随页签切换卸载，进度条跟着消失的话，用户以为识别停了。
+   */
+  const [speechJob, setSpeechJob] = useState(null)
+  /**
+   * 识别档位。
+   *
+   * `speechModels` 是主进程报上来的**模型清单**（含 ready），`speechModel` 是用户选的那一档。
+   * 为什么不放在 SubtitleTools 里自己查：面板会随页签卸载，每次挂载都查一遍会在
+   * "刚装完模型"和"刚删了模型"这两个时刻显示不同的结果 —— 而识别动作本身用的是这里的值。
+   * 两者分家最典型的症状是：面板显示"多语种"，实际跑的是轻量版。
+   *
+   * 偏好落 localStorage 只为首屏：真正的判据永远是"这一档装没装"（见 recognizeSubtitles）。
+   */
+  const [speechModels, setSpeechModels] = useState([])
+  const [speechModel, setSpeechModel] = useState(() => {
+    try {
+      return window.localStorage.getItem('yjai.speechModel') || ''
+    } catch {
+      return ''
+    }
+  })
+  /**
+   * 配音任务：`{ busy, error }`。
+   *
+   * 与 speechJob 同理住在 App：合成虽然只有一两秒，但首次要加载 131MB 音色包，
+   * 切个页签回来发现按钮还在转、却看不到任何状态，会让人以为卡死。
+   */
+  const [ttsJob, setTtsJob] = useState(null)
   /** 左栏（素材二级列表）折叠态 —— 顶栏那枚「侧栏」字形图标切的就是它 */
   const [railHidden, setRailHidden] = useState(false)
   /** 时间线全屏态。住在这里而不是 Timeline 里，见 Timeline.jsx 的 props 注释 */
@@ -804,6 +859,8 @@ export default function App() {
           /* 画面比例：旧草稿没有这个字段 ⇒ normalizeAspect 回落 16:9，
              不能把 undefined 直接喂给 setAspect（画布会算出 NaN 尺寸）。 */
           setAspect(normalizeAspect(record.data.aspect))
+          /* 分辨率档：旧草稿没有这个字段 ⇒ 回落 1080P；有 8k 的旧值 ⇒ readResolution 归到 4k */
+          setResolution(readResolution(record.data.resolution).id)
           // 本地素材的协议白名单在主进程里是内存态，重启后要重新登记一次
           const localPaths = (record.data.assets || []).map((asset) => asset.path).filter(Boolean)
           if (localPaths.length) {
@@ -861,9 +918,11 @@ export default function App() {
       zoom,
       /* 画面比例跟着**项目**走，不跟着应用走（理由见 aspect 的声明处） */
       aspect,
+      /* 输出分辨率档同理：它是这个草稿的交付规格，不是界面偏好 */
+      resolution,
       createdAt: createdAt || new Date().toISOString()
     }),
-    [aspect, assets, createdAt, playhead, volume, zoom]
+    [aspect, assets, createdAt, playhead, resolution, volume, zoom]
   )
 
   /** 把当前工作区写进当前草稿（没有就新建）；返回草稿摘要，失败返回 null */
@@ -952,7 +1011,7 @@ export default function App() {
    */
   useEffect(() => {
     if (!booted || !restoreDoneRef.current) return
-    const payload = JSON.stringify({ clips, projectName, assets, playhead, volume, zoom, aspect })
+    const payload = JSON.stringify({ clips, projectName, assets, playhead, volume, zoom, aspect, resolution })
     if (skipAutoSaveRef.current) {
       // 启动恢复本身不算「改动」，只记基线，不触发保存
       skipAutoSaveRef.current = false
@@ -967,7 +1026,7 @@ export default function App() {
       persistDraft({ silent: true })
     }, 1200)
     return () => clearTimeout(timer)
-  }, [booted, clips, projectName, assets, playhead, volume, zoom, aspect, draftId, persistDraft])
+  }, [booted, clips, projectName, assets, playhead, volume, zoom, aspect, resolution, draftId, persistDraft])
 
   /** 新建草稿：清空时间线与媒体库，并断开与当前草稿的绑定 */
   const handleNewDraft = useCallback(() => {
@@ -981,8 +1040,9 @@ export default function App() {
     draftPayloadRef.current = ''
     setSetting('currentDraftId', '')
     setProjectName('未命名项目')
-    /* 新项目回到默认比例：比例是项目属性，不该被上一个项目带着走 */
+    /* 新项目回到默认比例与默认分辨率：两者都是项目属性，不该被上一个项目带着走 */
     setAspect(DEFAULT_ASPECT)
+    setResolution(DEFAULT_RESOLUTION)
     setPage('editor')
     toast('已新建空白草稿')
   }, [commitClips, toast])
@@ -998,7 +1058,7 @@ export default function App() {
     const baseName = (projectName || '未命名项目').trim() || '未命名项目'
     const summary = await saveDraft({
       name: `${baseName} 副本`,
-      data: { clips: clipsRef.current, assets, playhead, volume, zoom, aspect }
+      data: { clips: clipsRef.current, assets, playhead, volume, zoom, aspect, resolution }
     })
     if (!summary) {
       toast.bad('草稿保存失败：本地目录不可写')
@@ -1015,7 +1075,7 @@ export default function App() {
     )
     setSetting('currentDraftId', summary.id)
     toast.good(`已另存为「${summary.name}」`)
-  }, [assets, aspect, playhead, projectName, setSetting, toast, volume, zoom])
+  }, [assets, aspect, playhead, projectName, resolution, setSetting, toast, volume, zoom])
 
   /** 打开草稿：读盘并灌进工作区，然后切到剪辑器 */
   const handleOpenDraft = useCallback(
@@ -1034,6 +1094,8 @@ export default function App() {
       setZoom(Number.isFinite(Number(record.data.zoom)) ? Number(record.data.zoom) : 1)
       /* 打开草稿时把那份的比例带回来（旧草稿没有 → 回落 16:9） */
       setAspect(normalizeAspect(record.data.aspect))
+      /* 分辨率档同理：打开别人的 4K 项目不该变回 1080P（那样每次都要重选） */
+      setResolution(readResolution(record.data.resolution).id)
       const localPaths = (record.data.assets || []).map((asset) => asset.path).filter(Boolean)
       if (localPaths.length) {
         const checked = await statMedia(localPaths)
@@ -2738,17 +2800,12 @@ export default function App() {
   }, [projectName, toast])
 
   /**
-   * 按语音自动分句：在**选中的画面片段**上分析音量，按"有人说话的区间"切空白字幕段。
+   * 「要分析哪一段」的判定：选中的片段优先，其次播放头所在的画面片段。
    *
-   * ⚠️ 这不是语音识别。开源版不带 ASR 模型，这里只切**时间轴**，文字留空由用户填。
-   *    UI 上这三个字必须写明白（SubtitleTools 里写了），否则"点了得到一堆空白"就是欺骗。
-   *
-   * 分辨率：`media:peaks` 单次最多 512 个桶。为了让 VAD 有 0.1 秒的分辨率，
-   * 这里按 30 秒一段分批取（每段 300 桶），拼成一条连续包络后再一次性分句 ——
-   * 分批而不是"一次取 512 桶"：3 分钟的片子只用 512 桶时，一桶 0.35 秒，
-   * 一句话会被吞进一两个桶里，切出来的字幕段边界能差半秒。
+   * 抽出来是因为**分句**和**识别**要用同一个判据 —— 两处各写一遍的话，
+   * 迟早出现"按分句切的是 A 段、按识别转的是 B 段"这种对不上的怪事。
    */
-  const autoSegmentSubtitles = useCallback(async () => {
+  const speechTargetOf = useCallback(() => {
     const list = clipsRef.current
     const selId = selection?.clipId
     let target = selId ? list.find((item) => item.id === selId) : null
@@ -2762,27 +2819,30 @@ export default function App() {
             playhead < item.start + item.duration
         ) || null
     }
-    if (!target || !target.url) {
-      toast.bad('先在时间线上选中一个画面片段（或把播放头停在它上面）')
-      return
-    }
+    return target
+  }, [playhead, selection])
+
+  /**
+   * 取这一段的声音包络（0~1 的能量曲线）。
+   *
+   * 分辨率：`media:peaks` 单次最多 512 个桶。为了让 VAD 有 0.1 秒的分辨率，
+   * 这里按 30 秒一段分批取（每段 300 桶），拼成一条连续包络后再一次性分句 ——
+   * 分批而不是"一次取 512 桶"：3 分钟的片子只用 512 桶时，一桶 0.35 秒，
+   * 一句话会被吞进一两个桶里，切出来的字幕段边界能差半秒。
+   *
+   * 返回 `{ ok, peaks, total }` 或 `{ ok:false, error }` —— 错误原样交回调用方去 toast，
+   * 因为两个调用方（分句 / 识别）要说的话不一样。
+   */
+  const collectSpeechPeaks = useCallback(async (target) => {
     if (!window.yjai?.media?.peaks) {
-      toast.bad('按语音分句要读音频，需要桌面端（本机 ffmpeg）')
-      return
+      return { ok: false, error: '读音频需要桌面端（本机 ffmpeg）' }
     }
     const total = Number(target.duration) || 0
-    if (total < 0.5) {
-      toast.bad('这一段太短了（不到半秒），没法分句')
-      return
-    }
-    if (total > 600) {
-      toast.bad('一次最多分析 10 分钟，先把它切成几段再分句')
-      return
-    }
+    if (total < 0.5) return { ok: false, error: '这一段太短了（不到半秒），没法分析' }
+    if (total > 600) return { ok: false, error: '一次最多分析 10 分钟，先把它切成几段' }
 
     const CHUNK = 30
     const PER = 0.1
-    toast('正在分析这一段的声音…')
     const peaks = []
     for (let at = 0; at < total - 0.05; at += CHUNK) {
       const span = Math.min(CHUNK, total - at)
@@ -2796,38 +2856,309 @@ export default function App() {
           buckets
         })
       } catch (error) {
-        toast.bad(`读不到声音：${(error && error.message) || '未知原因'}`)
-        return
+        return { ok: false, error: `读不到声音：${(error && error.message) || '未知原因'}` }
       }
-      if (!part || !part.ok) {
-        toast.bad((part && part.error) || '读不到声音')
-        return
-      }
+      if (!part || !part.ok) return { ok: false, error: (part && part.error) || '读不到声音' }
       /* 桶数与请求不符 ⇒ 直接说清，不要硬拼。拼了之后时间轴会整体偏移，
          而偏移的字幕看起来"只是早了半拍"，没人会想到是波形长度不对。 */
       if (!Array.isArray(part.peaks) || part.peaks.length !== buckets) {
-        toast.bad('波形数据长度不对，无法可靠分句')
-        return
+        return { ok: false, error: '波形数据长度不对，无法可靠分句' }
       }
       peaks.push(...part.peaks)
     }
+    return { ok: true, peaks, total }
+  }, [])
 
-    const segments = SUBTITLE.vadSegments(peaks, { secondsPerBucket: PER, minDur: 0.35, maxDur: 8 })
+  /**
+   * 按语音自动分句：在**选中的画面片段**上分析音量，按"有人说话的区间"切空白字幕段。
+   *
+   * ⚠️ 这不是语音识别。它只切**时间轴**，文字留空由用户填；
+   *    要文字请用 recognizeSubtitles（「AI 识别字幕」）。
+   *    两者共用同一套分句逻辑，所以"先分句再识别"和"直接识别"落点一致。
+   */
+  const autoSegmentSubtitles = useCallback(async () => {
+    const target = speechTargetOf()
+    if (!target || !target.url) {
+      toast.bad('先在时间线上选中一个画面片段（或把播放头停在它上面）')
+      return
+    }
+    toast('正在分析这一段的声音…')
+    const got = await collectSpeechPeaks(target)
+    if (!got.ok) {
+      toast.bad(got.error)
+      return
+    }
+
+    const segments = SUBTITLE.vadSegments(got.peaks, { secondsPerBucket: 0.1, minDur: 0.35, maxDur: 8 })
     if (!segments.length) {
       toast('这一段里没检测到说话声（可能没有人声，或全程音量一样平）')
       return
     }
     const cues = SUBTITLE.cuesFromSpeech(segments).map((cue) => ({
       start: target.start + cue.start,
-      end: Math.min(target.start + total, target.start + cue.end)
+      end: Math.min(target.start + got.total, target.start + cue.end)
     }))
     const { created } = appendSubtitleClips(cues, { labelPrefix: '分句' })
     toast.good(`已按语音切出 ${created} 段空白字幕 —— 点每一段填文字`)
     setSelection(null)
-  }, [appendSubtitleClips, playhead, selection, toast])
+  }, [appendSubtitleClips, collectSpeechPeaks, speechTargetOf, toast])
+
+  /**
+   * AI 识别字幕：把这一段里的说话内容转成带时间点的字幕。
+   *
+   * 三步，缺一不可：
+   *   ① 先查模型 —— **没装就当场把用户送到设置页**（2026-11-03 Jason 明确要求
+   *      "使用相关功能自动弹出设置的 AI 模型下载配置界面"）。不能只弹一句
+   *      "请先下载模型"再让他自己翻菜单：那等于告诉一个人"你需要一个东西"，
+   *      却不说在哪拿。
+   *   ② 用与「按语音分句」同一套包络切句，切出来的时间段才是真正的说话区间
+   *      （把整段音频丢给模型也能出字，但时间点只能按字数平均分 —— 那样字幕
+   *      与口型对不上，逐句校对时每一条都要手调）。
+   *   ③ 按句识别、按句落字幕。中间失败一句只丢那一句，其余照常。
+   *
+   * 判据读**消费端**：结束时数时间线上真的多出几条 done 的字幕片段（带文字），
+   * 而不是数"函数返回了几条"。
+   */
+  /**
+   * 档位清单：挂载时拉一次，每次识别之前再拉一次。
+   *
+   * 为什么每次识别前都拉：用户很可能刚在设置里装完「多语种」就回来点识别，
+   * 不刷新的话下拉里那一条永远是"（未安装）"—— 他会以为装失败了。
+   * 拉不到不报错：识别本身会给出更准确的原因（运行时缺失 / 模型缺失）。
+   */
+  const refreshSpeechModels = useCallback(async () => {
+    try {
+      const st = await speechStatus()
+      if (st && Array.isArray(st.models)) setSpeechModels(st.models)
+    } catch {
+      /* 平台层不可用（浏览器预览）：下拉为空，不影响其它功能 */
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshSpeechModels()
+  }, [refreshSpeechModels])
+
+  /** 选档位：内存 + localStorage（首屏缓存）。装没装由识别时再判一次，不在这里拦。 */
+  const pickSpeechModel = useCallback((id) => {
+    const next = String(id || '')
+    setSpeechModel(next)
+    try {
+      window.localStorage.setItem('yjai.speechModel', next)
+    } catch {
+      /* 隐私模式下写不了：只影响下次启动的默认值 */
+    }
+  }, [])
+
+  const recognizeSubtitles = useCallback(async () => {
+    const target = speechTargetOf()
+    if (!target || !target.url) {
+      toast.bad('先在时间线上选中一个画面片段（或把播放头停在它上面）')
+      return
+    }
+    if (!window.yjai?.speech?.transcribe) {
+      toast.bad('AI 识别字幕要桌面端（本机推理）')
+      return
+    }
+
+    const st = await speechStatus()
+    if (st && Array.isArray(st.models)) setSpeechModels(st.models)
+    const runtimeOk = Boolean(st && st.runtime && st.runtime.ok)
+    const anyModel = Boolean(st && Array.isArray(st.models) && st.models.some((row) => row.ready))
+    if (!runtimeOk || !anyModel) {
+      /* 焦点落在**最该先解决的那一项**：运行时没装就指向运行时，
+         运行时在、模型没装就指向推荐模型。指错了用户会点一个装完仍然不能用的东西。 */
+      setSettingsFocus(runtimeOk ? 'speech-paraformer' : 'speech-runtime')
+      setDialog('settings')
+      toast.bad(runtimeOk ? '还没装语音识别模型，装好就能识别' : '还没装语音识别运行时，装好就能识别')
+      return
+    }
+
+    /* 档位：用用户选的那一档；那一档没装就退回主进程给的默认档，并且**说出来**。
+       静默换档是最坏的一种：用户选了"多语种"，结果出来还是轻量的准确率，
+       他会归因为"这功能就这水平"，永远不知道是自己没装那 228MB。 */
+    const pickedOk = Boolean(speechModel) && st.models.some((row) => row.id === speechModel && row.ready)
+    const runModelId = pickedOk ? speechModel : st.defaultModel || 'speech-paraformer'
+    const runModelName = (st.models.find((row) => row.id === runModelId) || {}).name || runModelId
+
+    toast(
+      speechModel && !pickedOk
+        ? `选的那一档还没装，这次用「${runModelName}」识别`
+        : '正在分析这一段的声音…'
+    )
+    const got = await collectSpeechPeaks(target)
+    if (!got.ok) {
+      toast.bad(got.error)
+      return
+    }
+    const segments = SUBTITLE.vadSegments(got.peaks, { secondsPerBucket: 0.1, minDur: 0.35, maxDur: 8 })
+    if (!segments.length) {
+      toast('这一段里没检测到说话声（可能没有人声，或全程音量一样平）')
+      return
+    }
+    /* 与分句完全同一套：pad / 最短时长都在 cuesFromSpeech 里，识别结果直接复用这些时间点 */
+    const cues = SUBTITLE.cuesFromSpeech(segments)
+    const jobId = `sub-${Date.now().toString(36)}`
+    setSpeechJob({ busy: true, jobId, done: 0, total: cues.length, model: runModelId })
+
+    const res = await transcribeSpeech({
+      jobId,
+      url: target.url,
+      path: target.path || '',
+      offset: Number(target.offset) || 0,
+      duration: got.total,
+      modelId: runModelId,
+      segments: cues.map((cue) => ({ start: cue.start, end: cue.end }))
+    })
+    setSpeechJob(null)
+
+    if (!res || !res.ok) {
+      const reason = (res && res.reason) || 'crash'
+      if (reason === 'runtime-missing' || reason === 'model-missing') {
+        setSettingsFocus(reason === 'runtime-missing' ? 'speech-runtime' : runModelId)
+        setDialog('settings')
+      }
+      if (reason === 'canceled') {
+        toast('已取消识别')
+        return
+      }
+      toast.bad((res && res.error) || '识别失败')
+      return
+    }
+    if (!res.segments.length) {
+      toast(`这一段里没听出文字（${res.empty || 0} 句都没有内容）`)
+      return
+    }
+
+    const rows = res.segments.map((seg) => ({
+      start: target.start + seg.start,
+      end: Math.min(target.start + got.total, target.start + seg.end),
+      text: seg.text
+    }))
+    const { created, skipped } = appendSubtitleClips(rows, { labelPrefix: '识别' })
+    toast.good(
+      skipped > 0
+        ? `已识别 ${created} 条字幕（超过 500 条的 ${skipped} 条未写入）`
+        : `已识别 ${created} 条字幕 · 用时 ${(res.elapsed / 1000).toFixed(1)}s —— 点任意一条可改文字`
+    )
+    /* 播放头跳到第一条：不然识别完画面停在别处，用户看不出"字幕真的进来了" */
+    setPlayhead(rows[0].start)
+    setSelection(null)
+  }, [appendSubtitleClips, collectSpeechPeaks, speechTargetOf, toast, speechModel])
+
+  /* 选中片段。声明必须排在这一批回调**之前**：
+     配音回调的依赖数组里就有它，写在后面会让 React 在渲染时读到尚未初始化的 const
+     （ReferenceError: Cannot access 'selectedClip' before initialization）——
+     表现是整个 App 白屏，闸门那边只看到 .app 一直等不到。 */
+  const selectedClip = selection?.clipId ? clips.find((item) => item.id === selection.clipId) : null
+
+  /**
+   * 「AI 配音」：把一段文字读成人声，落成一条音频片段。
+   *
+   * 三个决定：
+   *   ① **落点**：选中字幕就贴在那条字幕的起点，否则落在播放头。配音十次有九次是
+   *      "给这一句配"，落到 0 秒等于让用户再手工拖一次。
+   *   ② **只传文字**：合成要加载 131MB 的音色包，那一层必须常驻主进程；
+   *      渲染层自己解码 PCM 等于每次生成都把模型搬一遍。
+   *   ③ **失败不吞**：`ttsJob.error` 同时进 toast 与面板底部 —— 面板可能不在当前页签，
+   *      只弹一个 toast 的话，用户切回去只看到一个又变回可点的按钮。
+   */
+  const speakTextToTrack = useCallback(
+    async ({ text, speed }) => {
+      const body = String(text || '').trim()
+      if (!body) {
+        toast('先写点要读的文字')
+        return
+      }
+      if (!window.yjai?.speech?.speak) {
+        toast.bad('配音要桌面端（本机合成，不上传文字）')
+        return
+      }
+
+      const st = await voiceStatus()
+      const runtimeOk = Boolean(st && st.runtime && st.runtime.ok)
+      const anyVoice = Boolean(st && Array.isArray(st.voices) && st.voices.some((row) => row.ready))
+      if (!runtimeOk || !anyVoice) {
+        setSettingsFocus(runtimeOk ? st.defaultVoice || 'speech-voice-zh' : 'speech-runtime')
+        setDialog('settings')
+        toast.bad(runtimeOk ? '还没装配音音色包，装好就能读' : '还没装语音运行时，装好就能读')
+        return
+      }
+
+      setTtsJob({ busy: true, error: '' })
+      let res = null
+      try {
+        res = await speakText({ text: body, speed, sid: 0, voiceId: st.defaultVoice || '' })
+      } catch (err) {
+        res = { ok: false, error: (err && err.message) || '合成失败' }
+      }
+      if (!res || !res.ok) {
+        const msg = (res && res.error) || '合成失败'
+        setTtsJob({ busy: false, error: msg })
+        toast.bad(msg)
+        return
+      }
+
+      /* 让主进程登记这个文件（拿到 yjai-media 地址与真实时长）。
+         直接把绝对路径塞进片段不行：预览拿到的 src 不在素材白名单里，加载不出来。 */
+      let info = null
+      try {
+        const rows = await window.yjai.media.stat([res.path])
+        info = Array.isArray(rows) ? rows[0] : null
+      } catch {
+        info = null
+      }
+      const duration = Math.max(0.2, Number((info && info.duration) || res.duration) || 0)
+      const start =
+        selectedClip && selectedClip.track === 'text'
+          ? Math.max(0, Number(selectedClip.start) || 0)
+          : Math.max(0, Number(playhead) || 0)
+      const clip = {
+        id: nextId('clip'),
+        track: 'audio',
+        assetId: '',
+        name: `配音 ${body.slice(0, 10)}`,
+        url: (info && info.url) || '',
+        path: res.path,
+        kind: 'audio',
+        text: '',
+        start,
+        duration,
+        offset: 0,
+        sourceDuration: duration
+      }
+      commitClips((list) => [...list, clip])
+      setPlayhead(start)
+      setTtsJob({ busy: false, error: '' })
+      toast.good(`已生成配音 · ${duration.toFixed(1)} 秒（${res.voice ? res.voice.name : '本机音色'}）`)
+    },
+    [commitClips, playhead, selectedClip, toast]
+  )
+
+
+
+  /**
+   * 识别进度：主进程按句推 `{ jobId, done, total }`。
+   *
+   * 只认自己那个 jobId —— 连点两次会出现两个任务同时在跑，
+   * 不按 id 过滤的话进度条会来回跳（一会儿 3/40、一会儿 1/12）。
+   */
+  useEffect(
+    () =>
+      onSpeechProgress((progress) => {
+        if (!progress || !progress.jobId) return
+        setSpeechJob((current) =>
+          current && current.jobId === progress.jobId
+            ? { ...current, done: Number(progress.done) || 0, total: Number(progress.total) || current.total }
+            : current
+        )
+      }),
+    []
+  )
 
   /**
    * 「智能剪辑 → 平均分段」：把视频轨第一段按当前时长平均切成 n 段。
+   *
    * 每段的 offset 必须跟着往后走 —— 否则切完每一段都从源文件头开始播，
    * 画面会在接缝处跳回去（这正是 trim.js 里那条「剪左端时 offset 必须跟着走」的不变量）。
    */
@@ -2917,7 +3248,18 @@ export default function App() {
     return assets
   }, [assets, currentNode])
 
-  const selectedClip = selection?.clipId ? clips.find((item) => item.id === selection.clipId) : null
+  /**
+   * 右栏「字幕轨」页签什么时候出现 —— **只在字幕相关操作时**。
+   *
+   * 2026-11-02 Jason：先「字幕轨单独放到右侧窗口信息标签后面」，再补「只有在添加编辑字幕时
+   * 标签才显示，不是有字幕时」。所以判据不是"轨上有没有片段"，而是**用户此刻在不在做字幕的事**：
+   *   · 中栏停在「文字」或「字幕」页（正在加字幕/换样式）；
+   *   · 或者选中的就是一条字幕片段（正在改它）。
+   * 这两种情况下这枚页签才有用；在「素材/音频/滤镜」页上摆着它，
+   * 点进去只能看一份与手上工作无关的清单 —— 那就是占位。
+   */
+  const captionTabVisible =
+    wbTab === 'text' || wbTab === 'subtitle' || selectedClip?.track === 'text'
   const selectedAsset = selection?.assetId ? assets.find((item) => item.id === selection.assetId) : null
 
   /**
@@ -2935,8 +3277,23 @@ export default function App() {
    */
   const [inspTab, setInspTab] = useState('info')
   useEffect(() => {
-    setInspTab('info')
+    /**
+     * 换选中目标时回「信息」，否则"上一条点过调整、下一条打开还停在调整"，
+     * 而新目标可能根本没有那一枚（字幕轨只有「字幕」）。
+     *
+     * ⚠️ 唯一的例外是**轨级**的「字幕轨」：它不是某个片段的属性页，而是整条轨的清单。
+     *    在清单里点一行会把那一段选中（于是 `selectedClip?.id` 变了），
+     *    如果这时也回「信息」，用户刚点开一句字幕就被踢走 —— 而那正是要用它的时刻。
+     */
+    setInspTab((tab) => (tab === CAPTION_TAB.key ? tab : 'info'))
   }, [selectedClip?.id])
+
+  /* 离开字幕相关操作（切到素材页、或选中了非字幕片段）⇒ 那枚页签随之消失，
+     选中值必须跟着落回「信息」。否则右栏会停在一屏**没有入口的页面**：
+     页签不在了，内容还在，用户只能靠切别的页签逃出来。 */
+  useEffect(() => {
+    if (!captionTabVisible) setInspTab((tab) => (tab === CAPTION_TAB.key ? 'info' : tab))
+  }, [captionTabVisible])
 
   /**
    * 播放头所在的片段（按轨道挑一个"该显示什么"的）。
@@ -3582,10 +3939,20 @@ export default function App() {
             onPatchClip={patchClip}
             activeClip={clipAtPlayhead}
             onAddTextClip={addTextClip}
-            /* 字幕文件的进出与语音分句（只挂在「字幕 → 字幕模板」页显示） */
+            /* 字幕文件的进出、语音分句与 AI 识别（只挂在「字幕 → 字幕模板」页显示）。
+               `speechJob` 让按钮在识别中变成进度条，而不是再点一次又起一个任务。 */
             onImportSubtitle={importSubtitle}
             onExportSubtitle={exportSubtitle}
             onAutoSegment={autoSegmentSubtitles}
+            onRecognizeSubtitles={recognizeSubtitles}
+            speechJob={speechJob}
+            /* 识别档位（轻量 / 多语种）：清单与选中项都在 App，面板只负责显示与回调 */
+            speechModels={speechModels}
+            speechModel={speechModel}
+            onPickSpeechModel={pickSpeechModel}
+            /* AI 配音：本机合成，落成音频片段；`ttsJob` 让按钮在合成中变成"合成中" */
+            onSpeakText={speakTextToTrack}
+            ttsJob={ttsJob}
             onAddToTimeline={addClipFromAsset}
             /* 本地工具（如「提取音频」）要把产物放回素材库 */
             onAddAsset={addAsset}
@@ -3686,12 +4053,18 @@ export default function App() {
               </button>
             </div>
             <div className="wb-colhead info">
-              {/* 一排同级页签：首枚固定是「信息」，后面跟 `inspectorTabsFor(片段)`
-                  （画面 / 音频 / 变速 / 调整；字幕片段则是一枚「字幕」）。
+              {/* 一排同级页签：首枚固定是「信息」，其次**只在字幕相关操作时**出现轨级的
+                  「字幕轨」（在「文字/字幕」页，或选中了一条字幕），
+                  后面跟 `inspectorTabsFor(片段)`（画面 / 音频 / 变速 / 调整；字幕片段则是一枚「字幕」）。
+                  判据是"此刻在不在做字幕的事"，不是"轨上有没有字幕"（2026-11-02 Jason）。
                   两处钩子都挂上：data-insp-tab 是"这一排"的正名，
                   data-info-tab 留给"信息/字幕"那两条专门断言。 */}
               <div className="wb-coltabs" role="tablist" aria-label="属性栏">
-                {[{ key: 'info', label: '信息' }, ...inspectorTabsFor(selectedClip)].map(({ key, label }) => (
+                {[
+                  { key: 'info', label: '信息' },
+                  ...(captionTabVisible ? [CAPTION_TAB] : []),
+                  ...inspectorTabsFor(selectedClip)
+                ].map(({ key, label }) => (
                   <button
                     key={key}
                     type="button"
@@ -3772,6 +4145,9 @@ export default function App() {
               saveLocation={info?.userData ? `${info.userData}\\drafts` : ''}
               aspect={aspect}
               onAspect={(next) => setAspect(normalizeAspect(next))}
+              /* 草稿参数里的「分辨率」要显示**这个项目**的交付尺寸，
+                 不是写死的 1920×1080：选了 4K 的草稿在信息面板里必须写 3840×2160 */
+              resolution={resolution}
               timelineName={timelineName}
               onTimelineNameChange={changeTimelineName}
               inspTab={inspTab}
@@ -3783,6 +4159,14 @@ export default function App() {
               onSwitchMulticamAngle={switchMulticamAngle}
               onMulticamAudio={changeMulticamAudio}
               onUngroupMulticam={ungroupMulticamClip}
+              /* 「字幕轨」页：点一行 → 选中这一段 + 播放头落到它的起点。
+                 两个动作都在 App 落地（选中集合、播放头、撤销历史都归这里管），
+                 右栏只负责画清单。 */
+              onPickClip={(item) => {
+                selectClip(item)
+                setPlayhead(item.start)
+              }}
+              onClearTextTrack={clearTextTrack}
             />
 
             {/* 三根列宽分隔条，各占一条缝列（grid 列 2/4/6） */}
@@ -3951,6 +4335,10 @@ export default function App() {
                 /* 成片按预览里选的那个比例裁：少传它，导出就一律 16:9 ——
                    "预览切了 1:1、导出来还是横的"，且两边单独看都没错。 */
                 aspect={aspect}
+                /* 分辨率档是草稿属性：面板只是它的编辑入口（受控），
+                   否则关面板再打开就回 1080p，而用户以为一直选着 4K。 */
+                resolution={resolution}
+                onResolution={(next) => setResolution(readResolution(next).id)}
                 /* 时间区域：「只导出这一段」用。传的是**当前生效**的区间
                    （半开状态传 null ⇒ 面板不会出现那个开关）。 */
                 range={liveRegion()}
@@ -3987,7 +4375,18 @@ export default function App() {
       {dialog === 'settings' ? (
         <SettingsDialog
           info={info}
-          onClose={() => setDialog(null)}
+          onClose={() => {
+            setDialog(null)
+            /* 焦点是一次性的：不清理的话，下次从菜单进设置会莫名又高亮某个模型 */
+            setSettingsFocus(null)
+            /* 关掉设置就把模型清单重拉一遍：用户很可能刚在里面下了「多语种」，
+               不刷新的话字幕页那枚下拉到下次重启前都写着「（未安装）」——
+               他会以为装失败了。 */
+            refreshSpeechModels()
+          }}
+          /* 从功能触发的"去装模型"落点：直接开在 AI 模型页，并高亮缺的那一项 */
+          initialTab={settingsFocus ? 'models' : undefined}
+          focusModel={settingsFocus || ''}
           keymap={keymap}
           onKeymapChange={changeKeymap}
           /* 自定义字体：字幕检查器的字体下拉与「导入字体」按钮 */

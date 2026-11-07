@@ -40,7 +40,10 @@ const EDITOR_SIZE = [1920, 1032]
 /** 首页左侧导航：开源版只有这两项（创作视频 / 最近草稿） */
 const HOME_NAV = [
   { key: 'create', label: '创作视频' },
-  { key: 'drafts', label: '最近草稿' }
+  { key: 'drafts', label: '最近草稿' },
+  /* 「无线画布」也走同一条断言：切过去主区必须换（那一屏是内嵌网页，
+     内容变化最直观），切回来必须回到原样 —— 顺带证明它不会把用户留在网页里。 */
+  { key: 'canvas', label: '无线画布' }
 ]
 
 /**
@@ -59,7 +62,10 @@ const TABS = [
       'local', 'record', 'preset',
       /* ⚠️ 子项必须排在**父卡片之后**：左栏是手风琴，子项只在父卡片展开时才渲染，
          先点子项会 `locator` 超时（等不到一个还不存在的节点）。 */
-      'stock', 'stock-bg', 'stock-video', 'stock-image', 'stock-anim', 'smart'
+      'stock', 'stock-bg', 'stock-video', 'stock-image', 'stock-anim',
+      /* 智能抠像：独立的素材页入口（不是素材库的子项，也不在「智能剪辑」里）。
+         排在「智能剪辑」之前 —— 它作用在单个素材上，比整轨的智能剪辑更靠前。 */
+      'matte', 'smart'
     ]
   },
   {

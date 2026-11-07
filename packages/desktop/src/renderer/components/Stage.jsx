@@ -7,8 +7,23 @@ import {
   IconSkipForward
 } from '../icons.jsx'
 import { FRAME_RATE } from '../keymap.js'
-import { frameEffectClass, frameEffectDuration, overlayEffectClass } from '../frameEffects.js'
+import { frameEffectClass, frameEffectDuration, frameEffectStyle, overlayEffectClass, isPackEffect, isWarpEffect, packEffectId } from '../frameEffects.js'
+import { useFxPacks } from '../fxpack.js'
+
+/**
+ * 鱼眼位移贴图（`tools/gen-fisheye-disp.py` 生成）。
+ *
+ * ⚠️ 走 glob + `?url` 而不是 `import x from '…png'`：与缩略图（materials.js）同一套写法，
+ *    构建后拿到的是一条真实资源 URL，喂给 `feImage` 的 href 即可。
+ * ⚠️ 贴图里存的位移量是**相对画布尺寸**的比例，所以一张图能配所有画幅比例
+ *    （16:9 / 1:1 / 9:16 都直接用），不用按尺寸重新生成。
+ */
+const FISHEYE_DISP =
+  import.meta.glob('../assets/fx/fisheye-disp.png', { eager: true, query: '?url', import: 'default' })[
+    '../assets/fx/fisheye-disp.png'
+  ] || ''
 import { cssFilterFor, filterDef, isNoopFilter } from '../looks.js'
+import { geoToCss } from '../../shared/transitionMask.js'
 import { textStyleCss } from '../textStyles.js'
 import { readTextAnim } from '../../shared/textAnim.js'
 import { pipBoxCss } from '../pip.js'
@@ -703,6 +718,8 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
 
   /* 转场层：后一段"正在盖过来"，铺满画布并自行裁剪（clip-path / transform 都要靠它） */
   if (layer.xfade) {
+    /* 遮罩只算一次：data-xfade-map 与 style 用的是同一份结果 */
+    const xfadeCss = layer.xfade.geo ? geoToCss(layer.xfade.geo, layer.xfade.progress) : null
     return (
       <span
         className="canvas-xfade"
@@ -725,10 +742,13 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
         data-hsl={hslOnLayer ? '1' : ''}
         data-xfade={layer.xfade.key}
         /* exact / approx：CSS 能一比一表达哪些、近似表达哪些，如实标出来，
-           免得后来有人把"近似"当成"已经和参考一模一样" */
-        data-xfade-map={EXACT_XFADE.includes(layer.xfade.key) ? 'exact' : 'approx'}
+           免得后来有人把"近似"当成"已经和参考一模一样"。
+           geo 驱动的转场由 geoToCss 自己报"能不能几何等价"，原生 58 个走白名单。 */
+        data-xfade-map={
+          xfadeCss ? (xfadeCss.approx ? 'approx' : 'exact') : EXACT_XFADE.includes(layer.xfade.key) ? 'exact' : 'approx'
+        }
         data-xfade-p={Number(layer.xfade.progress).toFixed(3)}
-        style={{ ...xfadeStyle(layer.xfade.key, layer.xfade.progress), ...(layerFilter ? { filter: layerFilter } : null) }}
+        style={{ ...(xfadeCss ? xfadeCss.style : xfadeStyle(layer.xfade.key, layer.xfade.progress)), ...(layerFilter ? { filter: layerFilter } : null) }}
       >
         {media}
       </span>
@@ -775,9 +795,17 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
  * 差异明确记在 data-xfade-map 上（exact / approx），闸门按这个属性断言，
  * 免得以后有人把它当成"已经和参考一模一样"。
  */
-function xfadeStyle(key, progress) {
+function xfadeStyle(key, progress, geo) {
+  /* geo 驱动的转场：遮罩由 shared/transitionMask 用与导出侧同一组数字算出来，
+     预览与成片是**同一条式子**（不是"看着差不多"）。 */
+  if (geo) return geoToCss(geo, progress).style
   const p = Math.min(1, Math.max(0, Number(progress) || 0))
+  const pct = (value) => `${(Number(value) || 0).toFixed(2)}%`
+  /* 剩余比例：0 → 还完全看不见后一段，1 → 后一段已铺满 */
+  const left = (1 - p) * 100
+
   switch (key) {
+    /* ── 叠化族：只能靠不透明度近似 ── */
     case 'dissolve': {
       const mask = 'radial-gradient(circle, #000 calc(var(--dp) * 1px), transparent 0)'
       return {
@@ -788,25 +816,166 @@ function xfadeStyle(key, progress) {
         '--dp': (p * 2.35).toFixed(3)
       }
     }
-    /* 从右往左推开：露出区域从左边界往右长，视觉上等于"后一段从右边压过来" */
+    /* 闪黑 / 闪白 / 灰场 / 快闪 / 慢融：中段先暗后亮，CSS 里用纯不透明度近似 */
+    case 'fadeblack':
+    case 'fadewhite':
+    case 'fadegrays':
+    case 'fadefast':
+    case 'fadeslow':
+    case 'fade':
+      return { opacity: p.toFixed(4) }
+
+    /* ── 推移族：整层缩放 + 淡入 ── */
+    case 'distance':
+      return { opacity: p.toFixed(4), transform: `scale(${(1.25 - 0.25 * p).toFixed(4)})` }
+    case 'zoomin':
+      return { opacity: p.toFixed(4), transform: `scale(${(1.3 - 0.3 * p).toFixed(4)})` }
+    case 'squeezeh':
+      return { transform: `scaleX(${p.toFixed(4)})` }
+    case 'squeezev':
+      return { transform: `scaleY(${p.toFixed(4)})` }
+
+    /* ── 模糊族：模糊半径随进度收回 ── */
+    case 'hblur':
+    case 'radial':
+      return { opacity: p.toFixed(4), filter: `blur(${((1 - p) * 9).toFixed(2)}px)` }
+    case 'pixelize':
+      /* 浏览器没有马赛克滤镜，用"缩小再放大"的块状感近似 */
+      return { opacity: p.toFixed(4), transform: `scale(${(1 + (1 - p) * 0.12).toFixed(4)})` }
+
+    /* ── 擦除族：硬边界，clip-path 就是几何等价 ── */
     case 'wipeleft':
-      return { clipPath: `inset(0 0 0 ${((1 - p) * 100).toFixed(2)}%)` }
-    /* 后一段整体从右侧滑入盖住前一段 */
+    case 'coverleft':
+      return { clipPath: `inset(0 0 0 ${pct(left)})` }
+    case 'wiperight':
+    case 'coverright':
+      return { clipPath: `inset(0 ${pct(left)} 0 0)` }
+    case 'wipeup':
+    case 'coverup':
+      return { clipPath: `inset(${pct(left)} 0 0 0)` }
+    case 'wipedown':
+    case 'coverdown':
+      return { clipPath: `inset(0 0 ${pct(left)} 0)` }
+    /* 揭示：后一段从**对侧**露出（前一段正在退开） */
+    case 'revealleft':
+      return { clipPath: `inset(0 0 0 ${pct(left)})` }
+    case 'revealright':
+      return { clipPath: `inset(0 ${pct(left)} 0 0)` }
+    case 'revealup':
+      return { clipPath: `inset(${pct(left)} 0 0 0)` }
+    case 'revealdown':
+      return { clipPath: `inset(0 0 ${pct(left)} 0)` }
+
+    /* 斜擦：三角形沿对角线长满 */
+    case 'wipetl':
+    case 'diagtl':
+      return { clipPath: `polygon(0 0, ${pct(p * 100)} 0, 0 ${pct(p * 100)})` }
+    case 'wipetr':
+    case 'diagtr':
+      return { clipPath: `polygon(100% 0, ${pct(100 - p * 100)} 0, 100% ${pct(p * 100)})` }
+    case 'wipebl':
+    case 'diagbl':
+      return { clipPath: `polygon(0 100%, ${pct(p * 100)} 100%, 0 ${pct(100 - p * 100)})` }
+    case 'wipebr':
+    case 'diagbr':
+      return { clipPath: `polygon(100% 100%, ${pct(100 - p * 100)} 100%, 100% ${pct(100 - p * 100)})` }
+
+    /* ── 滑动族：整层位移 ── */
     case 'slideleft':
-      return { transform: `translateX(${((1 - p) * 100).toFixed(2)}%)` }
-    /* 从下方滑上来，竖屏转场 */
+      return { transform: `translateX(${pct(left)})` }
+    case 'slideright':
+      return { transform: `translateX(-${pct(left)})` }
     case 'slideup':
-      return { transform: `translateY(${((1 - p) * 100).toFixed(2)}%)` }
+      return { transform: `translateY(${pct(left)})` }
+    case 'slidedown':
+      return { transform: `translateY(-${pct(left)})` }
+
+    /* 柔推：位移 + 一条软边遮罩，边缘不是硬切 */
+    case 'smoothleft':
+    case 'smoothright':
+    case 'smoothup':
+    case 'smoothdown': {
+      const angle = key === 'smoothleft' ? 'to left' : key === 'smoothright' ? 'to right' : key === 'smoothup' ? 'to top' : 'to bottom'
+      /* 软边宽度 18%：硬边会让它和 wipe 看起来一样，柔推的区别就在这条过渡带 */
+      const edge = 18
+      const stop = p * (100 + edge) - edge
+      const mask = `linear-gradient(${angle}, #000 ${pct(stop)}, transparent ${pct(stop + edge)})`
+      return { WebkitMaskImage: mask, maskImage: mask }
+    }
+
+    /* ── 形状族 ── */
     case 'circleopen':
       return { clipPath: `circle(${(p * 75).toFixed(2)}% at 50% 50%)` }
-    case 'fade':
+    case 'circlecrop':
+      return { clipPath: `circle(${(p * 75).toFixed(2)}% at 50% 50%)`, transform: `scale(${(1.15 - 0.15 * p).toFixed(4)})` }
+    case 'circleclose': {
+      /* 外圈先铺满，中间的洞收成 0：与 circleopen 正好相反 */
+      const mask = `radial-gradient(circle, transparent ${pct(p * 75)}, #000 ${pct(p * 75)})`
+      return { WebkitMaskImage: mask, maskImage: mask }
+    }
+    case 'rectcrop':
+      return { clipPath: `inset(${pct(left / 2)} ${pct(left / 2)})` }
+    case 'vertopen':
+      return { clipPath: `inset(${pct(left / 2)} 0 ${pct(left / 2)} 0)` }
+    case 'horzopen':
+      return { clipPath: `inset(0 ${pct(left / 2)} 0 ${pct(left / 2)})` }
+    case 'vertclose': {
+      /* 上下两条带向中间合拢：polygon 画"蝴蝶结"，中间那条缝随进度闭合 */
+      const h = left / 2
+      return {
+        clipPath: `polygon(0 0, 100% 0, 100% ${pct(h)}, 0 ${pct(h)}, 0 ${pct(100 - h)}, 100% ${pct(100 - h)}, 100% 100%, 0 100%)`
+      }
+    }
+    case 'horzclose': {
+      const w = left / 2
+      return {
+        clipPath: `polygon(0 0, ${pct(w)} 0, ${pct(w)} 100%, 0 100%, 0 0, ${pct(100 - w)} 0, ${pct(100 - w)} 100%, 100% 100%, 100% 0)`
+      }
+    }
+
+    /* ── 切片 / 风扫：条纹遮罩 + 沿轴推进 ── */
+    case 'hlslice':
+    case 'hrslice':
+    case 'vuslice':
+    case 'vdslice':
+    case 'hlwind':
+    case 'hrwind':
+    case 'vuwind':
+    case 'vdwind': {
+      const vertical = key.startsWith('vu') || key.startsWith('vd') || key === 'vuslice' || key === 'vdslice'
+      const reversed = key.startsWith('hr') || key.startsWith('vd')
+      const stripes = vertical
+        ? 'repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 12px)'
+        : 'repeating-linear-gradient(0deg, #000 0 6px, transparent 6px 12px)'
+      const sweep = vertical
+        ? `inset(0 0 0 ${pct(reversed ? left : 0)})`
+        : `inset(${pct(reversed ? left : 0)} 0 0 0)`
+      return { WebkitMaskImage: stripes, maskImage: stripes, clipPath: sweep, opacity: Math.min(1, 0.35 + p).toFixed(4) }
+    }
+
     default:
       return { opacity: p.toFixed(4) }
   }
 }
 
-/** CSS 能一比一表达的转场只有 fade；其余都是"最接近的一种"，如实标出来 */
-const EXACT_XFADE = ['fade', 'wipeleft', 'slideleft', 'slideup', 'circleopen']
+/**
+ * CSS 能**几何等价**表达的转场。
+ *
+ * 判据是"边界形状是否一致"，不是"看起来像"：
+ *   · fade / wipe* / slide* / diag* / 形状族 / squeeze / zoomin 都能一比一；
+ *   · 叠化、模糊、像素化、切片风扫只能近似（浏览器没有等价滤镜），
+ *     一律标 approx，闸门按 data-xfade-map 断言 —— 免得以后有人把近似当一样。
+ */
+const EXACT_XFADE = [
+  'fade',
+  'wipeleft', 'wiperight', 'wipeup', 'wipedown',
+  'wipetl', 'wipetr', 'wipebl', 'wipebr',
+  'slideleft', 'slideright', 'slideup', 'slidedown',
+  'diagtl', 'diagtr', 'diagbl', 'diagbr',
+  'circleopen', 'rectcrop',
+  'vertopen', 'horzopen', 'vertclose', 'horzclose',
+  'squeezeh', 'squeezev', 'zoomin', 'circlecrop'
+]
 
 /**
  * 画中画自己的 <video>。
@@ -915,6 +1084,10 @@ export default function Stage({
   /** 比例 chip 的展开态。点外面或 Esc 收起 —— 展开着不关会盖住画布下沿 */
   const [aspectOpen, setAspectOpen] = useState(false)
   const aspectWrapRef = useRef(null)
+  /* 特效素材包：pack 类特效的雪碧图 URL / 帧数 / 帧率都从这里来。
+     ⚠️ 一定要在组件顶层调用 —— 素材是异步问主进程要的，拿到后会触发一次重渲染；
+        写在 JSX 里的话，第一次渲染是"没素材"，之后永远停在那个状态（画面不动）。 */
+  const fxPacks = useFxPacks()
 
   useEffect(() => {
     if (!aspectOpen) return undefined
@@ -1004,6 +1177,59 @@ export default function Stage({
   const contentRoles = [frameEffectClass(frameFx)].filter(Boolean)
   const frameClass = 'canvas-frame'
   const contentClass = ['canvas-content', ...contentRoles].join(' ')
+
+  /**
+   * 特效参数 → 内联 CSS 变量（真源 shared/fxParams.json）。
+   *
+   * 为什么内联而不是给每个参数组合写一条样式：特效页 267 个去重名字，每族最多 320 个
+   * 档位组合 —— 写成 CSS 规则就是上千条，而且加一档参数要手写一次。走变量后
+   * styles.css 里一族只有**一条**规则，参数在这里给。
+   *
+   * ⚠️ 变量同时挂到 `.canvas-content`（transform 类：抖/缩的幅度与节奏）与
+   *    `.canvas-fx`（overlay 类：颜色/强度/扩散/位置）。挂错一处的表现是
+   *    "参数选了但画面完全一样"，因为 CSS 里 `var()` 落在兜底值上，不报错。
+   */
+  const fxVars = frameEffectStyle(frameFx)
+
+  /**
+   * 素材类特效的播放参数。
+   *
+   * 雪碧图是"全部帧横向拼成一张"，所以 `background-size` 要放大到 N 倍宽，
+   * `background-position` 从 0% 走到 100% 正好是最后一帧（百分比是按
+   * 「容器宽 − 图宽」算的，因此 100% 对应位移 (N−1) 个容器宽）。
+   * 配 `steps(N)` ⇒ 每帧停留 1/N 的时长，一格一格跳，不会糊成渐变。
+   *
+   * ⚠️ `steps()` 的数字用**内联**而不是 CSS 变量：`steps(var(--n))` 在部分
+   *    Chromium 版本上要重新解析自定义属性，写成变量时动画会退化成 1 帧。
+   *    内联值优先级最高，也就顺带把 CSS 里那条通用规则的数字让给了运行时。
+   *
+   * ⚠️ 没有素材（包没装/被删）时这一层**不渲染**：渲染一个空背景的覆盖层等于
+   *    让用户以为"特效加了但看不见"。缺素材由特效页的卡片明确标出来。
+   */
+  const fxPackMeta = isPackEffect(frameFx)
+    ? (fxPacks.effects && fxPacks.effects[packEffectId(frameFx)]) || null
+    : null
+  const fxLayerStyle = fxPackMeta
+    ? {
+        animationDuration: `${(fxPackMeta.frames / Math.max(1, fxPackMeta.fps)).toFixed(3)}s`,
+        animationTimingFunction: `steps(${fxPackMeta.frames})`,
+        backgroundImage: `url("${fxPackMeta.sheetUrl}")`,
+        backgroundSize: `${fxPackMeta.frames * 100}% 100%`
+      }
+    : { animationDuration: frameEffectDuration(frameFx) }
+  const fxLayerVisible = Boolean(overlayEffectClass(frameFx)) && (!isPackEffect(frameFx) || Boolean(fxPackMeta))
+
+  /**
+   * 整幅重映射（鱼眼）：挂在 `.canvas-content` 的 `filter` 上。
+   *
+   * ⚠️ 为什么不是挂在 `.canvas-frame`：画框上有圆角、描边、外阴影，
+   *    一起做位移映射会让"框"跟着变形 —— 用户看到的是播放器歪了，不是镜头畸变了。
+   *    挂在内容层才是"这一帧的画面被镜头折了一下"。
+   * ⚠️ `.canvas-content` 的 `filter` 目前是空的（调色挂在每个 layer 上，见 MediaLayer），
+   *    所以这里独占它，不会顶掉任何东西。将来若有人往这一层加 filter，
+   *    必须写成 `url(#yjai-fisheye) <其它函数>`，不能整条覆盖。
+   */
+  const contentWarpStyle = isWarpEffect(frameFx) && FISHEYE_DISP ? { filter: 'url(#yjai-fisheye)' } : undefined
 
   /**
    * 画布宽高比。
@@ -1116,7 +1342,45 @@ export default function Stage({
             {/* 内容层：画面 / 转场 / 画中画 / 字幕 / 特效叠层全部装在这里。
                 transform 类画面特效挂这一层（见 contentClass 的说明），
                 画框本身不动 —— 与成片一致（成片里没有画框）。 */}
-            <div className={contentClass} data-fx-layer="content">
+            <div className={contentClass} data-fx-layer="content" style={{ ...fxVars, ...contentWarpStyle }}>
+              {/* 鱼眼滤镜的定义：只有选中这类特效时才挂，避免每帧都多一个 SVG 节点。
+                  ⚠️ `color-interpolation-filters="sRGB"` 必须写：默认的 linearRGB
+                     会让位移后整幅画面明显发灰（滤镜链里做色彩空间转换的经典坑）。
+                  ⚠️ `primitiveUnits="objectBoundingBox"` 让 feImage 的 1×1 覆盖整个画布、
+                     也让 scale 按画布比例解释 —— 否则换个画幅比例畸变幅度就变了。 */}
+              {isWarpEffect(frameFx) && FISHEYE_DISP ? (
+                <svg className="canvas-fx-defs" aria-hidden="true" width="0" height="0">
+                  <defs>
+                    <filter
+                      id="yjai-fisheye"
+                      x="-10%"
+                      y="-10%"
+                      width="120%"
+                      height="120%"
+                      filterUnits="objectBoundingBox"
+                      primitiveUnits="objectBoundingBox"
+                      colorInterpolationFilters="sRGB"
+                    >
+                      <feImage
+                        href={FISHEYE_DISP}
+                        x="0"
+                        y="0"
+                        width="1"
+                        height="1"
+                        preserveAspectRatio="none"
+                        result="dispmap"
+                      />
+                      <feDisplacementMap
+                        in="SourceGraphic"
+                        in2="dispmap"
+                        scale="0.25"
+                        xChannelSelector="R"
+                        yChannelSelector="G"
+                      />
+                    </filter>
+                  </defs>
+                </svg>
+              ) : null}
 
             {/* 画面层：底 → 顶（顺序由 composite.js 排好）。
                 ⚠️ key 必须是**片段 id** —— 同一个元素跟着同一个片段走，
@@ -1161,12 +1425,15 @@ export default function Stage({
             ) : null}
 
             {/* 画面特效的覆盖层：闪光/故障/扫描线/漏光/暗角都画在这一层，
-                不去动 .canvas-frame 的 filter（那上面挂着调色，CSS 动画会把它顶掉） */}
-            {overlayEffectClass(frameFx) ? (
+                不去动 .canvas-frame 的 filter（那上面挂着调色，CSS 动画会把它顶掉）。
+                素材类（pack）也走这层，只是像素来自素材包的雪碧图。 */}
+            {fxLayerVisible ? (
               <span
                 className={`canvas-fx ${overlayEffectClass(frameFx)}`}
                 data-fx={frameFx}
-                style={{ animationDuration: frameEffectDuration(frameFx) }}
+                data-fx-kind={isPackEffect(frameFx) ? 'pack' : 'overlay'}
+                data-fx-frames={fxPackMeta ? String(fxPackMeta.frames) : undefined}
+                style={{ ...fxVars, ...fxLayerStyle }}
               />
             ) : null}
 

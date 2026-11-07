@@ -16,14 +16,30 @@ import {
   IconTransition, IconFilter, IconWand, IconText, IconCaption, IconMusic, IconLayers
 } from '../icons.jsx'
 import { isDesktop } from '../platform.js'
+import { appLinkOf } from '../../shared/appLink.js'
+import WebPane from './WebPane.jsx'
 // 真 logo：由 tools/extract-ico-frame.mjs 从仓库根 ico/256X256.ico 解出。
 import logoUrl from '../assets/logo-256.png'
 import '../home.css'
 
-/** 侧栏导航 */
+/**
+ * 侧栏导航。
+ *
+ * `page` 决定右侧主区显示哪一屏：
+ *   · `home`   —— 创作首页（两个大卡 + 工具行 + 最近草稿），默认屏
+ *   · `drafts` —— 最近草稿列表
+ *   · `canvas` —— 内嵌的在线画布（见 WebPane.jsx）
+ * 前两项是本地的、第三项是网页，但对用户都是"左栏一项 → 右边换一屏"，
+ * 所以放在同一条导航里，而不是单独一颗按钮。
+ *
+ * ⚠️ 「无线画布」的地址来自 shared/appLink.js（唯一的真源）。
+ *    地址不可用（空/非法）时**不渲染**这一项 —— 留一颗点了没反应的按钮
+ *    比没有入口更像故障。
+ */
 const NAV = [
   { key: 'create', label: '创作视频', Icon: IconCreateVideo, page: 'home' },
-  { key: 'drafts', label: '最近草稿', Icon: IconDraft, page: 'drafts' }
+  { key: 'drafts', label: '最近草稿', Icon: IconDraft, page: 'drafts' },
+  { key: 'canvas', label: '无线画布', Icon: IconGridView, page: 'canvas' }
 ]
 
 /**
@@ -105,10 +121,16 @@ export default function Home({
   const [nav, setNav] = useState('create')
   const bridge = isDesktop && typeof window !== 'undefined' ? window.yjai : null
 
+  /* 在线画布的地址（唯一真源）。拿不到就不渲染这一项 —— 见 NAV 的注释。 */
+  const canvasLink = appLinkOf()
+  const navItems = canvasLink ? NAV : NAV.filter((item) => item.page !== 'canvas')
+
   const pickNav = (item) => {
     setNav(item.key)
-    if (item.page === 'home') return
-    onNavigate?.(item)
+    /* 三屏都在首页内部切换（创作 / 草稿 / 画布），只有"去剪辑器"才需要上报。
+       以前是按 `page === 'home'` 判的，新增 canvas 后会被当成未知入口，
+       弹一句「还没有可用的入口」—— 判定口径改成"要不要进剪辑器"。 */
+    if (item.enterEditor) onNavigate?.(item)
   }
 
   const fmtTime = (iso) => {
@@ -138,11 +160,12 @@ export default function Home({
         </div>
 
         <nav className="home-nav">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.key}
               className="home-nav-item"
               data-active={nav === item.key ? 'true' : 'false'}
+              data-home-nav={item.key}
               type="button"
               onClick={() => pickNav(item)}
             >
@@ -180,121 +203,130 @@ export default function Home({
           ) : null}
         </header>
 
-        <div className="home-body">
-          {nav === 'drafts' ? (
-            <DraftsPage
-              drafts={drafts}
-              onOpenDraft={onOpenDraft}
-              onDeleteDraft={onDeleteDraft}
-              onNewDraft={onNewDraft}
-              fmtTime={fmtTime}
-              fmtDuration={fmtDuration}
-            />
-          ) : (
-            <>
-              <div className="home-hero-row">
-                <button className="home-hero home-hero-video" type="button" onClick={onEnterEditor}>
-                  <h2>视频剪辑器</h2>
-                  <p>导入本机素材并开始剪辑</p>
-                  <span className="home-hero-btn">
-                    开始剪辑
-                    <IconArrowRight size={16} />
-                  </span>
-                </button>
+        {nav === 'canvas' && canvasLink ? (
+          /* 画布页：整块主区都给它。
+             不套 `.home-body` —— 那层带 24px 内边距与滚动条，网页会在里面四周留缝、
+             而且自己还要再滚一遍（滚轮事件被 iframe 吃掉，页面看起来"滚不动"）。 */
+          <div className="home-canvas" data-home-page="canvas">
+            <WebPane link={canvasLink} />
+          </div>
+        ) : (
+          <div className="home-body">
+            {nav === 'drafts' ? (
+              <DraftsPage
+                drafts={drafts}
+                onOpenDraft={onOpenDraft}
+                onDeleteDraft={onDeleteDraft}
+                onNewDraft={onNewDraft}
+                fmtTime={fmtTime}
+                fmtDuration={fmtDuration}
+              />
+            ) : (
+              <>
+                <div className="home-hero-row">
+                  <button className="home-hero home-hero-video" type="button" onClick={onEnterEditor}>
+                    <h2>视频剪辑器</h2>
+                    <p>导入本机素材并开始剪辑</p>
+                    <span className="home-hero-btn">
+                      开始剪辑
+                      <IconArrowRight size={16} />
+                    </span>
+                  </button>
 
-                <button
-                  className="home-hero home-hero-ai"
-                  type="button"
-                  /* `stock` = 左栏「素材库」卡片（带 全部/视频/音频/图片 四个筛选页签），
-                     `local` 是它上面的「本地」—— 这张卡写的是"素材库"，就落在素材库。 */
-                  onClick={() => onNavigate?.({ key: 'stock', label: '素材库', enterEditor: true, tab: 'media', node: 'stock' })}
-                >
-                  <h2>素材库</h2>
-                  <p>管理本机导入的视频、音频与图片</p>
-                  <span className="home-hero-btn">
-                    查看素材
-                    <IconArrowRight size={16} />
-                  </span>
-                </button>
-              </div>
+                  <button
+                    className="home-hero home-hero-ai"
+                    type="button"
+                    /* `stock` = 左栏「素材库」卡片（带 全部/视频/音频/图片 四个筛选页签），
+                       `local` 是它上面的「本地」—— 这张卡写的是"素材库"，就落在素材库。 */
+                    onClick={() => onNavigate?.({ key: 'stock', label: '素材库', enterEditor: true, tab: 'media', node: 'stock' })}
+                  >
+                    <h2>素材库</h2>
+                    <p>管理本机导入的视频、音频与图片</p>
+                    <span className="home-hero-btn">
+                      查看素材
+                      <IconArrowRight size={16} />
+                    </span>
+                  </button>
+                </div>
 
-              <section className="home-tools-sec">
-                <div className="home-sec-head">
-                  <h3>剪辑工具</h3>
-                </div>
-                <div className="home-tools">
-                  {TOOLS.map((tool) => (
-                    <button
-                      key={tool.key}
-                      className="home-tool"
-                      type="button"
-                      data-home-tool={tool.key}
-                      onClick={() =>
-                        onNavigate?.({
-                          key: tool.key,
-                          label: tool.label,
-                          enterEditor: true,
-                          tab: tool.tab,
-                          node: tool.node
-                        })
-                      }
-                    >
-                      <span className="home-tool-ico">
-                        <tool.Icon size={22} />
-                      </span>
-                      <span className="home-tool-label">{tool.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <button
-                  className="home-tools-more"
-                  type="button"
-                  aria-label="查看更多工具"
-                  onClick={() => onNavigate?.({ key: 'media', label: '素材库', enterEditor: true, tab: 'media', node: 'local' })}
-                >
-                  <IconChevronRight size={16} />
-                </button>
-              </section>
-
-              <section className="home-drafts-sec">
-                <div className="home-sec-head is-draft">
-                  <h3>最近草稿</h3>
-                  <span className="home-viewswitch">
-                    <IconGridView size={16} data-on="true" />
-                    <IconListView size={16} />
-                  </span>
-                </div>
-                {drafts.length ? (
-                  <div className="home-draft-cards">
-                    {drafts.slice(0, 4).map((draft) => (
+                <section className="home-tools-sec">
+                  <div className="home-sec-head">
+                    <h3>剪辑工具</h3>
+                  </div>
+                  <div className="home-tools">
+                    {TOOLS.map((tool) => (
                       <button
-                        key={draft.id}
+                        key={tool.key}
+                        className="home-tool"
                         type="button"
-                        className="home-draft-card"
-                        onClick={() => onOpenDraft?.(draft)}
+                        data-home-tool={tool.key}
+                        onClick={() =>
+                          onNavigate?.({
+                            key: tool.key,
+                            label: tool.label,
+                            enterEditor: true,
+                            tab: tool.tab,
+                            node: tool.node
+                          })
+                        }
                       >
-                        <span className="home-draft-card-art">
-                          <IconDraft size={22} />
+                        <span className="home-tool-ico">
+                          <tool.Icon size={22} />
                         </span>
-                        <b>{draft.name}</b>
-                        <em>
-                          {fmtTime(draft.updatedAt)} · {draft.clipCount} 段 · {fmtDuration(draft.duration)}
-                        </em>
+                        <span className="home-tool-label">{tool.label}</span>
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <div className="home-empty">
-                    <div className="home-empty-wrap">
-                      <IconCameraEmpty size={150} strokeWidth={1.1} strokeDasharray="7 6" />
-                    </div>
-                    <p className="home-empty-text">还没有草稿。进剪辑器加一段素材就会自动保存。</p>
+                  <button
+                    className="home-tools-more"
+                    type="button"
+                    aria-label="查看更多工具"
+                    onClick={() => onNavigate?.({ key: 'media', label: '素材库', enterEditor: true, tab: 'media', node: 'local' })}
+                  >
+                    <IconChevronRight size={16} />
+                  </button>
+                </section>
+
+                <section className="home-drafts-sec">
+                  <div className="home-sec-head is-draft">
+                    <h3>最近草稿</h3>
+                    <span className="home-viewswitch">
+                      <IconGridView size={16} data-on="true" />
+                      <IconListView size={16} />
+                    </span>
                   </div>
-                )}
-              </section>
-            </>
-          )}
-        </div>
+                  {drafts.length ? (
+                    <div className="home-draft-cards">
+                      {drafts.slice(0, 4).map((draft) => (
+                        <button
+                          key={draft.id}
+                          type="button"
+                          className="home-draft-card"
+                          onClick={() => onOpenDraft?.(draft)}
+                        >
+                          <span className="home-draft-card-art">
+                            <IconDraft size={22} />
+                          </span>
+                          <b>{draft.name}</b>
+                          <em>
+                            {fmtTime(draft.updatedAt)} · {draft.clipCount} 段 · {fmtDuration(draft.duration)}
+                          </em>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="home-empty">
+                      <div className="home-empty-wrap">
+                        <IconCameraEmpty size={150} strokeWidth={1.1} strokeDasharray="7 6" />
+                      </div>
+                      <p className="home-empty-text">还没有草稿。进剪辑器加一段素材就会自动保存。</p>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+          </div>
+        )}
 
         <span hidden>{info?.version || ''}</span>
       </main>

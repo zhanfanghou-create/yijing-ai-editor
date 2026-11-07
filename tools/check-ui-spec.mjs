@@ -179,9 +179,21 @@ check('时间线工具条消费量表（圆角/字号/hover 状态层）',
 console.log('· 状态层（hover / 选中 / 键盘焦点 三态齐全）')
 check('功能标签：hover 有底色（不是只改字色）',
   /\.wb-tab:hover\s*\{[^}]*background:\s*var\(--state-hover\)/.test(css))
-check('功能标签：选中态有胶囊底 + 底部亮条',
-  /\.wb-tab\.active\s*\{[^}]*background:\s*var\(--wb-accent-glow\)/.test(css) &&
-  /\.wb-tab\.active\s*\{[^}]*box-shadow:\s*inset 0 -2px 0/.test(css))
+/**
+ * 选中态：**中性色阶的实心 chip + 白字，不用品牌色**。
+ *
+ * 2026-11-02 改判据。基准从「参考客户端」换成开源参考项目之后，整窗只允许
+ * 两处彩色 —— 导出键与播放键。十几个分类页签如果个个染成紫色，主按钮就再也
+ * 压不住任何东西，这是"看着不像一个软件"的主要来源。选中靠明度差说话：
+ * 条底 #303030 → chip #3B3B3B → 文字 #FFFFFF。
+ *
+ * 旧判据（accent-glow 底 + 2px inset 亮条）保护的是已经不存在的设计 ——
+ * 闸门保护的是**当前**的设计决策，不是历史。同理，底部亮条也一并去掉：
+ * chip 自己已经是"抬起来的那一块"，再加一条亮线等于把话说两遍。
+ */
+check('功能标签：选中有实心 chip 底 + 白字（不用品牌色）',
+  /\.wb-tab\.active\s*\{[^}]*background:\s*var\(--wb-card\)/.test(css) &&
+  /\.wb-tab\.active\s*\{[^}]*color:\s*var\(--wb-text\)/.test(css))
 /**
  * 亮条必须是 inset 阴影，**不能**是真 border：
  * 加 2px 边框会让选中那枚比旁边高/矮 2px，整排标签上下不齐（踩过一次）。

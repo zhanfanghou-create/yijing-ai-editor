@@ -135,7 +135,7 @@ export function resolveTrack(clips) {
       start: Number(start.toFixed(3)),
       gap: Number(gap.toFixed(3)),
       duration: Number(duration.toFixed(3)),
-      transitionOut: d > 0 ? { key: def.key, ffmpeg: def.ffmpeg, duration: d } : null
+      transitionOut: d > 0 ? { key: def.key, ffmpeg: def.ffmpeg, geo: def.geo || null, duration: d } : null
     })
 
     cursor = start + duration
@@ -189,6 +189,9 @@ export function effectiveTransitions(clips) {
       at: Number((Number(clip.start) + Number(clip.duration)).toFixed(3)),
       key: def.key,
       label: def.label,
+      /* geo：转场的几何定义（null = 老的 58 个原生键，预览走旧的那套近似）。
+         预览层据此画遮罩，和导出侧的 expr 是同一组数字。 */
+      geo: def.geo || null,
       duration: d
     })
   }
