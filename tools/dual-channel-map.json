@@ -76,6 +76,7 @@
         "App.jsx|button|画面设置",
         "components/Stage.jsx|button|前一帧（←）",
         "components/Stage.jsx|button|后一帧（→）",
+        "components/Timeline.jsx|button|按住拖动定位播放头",
         "components/TopBar.jsx|menu|save"
       ],
       "mcp": [
@@ -247,7 +248,7 @@
       "id": "audio.beats",
       "name": "抽振幅包络找重音（按音频卡点），可顺带把速度曲线写进片段",
       "ui": [
-        "components/Inspector.jsx|button|用本机 ffmpeg 抽这段音频的振幅包络，再找重音"
+        "components/Inspector.jsx|button|分析这段音频的重音位置"
       ],
       "mcp": [
         "yijing_detect_beats"
@@ -358,6 +359,25 @@
       ]
     },
     {
+      "id": "subtitle.hand-font",
+      "name": "手写字幕（给字幕指定手写字体：家族名 + 字体文件路径，预览与导出同一份）",
+      "ui": [],
+      "uiAbsentReason": "界面入口是「字幕 → 手写字幕」里的字体卡片，title 由字体名拼出来（动态），而枚举器只认静态 title，因此没有可引用的锚点。能力本身由 tools/text-custom-e2e.mjs 在真机上验证：点卡片 → 片段 data-clip-font → 预览叠加层的 computed font-family。",
+      "mcp": [
+        "yijing_add_subtitles",
+        "yijing_update_clip"
+      ]
+    },
+    {
+      "id": "subtitle.preset",
+      "name": "字幕预设（857 款口播动态排版：点一款落 1~4 条字幕，落点/对齐/字号/入场动效一起带上）",
+      "ui": [],
+      "uiAbsentReason": "界面入口是「字幕 → 字幕预设」里的 857 张卡片，title 由预设名 + 排版说明拼出来（动态），枚举器只认静态 title，因此没有可引用的锚点。能力本身由 tools/subtitle-preset-e2e.mjs 在真机上验证：点卡片 → 字幕轨新增 N 条 → 读 data-clip-style / data-clip-anchor / data-clip-count 与预览叠加层的 computed 落点。",
+      "mcp": [
+        "yijing_add_subtitles"
+      ]
+    },
+    {
       "id": "sticker.add",
       "name": "贴纸（内置 140 枚，放到叠加轨）",
       "ui": [
@@ -380,7 +400,8 @@
       "id": "font.import",
       "name": "导入本机字体（复制进 fonts 目录并写设置，界面与 agent 共用同一份列表）",
       "ui": [
-        "components/Inspector.jsx|button|导入 .ttf / .otf / .ttc 字体文件（会复制进本机素材目录，原文件删了也不影响）"
+        "components/Inspector.jsx|button|导入 .ttf / .otf / .ttc 字体文件（会复制进本机素材目录，原文件删了也不影响）",
+        "components/SidePanels.jsx|button|导入本机的手写字体文件（.ttf / .otf / .ttc，会复制进素材目录）"
       ],
       "mcp": [
         "yijing_import_font",
@@ -492,7 +513,7 @@
       "id": "subtitle.recognize",
       "name": "语音转字幕（本机模型识别说话内容；缺模型时点它会自动打开设置页让你装）",
       "ui": [
-        "components/SidePanels.jsx|button|把选中片段里的说话内容转成字幕（本机模型，不上传任何素材）"
+        "components/SidePanels.jsx|button|把选中片段里的说话内容转成字幕"
       ],
       "mcp": [
         "yijing_recognize_subtitles",
@@ -503,7 +524,7 @@
       "id": "tts.speak",
       "name": "AI 配音（文字读成人声，本机合成后落成音频轨）",
       "ui": [
-        "components/SidePanels.jsx|button|把文字读成人声（本机合成，不上传文字）"
+        "components/SidePanels.jsx|button|把文字读成人声"
       ],
       "mcp": [
         "yijing_tts"

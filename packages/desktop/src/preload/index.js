@@ -252,12 +252,18 @@ contextBridge.exposeInMainWorld('yjai', {
   },
 
   /**
-   * 录音配音（麦克风在**渲染层**采，落盘在主进程）。
-   * 只暴露"把字节交给主进程保存"这一个动作，不暴露任何路径参数 ——
+   * 录音配音 / 录屏（音视频都在**渲染层**采，落盘在主进程）。
+   * `save` 只暴露"把字节交给主进程保存"这一个动作，不暴露任何路径参数 ——
    * 与 extractAudio 同一道防线：渲染层拿不到"往任意位置写文件"的能力。
+   *
+   * `sources` 列可录的屏幕/窗口，`grant` 是**授权票据**：渲染层弹完自己的确认框、
+   * 用户点「允许」之后才调它。主进程的权限闸只认这张票据 —— 不调就与"全拒"一样。
    */
   recorder: {
-    save: (payload) => ipcRenderer.invoke('recording:save', payload)
+    save: (payload) => ipcRenderer.invoke('recording:save', payload),
+    sources: () => ipcRenderer.invoke('record:sources'),
+    grant: (payload) => ipcRenderer.invoke('record:grant', payload),
+    cancelGrant: () => ipcRenderer.invoke('record:grantCancel')
   },
 
   shell: {

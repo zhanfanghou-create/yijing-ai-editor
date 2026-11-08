@@ -27,6 +27,9 @@ import { PIP_DEFAULT_ANCHOR, PIP_DEFAULT_SIZE, pipAnchor } from './pip.js'
 import { textStyleDef } from './textStyles.js'
 /* 模板：数据表 + 纯函数（把一条模板翻成片段）。贴纸 key → 地址用共用的清单索引。 */
 import { planTemplate, templateOf } from '../shared/templates.js'
+/* 字幕预设：一款预设 → 1~4 条字幕片段。与 MCP catalog 读同一份清单、同一个 planPreset ——
+   面板只把预设 key 递过来，落片段这件事只有这一个出口。 */
+import { planPreset, presetByKey } from '../shared/subtitlePresets.js'
 /* 智能包装：判定「哪句是关键句」+ 成套方案（纯函数，脱机可测） */
 import { planPackaging, planScene, planStrip } from '../shared/packaging.js'
 import { loadStickerCatalog } from './stickerIndex.js'
@@ -2016,21 +2019,30 @@ export default function App() {
    * 这里再兜一层（asset.duration 优先，缺了用调用方给的 duration），
    * 免得某一边将来改了字段，落成 0 秒 —— 0 秒片段在时间线上是一根看不见的细线。
    */
+  /**
+   * 录音 / 录屏落成片段（同一个入口：落盘规则相同，只有轨道与文案不同）。
+   *
+   * ⚠️ 视频必须落**视频轨**、音频落**音频轨**：判断只能读 `row.kind`
+   *   （主进程 describeMedia 给的类型），不能按"是不是从录制面板来的"猜 ——
+   *   录屏与录音共用 `recording:save` 这一条通道，猜错就是把画面塞进音频轨，
+   *   预览只会建一个 <audio> 元素，用户看到的是"录完了一片黑"。
+   */
   const addRecordingClip = useCallback(
     (row, measured) => {
       if (!row || !row.url) {
-        toast.bad('录音已保存，但拿不到可播放的地址')
+        toast.bad('录制已保存，但拿不到可播放的地址')
         return
       }
+      const isVideo = String(row.kind || '') === 'video'
       const seconds = Number(row.duration) > 0 ? Number(row.duration) : Number(measured) > 0 ? Number(measured) : 0
       if (!(seconds > 0.05)) {
-        toast.bad('录音太短，没有插入到时间线')
+        toast.bad(isVideo ? '这段录屏太短，没有插入到时间线' : '录音太短，没有插入到时间线')
         return
       }
       const asset = {
         id: nextId('asset'),
-        name: row.name || '配音',
-        kind: 'audio',
+        name: row.name || (isVideo ? '录屏' : '配音'),
+        kind: isVideo ? 'video' : 'audio',
         url: row.url,
         path: row.path || '',
         size: row.size || 0,
@@ -2045,22 +2057,24 @@ export default function App() {
         ...list,
         {
           id,
-          track: 'audio',
+          track: isVideo ? 'video' : 'audio',
           assetId: asset.id,
           name: asset.name,
           url: asset.url,
           path: asset.path,
-          kind: 'audio',
+          kind: asset.kind,
           text: '',
           start,
           duration: Number(seconds.toFixed(3)),
           offset: 0,
-          /* 源就是这一段本身：往后拖没有更多内容（拖出去会是静音，长度上限靠它兜） */
+          /* 源就是这一段本身：往后拖没有更多内容（拖出去会是静音/黑场，长度上限靠它兜） */
           sourceDuration: Number(seconds.toFixed(3))
         }
       ])
       setSelection({ type: 'clip', clipId: id, clipIds: [id], assetId: asset.id })
-      toast.good(`已插入配音片段（${seconds.toFixed(2)} 秒）到 ${timecode(start, false)}`)
+      toast.good(
+        `已插入${isVideo ? '录屏' : '配音'}片段（${seconds.toFixed(2)} 秒）到 ${timecode(start, false)}`
+      )
     },
     [commitClips, playhead, toast]
   )
@@ -2632,20 +2646,22 @@ export default function App() {
   /**
    * 「文字」与「字幕」面板：把一条文字/字幕加到字幕轨，或给已有的那条换样式。
    *
-   * 两种行为由 preset.apply 决定，**这是刻意的**，对应参考里两个不同的页面：
+   * 三种行为由 preset.apply 决定，**这是刻意的**，对应参考里三个不同的页面：
    *   · apply: 'add'     —— 文字模板 / 字幕模板：**新增**一段（参考 Subtitles_Materials 是素材页）
-   *   · apply: 'restyle' —— 字幕样式：作用在**选中/播放头处那一条**上
+   *   · apply: 'restyle' —— 字幕样式：只换**选中/播放头处那一条**的样式
    *                         （参考 PropertyPanel_SubtitleStyle 就是个属性面板）
-   * 少了后者会出现"点样式只会不断堆新字幕"，而不是"这条字幕变了个样子"。
+   *   · apply: 'update'  —— 左栏「自定义 / 手写字幕」：按**这次真的给了哪些字段**改
+   *                         （正文 / 样式 / 字体），没给的字段一概不动
+   * 少了后两种会出现"点样式只会不断堆新字幕"，而不是"这条字幕变了个样子"。
    */
   const addTextClip = useCallback(
     (preset) => {
       if (!preset) return
       const styleKey = textStyleDef(preset.style).key
-      const restyle = preset.apply === 'restyle'
-      const wantText = preset.sample || '文字'
+      const toTarget = preset.apply === 'restyle' || preset.apply === 'update'
+      const wantText = String(preset.text || preset.sample || '文字')
 
-      if (restyle) {
+      if (toTarget) {
         /* ⚠️ 这里**不能用 `selectedClip`**：它声明在本函数之后的那一段"派生数据"里，
            一旦写进 useCallback 的依赖数组，就在 render 阶段命中暂时性死区直接抛错
            （不是在点击时才炸，是每次渲染都炸）。用 selection 里的 id 现查一遍。 */
@@ -2655,13 +2671,32 @@ export default function App() {
           : null
         const target = textClipAt(clipsRef.current, playhead) || selectedText
         if (target) {
-          commitClips((list) => list.map((item) => (item.id === target.id ? { ...item, textStyle: styleKey } : item)))
+          /* 只打"这次真的给了"的字段：样式卡没带 text，不能把正文改成一句占位文字；
+             手写卡没带新样式，不能把用户调过的样式重置回 sub-plain。 */
+          const patch = {}
+          if (preset.apply === 'update' && preset.text) patch.text = wantText
+          if (preset.style) patch.textStyle = styleKey
+          if (preset.font) {
+            /* 两个字段必须**一起**写：textFont 是预览的 CSS 家族名，textFontPath 是导出
+               drawtext 的 fontfile。只写一个是"预览换了字体、成片还是老字体"。 */
+            patch.textFont = String(preset.font)
+            patch.textFontPath = String(preset.fontPath || '')
+          }
+          commitClips((list) => list.map((item) => (item.id === target.id ? { ...item, ...patch } : item)))
           setSelection({ type: 'clip', clipId: target.id })
-          toast.good(`「${target.name}」已换成「${textStyleDef(styleKey).label}」样式`)
+          if (preset.apply === 'restyle') {
+            toast.good(`「${target.name}」已换成「${textStyleDef(styleKey).label}」样式`)
+          } else if (preset.font) {
+            toast.good(`「${target.name}」已换成手写字体`)
+          } else {
+            toast.good(`已更新字幕「${target.name}」`)
+          }
           return
         }
         /* 没有可换的目标就退回新增 —— 但要说清楚，不能让用户以为"没生效" */
-        toast(`字幕轨上还没有字幕，已新建一条并套用「${textStyleDef(styleKey).label}」`)
+        if (preset.apply === 'restyle') {
+          toast(`字幕轨上还没有字幕，已新建一条并套用「${textStyleDef(styleKey).label}」`)
+        }
       }
 
       const duration = Math.max(0.5, Number(preset.duration) || 3)
@@ -2680,6 +2715,8 @@ export default function App() {
           textSize: Number(preset.size) || 32,
           /* 样式 key 落在片段上，预览叠加层按它渲染（见 Stage 的 overlays） */
           textStyle: styleKey,
+          /* 手写字体：族名 + 文件路径一起落，换机器时导出侧会自己退回系统字体 */
+          ...(preset.font ? { textFont: String(preset.font), textFontPath: String(preset.fontPath || '') } : {}),
           start,
           duration,
           offset: 0,
@@ -2693,9 +2730,49 @@ export default function App() {
            预览里什么都不显示 —— 用户会认为这个按钮坏了。 */
         setPlayhead(created.start)
       }
-      if (!restyle) toast.good(`已把「${preset.label || '文字'}」加到字幕轨`)
+      if (!toTarget) toast.good(`已把「${preset.label || '文字'}」加到字幕轨`)
+      /* restyle 没目标时上面已经说过"已新建一条并套用…"，这里只补 update 的那半句，
+         否则同一次点击弹两条 toast，用户会以为点了两下。 */
+      else if (preset.apply === 'update') toast.good(`字幕轨上没有可改的字幕，已新建一条「${preset.label || '文字'}」`)
     },
     [commitClips, playhead, selection, textClipAt, toast]
+  )
+
+  /**
+   * 「字幕 → 字幕预设」：点一张卡，把那一款排版落成 1~4 条字幕片段。
+   *
+   * 为什么**不复用 addTextClip**：`addTextClip` 是"一条"，而预设可能要多条错峰
+   * （「2句覆盖」两条接力、「三字叠加」三条叠着往外蹦）。硬塞进去会把
+   * "按这次真给了哪些字段打 patch"那段逻辑搅成两套语义。
+   *
+   * 起点用 `freeTextStart` —— 与新建字幕同一条规则：播放头处要是已经有字幕，
+   * 就往它后面放，而不是叠上去盖住别人的字。
+   */
+  const addSubtitlePreset = useCallback(
+    (presetKey) => {
+      const preset = presetByKey(presetKey)
+      if (!preset) {
+        toast.bad('这一款预设不在清单里（清单可能被改动过）')
+        return
+      }
+      const start = freeTextStart(clipsRef.current, playhead)
+      const planned = planPreset(preset, { start, idFor: () => nextId('clip') })
+      if (!planned.clips.length) {
+        toast.bad('这一款预设没有生成任何字幕')
+        return
+      }
+      commitClips((list) => [...list, ...planned.clips])
+      setSelection({ type: 'clip', clipId: planned.clips[0].id })
+      /* 播放头挪到新片段起点：否则"套了一个预设"之后预览里什么都不显示 */
+      setPlayhead(planned.clips[0].start)
+      toast.good(
+        `已套用「${preset.name}」：${planned.clips.length} 条字幕` +
+          (planned.clips.length > 1 ? '（依次出现）' : '')
+      )
+    },
+    /* `freeTextStart` 是纯函数（只吃参数、不吃状态），与 addTextClip 一样不进依赖数组；
+       放进去会让这个回调每次渲染都换身份，面板那边拿到的引用一直变。 */
+    [commitClips, nextId, playhead, toast]
   )
 
   /* ------------------ 字幕文件：导入 / 导出 / 按语音分句 ------------------ */
@@ -3071,7 +3148,7 @@ export default function App() {
         return
       }
       if (!window.yjai?.speech?.speak) {
-        toast.bad('配音要桌面端（本机合成，不上传文字）')
+        toast.bad('配音只在桌面端可用')
         return
       }
 
@@ -3905,6 +3982,17 @@ export default function App() {
   ])
 
   /** 中栏内容：面板型分类走 SidePanels，其余走素材网格 */
+  /**
+   * 左栏「文字 → 自定义」「字幕 → 手写字幕」要写的目标字幕。
+   *
+   * 取法与 `addTextClip` **必须一致**（播放头处那条优先，其次选中的那条）——
+   * 两边不一致时面板会写着"写进 A"而实际改的是 B，而且两边都不报错。
+   */
+  const textTarget = useMemo(
+    () => textClipAt(clips, playhead) || (selectedClip && selectedClip.track === 'text' ? selectedClip : null),
+    [clips, playhead, selectedClip, textClipAt]
+  )
+
   const renderCenterPane = () => {
     if (currentNode?.panel) {
       return (
@@ -3939,6 +4027,12 @@ export default function App() {
             onPatchClip={patchClip}
             activeClip={clipAtPlayhead}
             onAddTextClip={addTextClip}
+            /* 自定义文字 / 手写字幕：要写的目标字幕 + 已导入字体清单与导入动作 */
+            textTarget={textTarget}
+            fonts={fonts}
+            onImportFont={importFonts}
+            /* 字幕预设：点一款把它的排版落成字幕片段（857 款，见 shared/subtitlePresets.js） */
+            onAddSubtitlePreset={addSubtitlePreset}
             /* 字幕文件的进出、语音分句与 AI 识别（只挂在「字幕 → 字幕模板」页显示）。
                `speechJob` 让按钮在识别中变成进度条，而不是再点一次又起一个任务。 */
             onImportSubtitle={importSubtitle}
@@ -3960,6 +4054,8 @@ export default function App() {
             onCloseGaps={closeGaps}
             onClearTextTrack={clearTextTrack}
             onImport={handlePickMedia}
+            /* 录制面板：录完的片子按 kind 落视频轨 / 音频轨，落点都是播放头 */
+            onRecorded={addRecordingClip}
             onSetBackdrop={(item) => setBackdrop(item.art)}
             /* 导出用结算后的片段表：停用的、隐藏/静音轨上的不进成片，
                与预览同一份口径（effectiveClips）—— 少这一步就是
@@ -4259,6 +4355,9 @@ export default function App() {
             snap={snap}
             onSnap={setSnap}
             onSeek={setPlayhead}
+            /* 按住播放头开始拖 = 要手控。不停播放的话 Stage 的 rAF 每帧把播放头往前推，
+               用户抓到的是"一条自己往前跑的线"（表现就是"拖不动"） */
+            onScrubStart={() => setPlaying(false)}
             /* `null` = 点空白处取消选中（与预览里点画面外同一口径）。 */
             /* ⚠️ 第二个参数（`{additive}`）必须透传：Ctrl + 点选的多选态全靠它，
                漏掉就变成"按了 Ctrl 也只是一次普通选中"（多选彻底失效，而界面看不出来）。 */

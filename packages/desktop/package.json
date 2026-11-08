@@ -1,6 +1,6 @@
 {
   "name": "@yijing/desktop",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "艺镜AI剪辑 · 桌面客户端（Electron + React）",
   "author": "YiJing AI",

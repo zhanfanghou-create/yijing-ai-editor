@@ -102,12 +102,12 @@ function ModelsPanel({ focusModel = '' }) {
      用注册表里的 `group` 字段分，而不是按 id 前缀猜 —— 猜法一改名就静默分错组。 */
   const groups = useMemo(() => {
     const defs = [
-      ['speech', '语音识别', '把画面里的说话内容转成字幕文字，全程本机推理。'],
-      ['audio', '音频增强', '把有噪声的人声处理干净；素材不出本机，也不需要联网。'],
+      ['speech', '语音识别', '把画面里的说话内容转成字幕文字。'],
+      ['audio', '音频增强', '把有噪声的人声处理干净。'],
       /* 抠像与人物特效共用同一份 MediaPipe wasm 运行时 —— 所以这一组里
          不会出现"运行时"行，缺运行时会在面板上明说"先装人物特效运行时"，
          而不是在这里放一个下完也跑不起来的按钮。 */
-      ['matte', '智能抠像', '把人和背景分开；人像模型只认人，画面里没人才会明说抠不出。'],
+      ['matte', '智能抠像', '把人和背景分开。'],
       ['facefx', '人物特效', '识别人脸位置，让打码、提亮、描边跟着脸走。']
     ]
     return defs
@@ -252,14 +252,6 @@ function ModelsPanel({ focusModel = '' }) {
 
   return (
     <>
-      <div className="notice">
-        <IconInfo size={14} />
-        <span>
-          模型全部装在本机，装完由本机推理，不上传任何素材。随包已就绪的可以换成新版本，
-          也可以删掉本机副本回到随包那份。
-        </span>
-      </div>
-
       {error ? (
         <div className="notice warn" data-models-error="1">
           <IconAlert size={14} />
@@ -672,7 +664,7 @@ export function SettingsDialog({
 
       <div className="notice" style={{ marginTop: 12 }}>
         <IconInfo size={14} />
-        <span>全部处理都在本机完成：素材来自导入，成片由本机 ffmpeg 导出，不会向任何服务器发送数据。</span>
+        <span>全部处理都在本机完成，不会向任何服务器发送数据。</span>
       </div>
     </>
   )
@@ -847,10 +839,13 @@ const GUIDE_STEPS = [
     art: 'audio'
   },
   {
-    key: 'ai',
-    title: 'AI 生成',
-    text: '首页或「AI」页用文生图 / 文生视频 / 剧本等能力，产物直接进素材库。',
-    art: 'ai'
+    key: 'pack',
+    title: '批量美化',
+    /* 这一步原先指向「AI 页的文生图 / 文生视频 / 剧本」—— 开源版已经整页移除
+       （没有服务端，AI 生成无从谈起），留着就是一句指向不存在功能的话。
+       换成真实存在的「智能包装」：它同样是对**已有内容**的一次批量加工。 */
+    text: '「智能包装」页可以给已有字幕批量换样式、放大关键句，或给主轨统一套边框与调色。',
+    art: 'pack'
   },
   {
     key: 'export',
@@ -926,16 +921,14 @@ function GuideArt({ kind }) {
           <path d="M88 47v6M96 44v12M104 48v8M112 46v12" {...box} opacity={0.7} />
         </>
       ) : null}
-      {kind === 'ai' ? (
+      {kind === 'pack' ? (
         <>
-          <rect x="16" y="14" width="44" height="48" rx="4" {...soft} />
-          <rect x="16" y="14" width="44" height="48" rx="4" {...box} />
-          <path d="M26 46l8-12 7 9 5-5 8 8" {...box} />
-          <circle cx="38" cy="26" r="4" {...box} />
-          <path d="M70 38h16m0 0-6-5m6 5-6 5" {...box} />
-          <rect x="92" y="20" width="28" height="36" rx="4" {...soft} />
-          <rect x="92" y="20" width="28" height="36" rx="4" {...box} />
-          <path d="M100 32h12M100 40h8" {...box} opacity={0.6} />
+          <rect x="14" y="14" width="104" height="48" rx="4" {...soft} />
+          <rect x="14" y="14" width="104" height="48" rx="4" {...box} />
+          <rect x="26" y="26" width="52" height="7" rx="3.5" {...box} opacity={0.4} />
+          <rect x="26" y="41" width="78" height="12" rx="6" {...box} opacity={0.9} />
+          <path d="M108 20v10M103 25h10" {...box} opacity={0.6} />
+          <path d="M104 56l3-3m0 3-3-3" {...box} opacity={0.45} />
         </>
       ) : null}
       {kind === 'export' ? (

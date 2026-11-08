@@ -42,6 +42,12 @@ export default defineConfig({
            `coverage < undefined` 恒为 false ⇒ "抠不到人"永远判不出来，静默产出全透明素材。 */
         /shared[\\/]matte\.js$/,        /* 文字动画：预览必须 import 到它（否则 readTextAnim 是空对象 ⇒ 动画永远是 none） */
         /shared[\\/]textAnim\.js$/,
+        /* 手写字幕的字体族清单：渲染层面板与 MCP catalog 共用这一份。
+           漏了这一行 ⇒ handFontChoices 是 undefined，整个「手写字幕」面板白屏。 */
+        /shared[\\/]handFonts\.js$/,
+        /* 字幕预设：panel 要 presetsOfGroup/describePreset/planPreset，MCP catalog 读同一份。
+           漏了这一行 ⇒ 整个「字幕预设」面板白屏（857 款一张卡都不出来）。 */
+        /shared[\\/]subtitlePresets\.js$/,
         /shared[\\/]reverse\.js$/,
         /* 节拍检测：检查器里的「按音频检测」要调它。
            漏了这一行 ⇒ detectBeats 是 undefined，按钮点下去直接抛 TypeError，

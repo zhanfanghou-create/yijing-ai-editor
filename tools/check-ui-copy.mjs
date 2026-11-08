@@ -37,7 +37,7 @@ const ROOT = path.resolve(
 const RENDERER = path.join(ROOT, 'packages', 'desktop', 'src', 'renderer')
 
 /** 断言总数：闸门用它钉死"断言有没有被悄悄删掉" */
-export const TOTAL_ASSERTIONS = 5
+export const TOTAL_ASSERTIONS = 6
 
 /**
  * 彩色 emoji 与装饰符号。
@@ -58,7 +58,12 @@ const DEVEL_MARKS = [
   { re: /占位(图|素材|文案|内容)/, what: '「占位」' },
   { re: /待补/, what: '「待补」' },
   { re: /待定/, what: '「待定」' },
-  { re: /示例(文本|文案)/, what: '「示例文本」' }
+  { re: /示例(文本|文案)/, what: '「示例文本」' },
+  /* markdown 强调标记漏到界面上：`画面**等比放大铺满**画布` 会原样显示成两个星号。
+   * 2026-11-09 实测渲染层有 3 处（自由变形 / 裁切 / 音量包络），都是写注释时顺手用了
+   * `**加粗**` 然后连正文一起搬进 JSX —— 注释会被剥掉，正文不会。
+   * JSX 里要加粗只有一条路：`<b>` / `<strong>`。 */
+  { re: /\*\*/, what: '「**」markdown 星号' }
 ]
 
 /* ------------------------------------------------------------- 检测器本体 */
@@ -171,7 +176,7 @@ function scanAll() {
  * 否则就是"注释也算界面文案"的误报，这道闸会天天红。
  */
 const FIXTURE_JSX = `import './x.css'
-/** 注释里的 ⚠️ 与 TODO 是给开发看的，不算界面文案 */
+/** 注释里的 ⚠️ 与 TODO 是给开发看的，不算界面文案；注释里的 ** 也不算 */
 const ITEMS = [
   { key: 'a', label: '万圣节 🎃' },
   { key: 'b', label: '最新' }
@@ -181,6 +186,7 @@ export function P() {
     <div>
       梗图贴纸 😺
       <span>秋天</span>
+      <span>框内的画面**等比放大**铺满</span>
     </div>
   )
 }
@@ -206,15 +212,22 @@ function main() {
     const jsHits = scanCopy('fixture.jsx', FIXTURE_JSX)
     const cssHits = scanCss('fixture.css', FIXTURE_CSS)
     const all = [...jsHits, ...cssHits]
+    const emojiOnly = all.filter((h) => h.kind === 'emoji')
     check(
       '4. 自证：夹具里恰好报出 3 处 emoji（label 串 / JSX 文本 / CSS content 各一）',
-      all.length === 3,
-      `报了 ${all.length} 处：${all.map((h) => `${h.line}:${h.what}`).join(' ') || '无'}`
+      emojiOnly.length === 3,
+      `报了 ${emojiOnly.length} 处：${emojiOnly.map((h) => `${h.line}:${h.what}`).join(' ') || '无'}`
     )
     check(
       '5. 自证：注释里的 ⚠️ 与 TODO 不算界面文案（不误报）',
       !all.some((h) => h.snippet.includes('注释里的')),
       all.map((h) => h.snippet.slice(0, 40)).join(' | ') || '无命中'
+    )
+    check(
+      '6. 自证：JSX 文本里的 markdown 星号被报出来，注释里的不报',
+      all.some((h) => h.kind === 'devel' && /星号/.test(h.what)) &&
+        !all.some((h) => h.snippet.includes('注释里的')),
+      all.filter((h) => h.kind === 'devel').map((h) => h.snippet.slice(0, 40)).join(' | ') || '无命中'
     )
     console.log(`\nUI_COPY_CHECK_STATS ok=${pass} total=${pass + fail} fail=${fail}`)
     console.log(fail ? 'UI_COPY_CHECK_FAILED' : 'UI_COPY_CHECK_OK')
@@ -240,7 +253,7 @@ function main() {
     for (const h of develHits) console.log(`    ${h.file}:${h.line}  ${h.what}  ← ${h.snippet}`)
     console.log('')
   }
-  check('2. 界面文案里没有开发痕迹词（TODO / 占位 / 待补 / Lorem …）', develHits.length === 0, `${develHits.length} 处`)
+  check('2. 界面文案里没有开发痕迹词（TODO / 占位 / 待补 / Lorem / ** 星号 …）', develHits.length === 0, `${develHits.length} 处`)
 
   check(
     '3. 扫描覆盖面非空（渲染层确实被扫到了，不是空转）',
@@ -251,15 +264,22 @@ function main() {
   const jsHits = scanCopy('fixture.jsx', FIXTURE_JSX)
   const cssHits = scanCss('fixture.css', FIXTURE_CSS)
   const fixtureAll = [...jsHits, ...cssHits]
+  const fixtureEmoji = fixtureAll.filter((h) => h.kind === 'emoji')
   check(
     '4. 自证：夹具里恰好报出 3 处 emoji（label 串 / JSX 文本 / CSS content 各一）',
-    fixtureAll.length === 3,
-    `报了 ${fixtureAll.length} 处：${fixtureAll.map((h) => `${h.line}:${h.what}`).join(' ') || '无'}`
+    fixtureEmoji.length === 3,
+    `报了 ${fixtureEmoji.length} 处：${fixtureEmoji.map((h) => `${h.line}:${h.what}`).join(' ') || '无'}`
   )
   check(
     '5. 自证：注释里的 ⚠️ 与 TODO 不算界面文案（不误报）',
     !fixtureAll.some((h) => h.snippet.includes('注释里的')),
     fixtureAll.map((h) => h.snippet.slice(0, 40)).join(' | ') || '无命中'
+  )
+  check(
+    '6. 自证：JSX 文本里的 markdown 星号被报出来，注释里的不报',
+    fixtureAll.some((h) => h.kind === 'devel' && /星号/.test(h.what)) &&
+      !fixtureAll.some((h) => h.snippet.includes('注释里的')),
+    fixtureAll.filter((h) => h.kind === 'devel').map((h) => h.snippet.slice(0, 40)).join(' | ') || '无命中'
   )
 
   console.log(`\nUI_COPY_CHECK_STATS ok=${pass} total=${pass + fail} fail=${fail}`)

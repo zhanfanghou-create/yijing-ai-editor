@@ -3242,6 +3242,15 @@
   display: none;
 }
 
+/* 拖动播放头期间：光标统一成左右箭头，并禁掉文字选择。
+   不禁选择的后果很具体 —— 拖着拖着把标尺上的时间码选成一片蓝底，
+   手势看起来就像"卡住了"（而且松手后那一片还留着）。 */
+.wb-timeline.is-scrubbing,
+.wb-timeline.is-scrubbing * {
+  cursor: ew-resize !important;
+  user-select: none;
+}
+
 .wb-tlruler {
   position: relative;
   height: 22px;
@@ -3949,4 +3958,402 @@ kbd {
   height: 100%;
   background: var(--wb-accent);
   transition: width 0.16s linear;
+}
+
+/* ------------------------------- 录制面板 -------------------------------
+ * 屏幕 / 摄像头录制。下面每一块都对着一个"看不见就不知道发生了什么"的点：
+ *   · 源缩略图：只给名字的话，同名的两个窗口分不清，录错窗口是常事；
+ *   · 预览：不显示画面时，"在录"与"没在录"长得完全一样；
+ *   · 计时：以为录了三分钟、其实第一秒就断了，只有秒数能揭穿；
+ *   · 确认卡片：Electron 的系统权限回调只回 true/false，用户看不到"在问什么"，
+ *     所以"问"这一步必须在界面里做，而且只有点了允许才去换票据。
+ * ⚠️ 颜色一律走令牌（`check-ui-accent` 会把裸的品牌紫与青色判红）。
+ */
+.wb-record-modes {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.wb-record-mode {
+  flex: 1;
+  height: 30px;
+  border: 1px solid var(--wb-card);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wb-record-mode.on {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent-glow);
+  color: var(--wb-text);
+}
+
+.wb-record-mode:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wb-record-sources {
+  margin-bottom: 10px;
+}
+
+.wb-record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.wb-record-src {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 1px solid var(--wb-card);
+  border-radius: 8px;
+  background: var(--wb-deep2);
+  color: var(--wb-muted);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.wb-record-src.on {
+  border-color: var(--wb-accent);
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+}
+
+.wb-record-src:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wb-record-src-thumb {
+  display: block;
+  aspect-ratio: 16 / 9;
+  background: var(--wb-deep);
+}
+
+.wb-record-src-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wb-record-src-name {
+  padding: 0 6px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-record-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--wb-faint);
+}
+
+.wb-record-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.wb-record-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.wb-record-toggle input {
+  accent-color: var(--wb-accent);
+}
+
+.wb-record-monitor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 10px;
+  border: 1px solid var(--wb-card);
+  border-radius: 8px;
+  background: var(--wb-deep);
+  overflow: hidden;
+}
+
+.wb-record-preview {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.wb-record-monitor.live .wb-record-preview {
+  display: block;
+}
+
+.wb-record-idle {
+  font-size: 11px;
+  color: var(--wb-faint);
+}
+
+.wb-record-status {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.wb-record-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--wb-text);
+}
+
+.wb-record-live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: wb-record-blink 1s steps(2, start) infinite;
+}
+
+@keyframes wb-record-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.wb-record-confirm {
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-accent);
+  border-radius: 8px;
+  background: var(--wb-accent-glow);
+}
+
+.wb-record-confirm strong {
+  display: block;
+  font-size: 13px;
+  color: var(--wb-text);
+}
+
+.wb-record-confirm p {
+  margin: 6px 0 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--wb-muted);
+}
+
+.wb-record-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.wb-record-confirm-actions [data-rec-allow] {
+  border-color: var(--wb-accent);
+  color: var(--wb-text);
+}
+
+/* ------------------------ 文字自定义 / 手写字幕 ------------------------
+ * 这两页各自解决一个"点了没反应"的入口（原来它们与「创建文字」「新建字幕」
+ * 共用 panel 'text'，点下去画面一字未变）。样式只做两件事：
+ *   · `.wb-tc-stage`：给自定义文字一个 16:9 的实况预览框。里面放的 box/inner
+ *     就是 `textStyleCss()` 的产物（与预览叠加层同一份），所以**不需要测量** ——
+ *     `container-type: size` 让 cqw 在这里按这个框的宽度算；
+ *   · `.wb-hand-card`：手写字体的选择卡。字号用 var(--fs-20) 是因为"手写"这种
+ *     字体差别只有放大了才看得出来（11px 的示例字四款几乎一样）。
+ * ⚠️ 颜色与圆角一律走令牌（`ui-spec` / `ui-accent` 两道闸门盯着）。
+ */
+.wb-tc-stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  margin: var(--gap-2) 0 var(--gap-3);
+  border: 1px solid var(--wb-card);
+  border-radius: var(--r-lg);
+  background: var(--wb-deep);
+  overflow: hidden;
+  /* cqw 的前提：这个框必须是尺寸容器 */
+  container-type: size;
+}
+
+.wb-hand-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap-2);
+}
+
+.wb-hand-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gap-1);
+  padding: var(--gap-2) var(--gap-2) var(--gap-1);
+  border: 1px solid var(--wb-card);
+  border-radius: var(--r-lg);
+  background: var(--wb-deep2);
+  color: var(--wb-text);
+  cursor: pointer;
+}
+
+.wb-hand-card:hover {
+  background: var(--state-hover);
+}
+
+.wb-hand-card.active {
+  border-color: var(--wb-accent);
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+}
+
+/* 本机没这个字体时不隐藏、也不标注：探测本身不可靠（见 handFonts.js 头注释），
+   标错的代价比不标大得多。用户点一下，预览里的字形会自己说明。 */
+
+.wb-hand-art {
+  font-size: var(--fs-20);
+  line-height: var(--lh-tight);
+}
+
+.wb-hand-name {
+  font-size: var(--fs-11);
+  color: var(--wb-muted);
+}
+
+/* ==================== 字幕预设（857 款口播动态排版） ==================== */
+
+/*
+ * 卡面就是 `.style-art`（styles.css）—— 与「字幕模板」「花字」同一张字底片
+ * （assets/plate.webp）＋同一层压暗。刻意**不复用素材包里的封面图**：
+ * 那些封面是黑底占位图，有的还带卖家水印，横竖版还不一致。
+ *
+ * 卡里那行字由 textStyleCss(key, CARD_BASE_WIDTH, {textAnchor...}) 现算，
+ * 单位是 cqw，所以卡片改成 160×90 也不会错位（`.style-art` 自带 container-type: size）。
+ */
+.wb-sp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-1);
+  margin: 2px 0 var(--gap-3);
+}
+
+.wb-sp-tab {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-card);
+  border-radius: var(--r-lg);
+  background: var(--wb-deep2);
+  color: var(--wb-muted);
+  font-size: var(--fs-11);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wb-sp-tab:hover {
+  background: var(--state-hover);
+  color: var(--wb-text);
+}
+
+.wb-sp-tab.active {
+  border-color: var(--wb-accent);
+  color: var(--wb-text);
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+}
+
+/* 分组名后面的数量：字号再降一档并压低对比 —— 它是注解，不是按钮的一部分 */
+.wb-sp-tab i {
+  margin-left: 3px;
+  font-style: normal;
+  font-size: var(--fs-10);
+  color: var(--wb-faint);
+}
+
+.wb-sp-grid {
+  display: grid;
+  /*
+   * ⚠️ 列宽必须**弹性**，不能写死 160px。
+   * 中栏宽度取决于左右两栏的拖动结果（实测 1920 窗口下从 197px 到 478px 都出现过），
+   * 写死 160px 时间距一算就只放得下 1~2 列，第二列被 `.pane` 的 overflow 裁掉半张 ——
+   * 看上去像"卡片没做完"。minmax(132px, 1fr) 让列数随宽度自动取 1~3，
+   * 卡片里那段字用的是 cqw，所以列宽变了字也跟着等比变，不会一边大一边小。
+   */
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  align-content: start;
+  justify-content: start;
+}
+
+.wb-sp-card {
+  display: block;
+  width: 100%;
+  /* 16:9：与成片画幅同比例，卡片上看到的落点就是画面里的落点 */
+  aspect-ratio: 16 / 9;
+  height: auto;
+  padding: 0;
+  border: 0;
+  /* 与 .style-card 同一个坑：边框走 inset 阴影，走 border 会被 box-sizing 吃掉 2px */
+  box-shadow: inset 0 0 0 1px transparent;
+  border-radius: var(--r-lg);
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  transition: box-shadow 0.12s;
+}
+
+.wb-sp-card:hover,
+.wb-sp-card:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--wb-accent);
+  outline: none;
+}
+
+.wb-sp-card:active {
+  transform: scale(0.985);
+}
+
+/* 多行文字的落点盒子：位置/对齐已由 textStyleCss 的内联样式给出，
+   这里只补"不要把行挤成一坨"与"超长时按画幅折行"两条。 */
+.wb-sp-box {
+  overflow: hidden;
+}
+
+.wb-sp-line {
+  /* 多行直接换行（一条片段多行的样子就是卡片上的样子） */
+  white-space: pre-wrap;
+  /* 长句子按卡片宽折行，而不是撑出卡片 */
+  overflow-wrap: anywhere;
+}
+
+/* 角标：这一款点下去会落几条。「叠加/依次」写在角标里，
+   因为卡面上只能展示第一块 —— 不标出来，用户会以为点了只出一条。 */
+.wb-sp-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: rgba(8, 8, 12, 0.66);
+  color: var(--wb-text);
+  font-size: var(--fs-10);
+  line-height: 1.5;
+  pointer-events: none;
 }

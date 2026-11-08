@@ -267,9 +267,10 @@ const TOOLS = {
 
   yijing_add_subtitles: {
     ...S(
-      '往字幕轨加字幕。可以直接给条目（text/start/duration），也可以给 file（.srt/.vtt/.lrc/.ass 绝对路径）或 content（文件正文）由软件自己解析；offset 整体平移（秒）。style 取 catalog 的 textStyles。',
+      '往字幕轨加字幕。三种用法：① 给 preset（catalog.subtitlePresets 里的 key），由软件按那套排版落 1~4 条字幕（落点 / 动效 / 多行 / 错峰全自动，与界面点卡片完全同一条路径）；② 给条目（text/start/duration）或 file（.srt/.vtt/.lrc/.ass 绝对路径）、content 自解析；③ 其余情况用 style 指定样式，默认 sub-plain。offset 整体平移（秒）。',
       {
         draftId: str('目标草稿 id'),
+        preset: str('字幕预设 key（yijing_catalog 的 subtitlePresets）。给了它就忽略 subtitles/file/style'),
         subtitles: {
           type: 'array',
           items: {
@@ -285,7 +286,7 @@ const TOOLS = {
         file: str('字幕文件绝对路径（SRT/VTT/LRC/ASS）'),
         content: str('字幕文件正文（没有文件时用）'),
         filename: str('正文对应的文件名（用来判断格式，可选）'),
-        offset: num('整体平移秒数，可负'),
+        offset: num('整体平移秒数，可负。preset 模式下起点 = 字幕轨末尾 + offset'),
         style: str('样式 key，默认 sub-plain'),
         name: str('字幕轨显示名（可选）')
       },

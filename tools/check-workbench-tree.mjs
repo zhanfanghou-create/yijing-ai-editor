@@ -16,7 +16,7 @@
  * 才会显形 —— 合成片那道 E2E 的导入断言因 contextBridge 冻结恒为 SKIP，
  * 只有真实影片 E2E 走主进程打桩、真的按得下去。本脚本把这条钉成静态断言。
  *
- * 断言总数 = 10（全局）+ 1 × 左栏节点数（含可折叠子项）。节点数变了要同步改 scripts/verify.mjs 的 expected。
+ * 断言总数 = 11（全局）+ 1 × 左栏节点数（含可折叠子项）。节点数变了要同步改 scripts/verify.mjs 的 expected。
  *
  * 用法：
  *   node tools/check-workbench-tree.mjs            # 校验（闸门用）
@@ -128,6 +128,25 @@ function ownProps(nodeText) {
 const propString = (text, name) => new RegExp(`(?:^|[\\s,{])${name}\\s*:\\s*'([^']*)'`).exec(text)?.[1] || ''
 const propFlag = (text, name) => new RegExp(`(?:^|[\\s,{])${name}\\s*:\\s*true\\b`).test(text)
 
+/**
+ * 这个节点"打开的是哪一份内容"的区分字段。
+ *
+ * 左栏允许几个兄弟项共用一个面板（贴纸八个分类、插件三项、花字八个分组都这么做），
+ * 前提是**每项带着不同的区分字段**，面板据此换内容。没带区分字段就等于
+ * "两个入口打开同一屏" —— 点下去没有任何变化，用户会认定这个按钮坏了。
+ * 2026-11-09 用户报的「文字 → 自定义」「字幕 → 手写字幕」点击无效，就是这种：
+ * 两者与「创建文字」「新建字幕」共用 `panel: 'text'`，且没有任何区分字段。
+ */
+const VARIANT_KEYS = ['textStyle', 'sticker', 'material', 'pluginTab', 'capability', 'template', 'enhance', 'refArt', 'packMode', 'group', 'kinds']
+function variantOf(text) {
+  return VARIANT_KEYS.map((key) => {
+    const m = new RegExp(`(?:^|[\\s,{])${key}\\s*:\\s*([^,}\\n]+)`).exec(text)
+    return m ? `${key}=${m[1].trim()}` : ''
+  })
+    .filter(Boolean)
+    .join('|')
+}
+
 /** `code: { … }` 的一层条目 → [{ key, body }] */
 function entriesOf(body) {
   const out = []
@@ -157,6 +176,8 @@ function parseNode(text) {
     key: propString(text, 'key'),
     label: propString(text, 'label'),
     panel: propString(text, 'panel'),
+    /* 面板内的"打开哪一份内容"（见 VARIANT_KEYS）—— 判「两个入口是否打开同一屏」 */
+    variant: variantOf(text),
     Icon: iconMatch && !iconIsCall ? iconMatch[1] : '',
     plain: propFlag(text, 'plain'),
     landing: propFlag(text, 'landing'),
@@ -520,6 +541,42 @@ export function runCheck(paths = PATHS) {
     `这些名字 SidePanels 认不出来 —— 中间栏会显示「左侧选一个功能开始」的空壳：${badPanels.join(', ')}`
   )
 
+  // ---- 全局 4b：同一标签内，两个入口不能打开同一屏 ----
+  /* 「面板名能解析」只保证点下去**有东西**，保证不了"点的是另一个入口"。
+     同标签内两个节点 panel 相同、label 不同、区分字段也一样 ⇒ 它们打开的是同一份内容，
+     点第二个等于什么都没发生。这类缺陷所有既有闸门都能过：
+     panel 名合法、面板有内容、页面不报错、workbench-tabs-e2e 的"非空壳"也满足。
+     允许共用（贴纸八类 / 插件三项 / 花字八组），但必须带不同的区分字段。 */
+  const samePanel = []
+  const byTab = new Map()
+  for (const item of allNodes) {
+    if (!item.panel) continue
+    if (!byTab.has(item.tab)) byTab.set(item.tab, [])
+    byTab.get(item.tab).push(item)
+  }
+  for (const [tab, list] of byTab) {
+    for (let i = 0; i < list.length; i += 1) {
+      for (let j = i + 1; j < list.length; j += 1) {
+        const a = list[i]
+        const b = list[j]
+        if (a.panel !== b.panel) continue
+        if (a.label === b.label) continue
+        /* 手风琴的父子不算：父卡片本身就是"展开 + 落在第一组"，
+           于是「花字」与「热门」都指向 textStyle=0 —— 这是刻意的，不是重复入口。 */
+        if (a.parent === b.key || b.parent === a.key) continue
+        if (a.variant !== b.variant) continue
+        samePanel.push(`${tab}：${a.key}「${a.label}」与 ${b.key}「${b.label}」都打开 panel=${a.panel}，且区分字段相同（${a.variant || '（无）'}）`)
+      }
+    }
+  }
+  claim(
+    !samePanel.length && byTab.size > 0,
+    `同一标签内没有两个入口打开同一屏内容（${allNodes.filter((item) => item.panel).length} 个带面板的节点）`,
+    samePanel.length
+      ? `点后者等于什么都没发生：${samePanel.join('；')}`
+      : '一个带面板的节点都没读到 —— 检测器本身可能坏了'
+  )
+
   // ---- 全局 5/10：caps 里的能力码都真的存在 ----
   const badCaps = []
   for (const item of allNodes) {
@@ -650,13 +707,15 @@ export function runCheck(paths = PATHS) {
     return { tab: tab.key, key: chosen ? chosen.key : tab.root.key, panel: chosen ? chosen.panel : '', explicit: Boolean(explicit) }
   })
   const onPlaceholder = landings.filter((item) => item.panel && side.placeholderModes.has(item.panel))
-  // 防空转：如果占位检测器一个都认不出来，"落点不是占位面板"就恒真了 —— 那是假绿
+  /* ⚠️ 2026-11-09：占位面板**已清零** —— 最后一个占位「录制」做成了真的屏幕/摄像头录制。
+     原来这条还要求"必须至少识别到 1 个占位面板"来自证防空转；现在真实源里合法地
+     一个都没有，再要求就成了"为了过闸门故意留一个占位"。
+     防空转改由**夹具自检**承担（本文件后半段：造一份写着「尚未接入」的源，必须被报出来），
+     所以这里只判结果。 */
   claim(
-    side.placeholderModes.size > 0 && !onPlaceholder.length,
+    !onPlaceholder.length,
     `每个标签的落点都不是占位面板（识别到占位面板 ${side.placeholderModes.size} 个：${[...side.placeholderModes].join('/') || '（无）'}）`,
-    side.placeholderModes.size === 0
-      ? '一个占位面板都没识别出来 —— 检测器本身可能坏了（若占位面板已全部实现，请删掉这条断言并说明）'
-      : `这些标签会落在"尚未接入"的面板上：${onPlaceholder.map((item) => `${item.tab} → ${item.key}（panel=${item.panel}）`).join('；')}`
+    `这些标签会落在"尚未接入"的面板上：${onPlaceholder.map((item) => `${item.tab} → ${item.key}（panel=${item.panel}）`).join('；')}`
   )
 
   // ---- 逐节点 1 条（含可折叠子项）----
@@ -917,8 +976,8 @@ export const REF_ART_FAMILIES = [
     let r = probe()
     check('基准夹具通过（8 标签 / 6 个节点（含 3 个子项）/ 面板与能力都认得）', r.problems.length === 0, why(r))
     check(
-      '基准夹具断言总数 = 10 + 左栏节点数（含子项）',
-      r.total === 10 + r.counts.items,
+      '基准夹具断言总数 = 11 + 左栏节点数（含子项）',
+      r.total === 11 + r.counts.items,
       `实际 ${r.total}，节点数 ${r.counts.items}`
     )
     check(
@@ -927,7 +986,34 @@ export const REF_ART_FAMILIES = [
       `实际 ${r.counts.items}，应为 1（根卡片子项 local）+ 5（一级项）+ 3（video-enhance 的子项）+ 7×1（填充标签）= 16`
     )
 
-    // 2) 既没 caps 也没 panel 又不是通用项
+    // 1b) 同一标签内两个入口打开同一屏（2026-11-09 用户报的「自定义 / 手写字幕 点了没反应」）
+    /* 正对照：两条都写 `panel: 'text'` 且没有任何区分字段 —— 点后者等于什么都没发生。
+       ⚠️ 夹具必须让两者 label 不同：同 label 的兄弟项按设计不算重复入口。 */
+    r = probe({
+      items: [
+        ...GOOD_ITEMS,
+        "      { key: 'dup-a', label: '自定义', Icon: IconFolder, panel: 'text' }",
+        "      { key: 'dup-b', label: '手写字幕', Icon: IconFolder, panel: 'text' }"
+      ]
+    })
+    check(
+      '两个入口打开同一屏（panel 与区分字段都相同）→ 报出',
+      r.problems.some((p) => p.includes('都打开 panel=')),
+      why(r)
+    )
+
+    // 反向对照：共用面板但**带不同区分字段**是合法形态（贴纸八类 / 插件三项都这么做），
+    // 不能误杀 —— 否则这条判据逼着人给每个分类各写一个面板。
+    r = probe({
+      items: [
+        ...GOOD_ITEMS,
+        "      { key: 'dup-c', label: '一类贴纸', Icon: IconFolder, panel: 'text', sticker: 'face' }",
+        "      { key: 'dup-d', label: '二类贴纸', Icon: IconFolder, panel: 'text', sticker: 'hand' }"
+      ]
+    })
+    check('共用面板但区分字段不同 → 不报（合法的分类入口）', !r.problems.some((p) => p.includes('都打开 panel=')), why(r))
+
+    // 3) 既没 caps 也没 panel 又不是通用项
     r = probe({ items: [...GOOD_ITEMS, "      { key: 'orphan', label: '孤儿项', Icon: IconFolder, caret: true }"] })
     check(
       '左栏项没有去向 → 报出（死入口）',
@@ -984,13 +1070,12 @@ export const REF_ART_FAMILIES = [
       why(r)
     )
 
-    // 8) 占位检测器空转（SidePanels 里没有占位文案）→ 也要报，防这条断言恒真
-    r = probe({ side: SIDE_OK.replace('<b>应用内录制尚未接入。</b>', '可用') })
-    check(
-      '占位检测器一个都没识别到 → 报出（防空转）',
-      r.problems.some((p) => p.includes('检测器本身可能坏了')),
-      why(r)
-    )
+    /* 8) 原来这里有一条「占位检测器一个都没识别到 → 也要报（防空转）」。
+       2026-11-09 起占位面板**已清零**（最后一个占位「录制」做成了真的屏幕/摄像头录制），
+       主检查里那条"必须至少识别到 1 个占位"的自证条件随之删掉 ——
+       留着它就等于"为了过闸门必须故意留一个占位"。
+       防空转现在由上面第 7 条正对照承担：夹具造一个占位面板，**必须**被报出来；
+       检测器一旦失效，第 7 条立刻红。 */
 
     // 9) caps 引用了一个不存在的组
     r = probe({ items: [...GOOD_ITEMS, "      { key: 'badref', label: '坏引用', Icon: IconFolder, caps: CAPABILITY_GROUPS.nope.codes }"] })

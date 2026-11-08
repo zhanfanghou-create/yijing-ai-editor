@@ -308,6 +308,64 @@ if (!ffmpeg) {
   })
 }
 
+/* ------------------- 手写字体（textFont / textFontPath） -------------------
+ * 这一对字段 2026-11-09 才进 PATCHABLE。在此之前：界面能选字体（检查器 + 「字幕 →
+ * 手写字幕」），agent **完全写不了** —— 手写字幕做出来就等于只做了一半。
+ *
+ * 三条判据缺一不可：
+ *   · 写入要落到**磁盘上的草稿**（只改内存里那个对象，重开草稿就没了）；
+ *   · 中文家族名必须报错（渲染层 `^[\w-]{1,64}$` 会静默忽略，于是 agent 看到 ok
+ *     而画面上没换字体 —— 最坏的那种"成功"）；
+ *   · 不存在的路径必须报错（`subtitles.js` 会悄悄退回系统字体，成片字体就变了）。
+ */
+const fontDraftId = (() => {
+  const summary = store.save({ name: '手写字体夹具', data: { aspect: '16:9', clips: [], assets: [] } })
+  const record = store.load(summary.id)
+  record.data.clips = [
+    { id: 't1', track: 'text', kind: 'text', text: '手写测试', textStyle: 'sub-plain', textSize: 32, start: 0, duration: 3 }
+  ]
+  store.save({ id: summary.id, name: record.name, data: record.data })
+  return summary.id
+})()
+
+await check('catalog 列出可用的手写字体（family + 字体文件路径都给 agent）', () => {
+  const list = ops.catalog().handFonts || []
+  assert(list.length >= 4, `手写字体只有 ${list.length} 项，界面那张卡是 4 款系统手写体`)
+  const bad = list.filter((f) => !f.family || !/\.(ttf|otf|ttc)$/i.test(String(f.path || '')))
+  assert(!bad.length, `这些项缺 family 或 path 不是字体文件：${bad.map((f) => f.key).join(',')}`)
+  return `${list.length} 项 · 例 ${list[0].family}`
+})
+
+if (!FONT_SRC) {
+  skip('手写字体写入', '本机没有真实字体文件可写')
+} else {
+  await check('updateClip 把 family 与字体路径一起写进片段，并且真的落盘', () => {
+    const r = ops.updateClip({ draftId: fontDraftId, clipId: 't1', patch: { textFont: 'KaiTi', textFontPath: FONT_SRC } })
+    assert(r.clip.textFont === 'KaiTi', `返回的 textFont=${r.clip.textFont}`)
+    assert(r.clip.textFontPath === FONT_SRC, '返回里没有 textFontPath')
+    const after = store.load(fontDraftId).data.clips[0]
+    assert(after.textFont === 'KaiTi', `落盘后 textFont=${after.textFont}`)
+    assert(after.textFontPath === FONT_SRC, '落盘后 textFontPath 丢了')
+    return 'KaiTi + 文件路径（落盘可读回）'
+  })
+}
+
+await check('中文家族名直接报错（否则渲染层静默忽略，agent 以为成功了）', () => {
+  const message = expectThrow(
+    () => ops.updateClip({ draftId: fontDraftId, clipId: 't1', patch: { textFont: '楷体' } }),
+    'ASCII'
+  )
+  return message.slice(0, 30)
+})
+
+await check('字体文件不存在直接报错（否则导出悄悄退回系统字体）', () => {
+  const message = expectThrow(
+    () => ops.updateClip({ draftId: fontDraftId, clipId: 't1', patch: { textFontPath: 'C:/nope/ghost.ttf' } }),
+    '字体文件不存在'
+  )
+  return message.slice(0, 34)
+})
+
 /* ------------------------------ 汇总 ------------------------------ */
 
 try {

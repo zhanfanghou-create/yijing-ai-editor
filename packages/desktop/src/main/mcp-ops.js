@@ -50,6 +50,10 @@ const audioMod = require('../shared/audio.js')
 const looks = require('../shared/looks.json')
 const frameEffects = require('../shared/frameEffects.json')
 const textStyles = require('../shared/textStyles.json')
+/* 手写字幕的字体族清单：catalog 要把它给 agent（界面「字幕 → 手写字幕」读的是同一份） */
+const handFonts = require('../shared/handFonts.js')
+/* 字幕预设：与界面共用同一份清单与同一个 planPreset（`add_subtitles` 的 `preset` 参数走它） */
+const subtitlePresets = require('../shared/subtitlePresets.js')
 const pipJson = require('../shared/pip.json')
 
 const media = require('./media')
@@ -86,6 +90,10 @@ const PATCHABLE = [
   'opacity', 'scale', 'posX', 'posY', 'rotate', 'fadeIn', 'fadeOut',
   'adjust', 'beauty', 'curves', 'wheels', 'hslBands', 'warp', 'crop', 'effects',
   'textStyle', 'textSize', 'textScale', 'textColor', 'textAnchor', 'textOffset',
+  /* 字体：`textFont` 是预览的 CSS 家族名、`textFontPath` 是导出 drawtext 的 fontfile。
+     两个必须一起写 —— 只写前者是"预览换了字体、成片还是老字体"（同理反过来）。
+     界面早就能选字体（检查器 + 「字幕 → 手写字幕」），agent 此前写不了，属双通道缺口。 */
+  'textFont', 'textFontPath',
   'textAnim', 'keyframes', 'pip', 'border', 'face', 'faceTrack', 'pack', 'group', 'url', 'path',
   'enabled',
   /* 导出阶段的音频 / 画面修复参数（界面上是滑杆与按钮，agent 也要能调） */
@@ -204,9 +212,29 @@ function normalizePatch(patch, ctx = {}) {
       case 'effects':
         out.effects = effects.readEffects(raw)
         break
-      case 'textAnim':
-        out.textAnim = textAnim.readTextAnim(raw)
+      case 'textAnim': {
+        /* ⚠️ 这里曾经写成 `out.textAnim = readTextAnim(raw)` —— 一个**没人读的字段**。
+           消费端（Stage.jsx / subtitles.js）读的是片段上的 `textIn/textOut/textLoop/
+           textInDur/textOutDur`（见 shared/textAnim.js 的 readTextAnim），
+           而 `clip.textAnim` 全项目只有这一行写、没有一处读。
+           于是 agent 调 `update_clip {textAnim:{in:'up'}}` 时接口返回成功、
+           草稿里也多了一个对象，但预览与成片一点变化都没有 —— 典型的"接错动作"，
+           两端都不报错。现在摊平成真正生效的五个键。
+         ⚠️ 而且**只摊调用方真给了的键**：整体覆盖会把"只改入场"变成"顺便把循环清掉"，
+           用户/agent 都看不出是哪一步动的手。 */
+        const src = raw && typeof raw === 'object' ? raw : {}
+        const keysOf = (list) => list.map((t) => t.key)
+        if (src.in !== undefined) out.textIn = pickEnum(src.in, keysOf(textAnim.IN_TYPES), '入场动画')
+        if (src.out !== undefined) out.textOut = pickEnum(src.out, keysOf(textAnim.OUT_TYPES), '出场动画')
+        if (src.loop !== undefined) out.textLoop = pickEnum(src.loop, keysOf(textAnim.LOOP_TYPES), '循环动画')
+        if (src.inDur !== undefined) {
+          out.textInDur = clamp(finite(src.inDur, textAnim.DUR_DEFAULT), textAnim.DUR_MIN, textAnim.DUR_MAX)
+        }
+        if (src.outDur !== undefined) {
+          out.textOutDur = clamp(finite(src.outDur, textAnim.DUR_DEFAULT), textAnim.DUR_MIN, textAnim.DUR_MAX)
+        }
         break
+      }
       case 'textStyle':
         out.textStyle = pickEnum(raw, TEXT_STYLE_KEYS, '文字/字幕样式')
         break
@@ -227,6 +255,29 @@ function normalizePatch(patch, ctx = {}) {
       case 'textOffset':
         out.textOffset = clamp(finite(raw, 0), -textOverrides.TEXT_OFFSET_MAX, textOverrides.TEXT_OFFSET_MAX)
         break
+      /* 字体族名：与 `shared/textOverrides.js` 的白名单同一条件。
+         ⚠️ 不合规要**报错**，不能静默丢掉 —— 渲染层会忽略非法家族名，
+            于是 agent 看到 ok、画面上却没换字体（最坏的那种"成功"）。 */
+      case 'textFont': {
+        const family = String(raw == null ? '' : raw).trim()
+        if (family && !/^[\w-]{1,64}$/.test(family)) {
+          fail(`textFont 只能是 ASCII 家族名（如 KaiTi / STXingkai / YJF_1a2b3c4d），收到「${family}」`)
+        }
+        out.textFont = family
+        break
+      }
+      /* 字体文件：导出侧 drawtext 的 fontfile。空串 = 回到系统默认字体。
+         校验扩展名 + 文件必须真实存在 —— 写一个不存在的路径不会报错，
+         `subtitles.js` 会**悄悄退回系统字体**，成片里字体就变了。 */
+      case 'textFontPath': {
+        const file = String(raw == null ? '' : raw).trim()
+        if (file) {
+          if (!/\.(ttf|otf|ttc)$/i.test(file)) fail(`textFontPath 必须是 .ttf / .otf / .ttc 字体文件，收到「${file}」`)
+          if (!fs.existsSync(file)) fail(`字体文件不存在：${file}（先 yijing_import_font 或换成 catalog.handFonts 里的 path）`)
+        }
+        out.textFontPath = file
+        break
+      }
       case 'keyframes': {
         const list = Array.isArray(raw) ? raw : []
         out.keyframes = list
@@ -456,6 +507,24 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
       transitions: looks.transitions.map((t) => ({ key: t.key, label: t.label })),
       frameEffects: frameEffects.effects.map((f) => ({ key: f.key, label: f.label || f.name || f.key })),
       textStyles: textStyles.styles.map((s) => ({ key: s.key, label: s.label || s.name || s.key, group: s.group || '' })),
+      /* 手写字体族（界面「字幕 → 手写字幕」用的同一份清单）：
+         agent 拿到 family + path 就能写出一条手写字幕 —— 先 add_subtitles，
+         再 update_clip 打 `textFont`/`textFontPath`（两个字段必须一起写）。 */
+      handFonts: handFonts.HAND_FONTS.map((f) => ({ key: f.key, label: f.label, family: f.family, path: f.path, hint: f.hint })),
+      /* 字幕预设（界面「字幕 → 字幕预设」那 857 款的同一份清单）。
+         agent 不需要自己拼参数：把 key 交给 `add_subtitles` 的 `preset` 参数即可，
+         落片段走的是界面同一个 planPreset。这里只给分组与 key+名字，不给整套参数 ——
+         857 条全量塞进 catalog 会把上下文顶爆，而参数反正由软件自己取。 */
+      subtitlePresetGroups: subtitlePresets.PRESET_GROUPS.map((g) => ({
+        key: g.key,
+        label: g.label,
+        note: g.note,
+        count: g.count
+      })),
+      subtitlePresets: subtitlePresets.PRESET_GROUPS.reduce((acc, g) => {
+        acc[g.key] = subtitlePresets.presetsOfGroup(g.key).map((p) => ({ key: p.key, name: p.name }))
+        return acc
+      }, {}),
       adjustParams: adjustMod.ADJUST_PARAMS.map((p) => ({ key: p.key, label: p.label, min: p.min, max: p.max })),
       beautyParams: adjustMod.BEAUTY_PARAMS.map((p) => ({ key: p.key, label: p.label, min: p.min, max: p.max })),
       curveChannels: curves.CURVE_CHANNELS.map((c) => (typeof c === 'string' ? c : c.key)),
@@ -784,8 +853,37 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
    * 加字幕。`subtitles` 可以直接给条目，也可以给 `file`（SRT/VTT/LRC/ASS）
    * 或 `text` 内容 —— 走的是界面导入字幕同一份解析器（shared/subtitle.js）。
    */
-  ops.addSubtitles = ({ draftId, subtitles = [], file, content, filename, offset, style, name }) => {
+  ops.addSubtitles = ({ draftId, subtitles = [], file, content, filename, offset, style, name, preset }) => {
     const draft = readDraft(draftId)
+    const shift = finite(offset, 0)
+
+    /* 走「字幕预设」这一支：与界面点一张卡**同一条路径**（都调 planPreset），
+       所以 agent 落下的片段和用户手点出来的逐字段相同 —— 落点、动效、多行、
+       多条错峰全都在 planPreset 里，不在这里重写一遍。
+       起点 = 字幕轨末尾 + offset：界面是"从播放头往后找空位"，MCP 没有播放头，
+       往后追加是唯一不会盖住已有字幕的选择。 */
+    if (preset) {
+      const presetKey = String(preset).trim()
+      const def = subtitlePresets.presetByKey(presetKey)
+      if (!def) fail(`字幕预设不存在：${presetKey}（yijing_catalog 的 subtitlePresets 里有全部 key）`)
+      const laneEnd = draft.data.clips
+        .filter((c) => c && c.track === 'text')
+        .reduce((m, c) => Math.max(m, (Number(c.start) || 0) + (Number(c.duration) || 0)), 0)
+      const planned = subtitlePresets.planPreset(def, {
+        start: Math.max(0, laneEnd + shift),
+        idFor: () => nextId('clip')
+      })
+      if (!planned.clips.length) fail(`字幕预设「${def.name}」没有生成任何片段`)
+      for (const clip of planned.clips) draft.data.clips.push(clip)
+      const summary = saveDraft(draft.id, name || draft.name, draft.data)
+      return {
+        summary,
+        preset: { key: def.key, name: def.name, hint: subtitlePresets.describePreset(def) },
+        added: planned.clips.length,
+        first: planned.clips.slice(0, 3).map((c) => ({ id: c.id, text: c.text, start: c.start, duration: c.duration }))
+      }
+    }
+
     let cues = []
     if (file || content) {
       const raw = file ? fs.readFileSync(file) : Buffer.from(String(content || ''), 'utf8')
@@ -800,7 +898,6 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
         text: String(s.text || '')
       }))
     }
-    const shift = finite(offset, 0)
     const created = []
     for (const cue of cues) {
       if (!cue.text) continue

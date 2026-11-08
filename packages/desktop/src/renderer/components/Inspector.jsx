@@ -673,8 +673,7 @@ function ClipInspector({
                 按 <b>1–9</b> 直接切到对应机位。切换落在播放头，之后一直用这一路，
                 直到下一个切换点 —— 想改已经切过的地方，把播放头移回去再点一次。
                 <br />
-                预览里可以<b>点选</b>它，但不能直接拖：渲染时它是一串区间，
-                逐片段的画面参数没有落点。要挪位置 / 调画面，先解除多机位。
+                预览里可以<b>点选</b>它，但不能拖动。要挪位置 / 调画面，先解除多机位。
               </p>
             </Section>
 
@@ -852,7 +851,7 @@ function ClipInspector({
                   ))}
                 </div>
                 <p className="wb-insphint">
-                  导出与预览用的是同一种中心轴翻转；两个方向都开等于旋转 180°。
+                  两个方向都开，等于旋转 180°。
                 </p>
               </Section>
             ) : null}
@@ -925,8 +924,7 @@ function ClipInspector({
                   />
                 </div>
                 <p className="wb-insphint">
-                  圆角与斜切都会写进导出：圆角是生成一张圆角遮罩合并到画面上，斜切走 ffmpeg 的 shear。
-                  四角独立时按每个角各自的半径生成遮罩。
+                  四角独立时，每个角可以设各自的半径。
                 </p>
               </Section>
             ) : null}
@@ -993,11 +991,8 @@ function ClipInspector({
                       </div>
                     ))}
                     <p className="wb-insphint">
-                      数值是画面宽高的百分比（不是像素），换比例/换分辨率都不会跑偏。
-                      预览用 CSS matrix3d、导出用 ffmpeg perspective，两者由
-                      shared/warp.js 的同一个单应矩阵算出来。四角被拖开后，框外区域是透明的
-                      （预览与导出一致），会露出下层画面或背景。
-                      四角自交（蝴蝶结）会被判为无效并退回不变形 —— 那种情形画面会反折撕裂。
+                      数值是画面宽高的百分比（不是像素），换比例、换分辨率都不会跑偏。
+                      四角拖开后，框外是透明的，会露出下层画面。
                     </p>
                   </>
                 ) : null}
@@ -1082,8 +1077,7 @@ function ClipInspector({
                   </strong>
                 </div>
                 <p className="wb-insphint">
-                  框外的画面会被裁掉，框内的画面**等比放大铺满**画布（cover 口径）。
-                  导出先 crop 再 scale，与预览的 transform 是同一套换算。
+                  框外的画面会被裁掉，框内的画面等比放大铺满画布。
                 </p>
               </Section>
             ) : null}
@@ -1107,8 +1101,7 @@ function ClipInspector({
                     onChange={(value) => patch({ denoise: value })}
                   />
                   <p className="wb-insphint">
-                    降低画面噪点（暗部尤其明显）。<b>导出时应用</b> —— 预览为了实时性不做降噪，
-                    成片会比你在这里看到的更干净。
+                    降低画面噪点，暗部尤其明显。<b>只在导出时生效</b> —— 预览里看不到效果。
                   </p>
                 </Section>
 
@@ -1128,8 +1121,7 @@ function ClipInspector({
                     onChange={(value) => patch({ stabilize: value })}
                   />
                   <p className="wb-insphint">
-                    抵消手持拍摄的抖动（走 ffmpeg 的 deshake，边缘用镜像补，不会露黑边）。
-                    <b>导出时应用</b>。画面被稳定后会略微放大，构图边角会有一点点变化。
+                    抵消手持抖动，边缘不会露黑边。<b>只在导出时生效</b>；稳定后画面会略微放大。
                   </p>
                 </Section>
               </>
@@ -1160,8 +1152,7 @@ function ClipInspector({
                   ))}
                 </div>
                 <p className="wb-insphint">
-                  混合模式决定画中画怎么和底下的画面叠在一起（导出走 ffmpeg 的 blend，
-                  在 sRGB 空间混合，与预览同一口径）。
+                  混合模式决定画中画怎么和底下的画面叠在一起。
                 </p>
               </Section>
             ) : null}
@@ -1238,9 +1229,7 @@ function ClipInspector({
                       onChange={(value) => patchFx({ stroke: { ...fx.stroke, gap: value } })}
                     />
                     <p className="wb-insphint">
-                      虚线框沿画框四边画，不沿画面轮廓 —— 视频没有可描的轮廓路径，
-                      只有逐像素的透明度，硬说「沿轮廓描边」是假的。预览与导出用同一组
-                      线段长 / 间隔。
+                      虚线框沿画框四边画，不沿画面轮廓。
                     </p>
                   </>
                 ) : null}
@@ -1315,8 +1304,6 @@ function ClipInspector({
                     />
                     <p className="wb-insphint">
                       内阴影沿画框矩形向内铺开，不跟随蒙版形状（圆角会跟）。
-                      预览是叠在画面上方的一层透明阴影，导出是一张按画框尺寸预生成的
-                      距离场图 —— 两端是同一个几何。
                     </p>
                   </>
                 ) : null}
@@ -1382,8 +1369,7 @@ function ClipInspector({
                   onChange={(value) => patchFx({ key: { ...fx.key, similarity: value } })}
                 />
                 <p className="wb-insphint">
-                  把键色（绿幕 / 蓝幕）变成透明。导出走 ffmpeg 的 RGB 抠像；
-                  预览是同一个通道判定的近似，边缘过渡会略有差异。
+                  把键色（绿幕 / 蓝幕）变成透明。预览的边缘过渡与成片会略有差异。
                 </p>
               </Section>
             ) : null}
@@ -1510,8 +1496,7 @@ function ClipInspector({
                   </>
                 ) : null}
                 <p className="wb-insphint">
-                  蒙版只保留形状内的画面。导出按同一个形状生成遮罩、并按羽化半径做高斯模糊，
-                  所以"羽化"在成片里同样是软边。
+                  蒙版只保留形状内的画面，羽化在成片里同样是软边。
                 </p>
               </Section>
             ) : null}
@@ -1536,8 +1521,7 @@ function ClipInspector({
                   />
                 ))}
                 <p className="wb-insphint">
-                  磨皮是把画面做柔化处理（边缘会被轻微放大以避免露边）；美白是整体提亮。
-                  两者都会写进导出的滤镜链，预览与成片同一口径。
+                  磨皮柔化皮肤（边缘轻微放大以免露边）；美白是整体提亮。
                 </p>
               </Section>
             ) : null}
@@ -1625,7 +1609,7 @@ function ClipInspector({
             )}
             {containerClip ? (
               <p className="wb-insphint" data-compound-gain="1">
-                这里是<b>整块</b>的音量：它乘到展开出来的每一段上（预览与成片同时生效）。
+                这里是<b>整块</b>的音量：会乘到展开出来的每一段上。
                 {compoundClip ? '逐段的音量、淡入淡出请解除复合后调。' : '取哪一路的声音，见「多机位」页。'}
               </p>
             ) : null}
@@ -1722,7 +1706,7 @@ function ClipInspector({
             ) : (
               <p className="wb-insphint">
                 还没有包络点。把播放头移到需要的位置再点「在播放头加点」，两个点之间会线性过渡；
-                每个点的音量是**绝对音量**（会把上面的音量滑杆一起算进去）。
+                每个点是绝对音量，会叠加在上面的音量滑杆之上。
               </p>
             )}
           </Section>
@@ -1746,7 +1730,7 @@ function ClipInspector({
               onChange={(value) => patch({ audioDenoise: value })}
             />
             <p className="wb-insphint">
-              压制底噪（空调声 / 电流声 / 环境嗡声）。<b>导出时应用</b> —— 预览为了实时性不做频域降噪。
+              压制底噪（空调声 / 电流声 / 环境嗡声）。<b>只在导出时生效</b>。
               强度过高会让人声发闷，建议 30–60。
             </p>
           </Section>
@@ -1772,8 +1756,8 @@ function ClipInspector({
               onChange={(value) => patch({ voiceBoost: value })}
             />
             <p className="wb-insphint">
-              削掉 85Hz 以下的隆隆声、提亮 2.8kHz 的辅音、再把忽大忽小压平。
-              <b>导出时应用</b>。建议先降噪再加增强。
+              削掉低频隆隆声、提亮辅音、把忽大忽小压平。
+              <b>只在导出时生效</b>。建议先降噪再加增强。
             </p>
           </Section>
         ) : null}
@@ -1807,8 +1791,8 @@ function ClipInspector({
               })}
             </div>
             <p className="wb-insphint">
-              花栗鼠 / 低沉的音高与时长分开算：变调之后会把时长拉回原样，片段不会缩水。
-              <b>导出时应用</b> —— 预览听的是原声。
+              变调会把时长拉回原样，片段不会缩水。
+              <b>只在导出时生效</b> —— 预览听的是原声。
             </p>
           </Section>
         ) : null}
@@ -1839,8 +1823,7 @@ function ClipInspector({
               }}
             />
             <p className="wb-insphint">
-              把这一轨整体往左/右偏。<b>导出时应用</b> —— 预览的播放器只有一个总音量，没法按声道分。
-              这里改的是左右两个声道的增益，不会把立体声混成单声道。
+              把这一轨整体往左/右偏。<b>只在导出时生效</b> —— 预览没法按声道分。
             </p>
           </Section>
         ) : null}
@@ -1861,8 +1844,7 @@ function ClipInspector({
               /* 有曲线时**不给开关**，而不是给一个点了没反应的开关：
                  两者对"时间往哪边走"的定义冲突（曲线按进度 v(p) 往前走、倒放是整段反着走）。 */
               <p className="wb-insphint" data-reverse-blocked="1">
-                已启用<b>曲线变速</b>，倒放暂不可用 —— 两者对时间方向的语义冲突。
-                先清除曲线（下面「变速」里）再倒放。
+                已启用<b>曲线变速</b>，倒放暂不可用。先清除曲线（下面「变速」里）再倒放。
               </p>
             ) : (
               <Toggle
@@ -1876,7 +1858,7 @@ function ClipInspector({
               {clip.kind === 'image'
                 ? '图片片段没有时间轴，倒放不会改变任何画面。'
                 : clip.reverse === true
-                  ? '这一段按倒序播放：预览靠反向取帧实现，导出用 reverse / areverse。声音在预览里静音（浏览器不能反放音频），成片里是完整倒放的。'
+                  ? '这一段按倒序播放。预览里声音静音（浏览器不能反放音频），成片里是完整倒放的。'
                   : '把这一段的画面与声音按倒序播放，时间线占位不变。'}
             </p>
           </Section>
@@ -1990,8 +1972,7 @@ function ClipInspector({
                         {compoundClip ? (
                           <>
                             复合片段按<b>整体匀速</b>变速（内部各段按同一比例一起变）。
-                            <b>曲线变速 / 卡点请在内部片段上设</b>：展开时内层的曲线、源入点与
-                            时长都是精确保留的。
+                            <b>曲线变速 / 卡点请在内部片段上设</b>。
                           </>
                         ) : (
                           <>
@@ -2064,15 +2045,14 @@ function ClipInspector({
                   type="button"
                   data-beat-audio="1"
                   disabled={beatBusy}
-                  title="用本机 ffmpeg 抽这段音频的振幅包络，再找重音"
+                  title="分析这段音频的重音位置"
                   onClick={beatFromAudio}
                 >
                   {beatBusy ? '分析中…' : '按音频检测'}
                 </button>
               </div>
               <p className="wb-insphint" data-beat-note={beatNote ? '1' : '0'}>
-                {beatNote ||
-                  '每个重音处压一段慢动作、重音之间加速。标记用 M 键打；音频检测走本机 ffmpeg，不联网。'}
+                {beatNote || '每个重音处压一段慢动作、重音之间加速。标记用 M 键打。'}
               </p>
             </Section>
           )}
@@ -2092,7 +2072,7 @@ function ClipInspector({
                 onChange={(on) => patch({ keepPitch: on })}
               />
               <p className="wb-insphint">
-                关掉之后变速会连音高一起变（磁带快放/慢放那种效果）。预览与导出都按这个开关走。
+                关掉之后变速会连音高一起变（磁带快放/慢放那种效果）。
               </p>
               <Slider
                 label="变调"
@@ -2104,8 +2084,7 @@ function ClipInspector({
                 format={(value) => (Number(value) === 0 ? '不变调' : `${value > 0 ? '+' : ''}${value} 半音`)}
               />
               <p className="wb-insphint">
-                <b>导出时应用</b> —— 浏览器没有"指定音高播放"，预览听不到；成片里是准确的
-                （改采样率把音高抬上去，再用变速滤镜把时长拉回来，所以变调不改变片段长度）。
+                <b>只在导出时生效</b> —— 预览听不到。变调不改变片段长度。
               </p>
             </Section>
           )}
@@ -2231,7 +2210,7 @@ function ClipInspector({
                   ))}
                 </select>
               </label>
-              <p className="wb-insphint">左侧「字幕」页里的样式卡与这里是同一个值，改哪边都生效。</p>
+              <p className="wb-insphint">左侧「字幕」页里的样式卡改的是同一条字幕。</p>
             </Section>
 
             <Section
@@ -2522,8 +2501,8 @@ function ClipInspector({
                 onChange={(value) => patch({ textOutDur: value })}
               />
               <p className="wb-insphint">
-                预览与导出用的是同一组参数：入场（位移 + 淡入）、出场（位移 + 淡出）、
-                持续（低幅循环）。幅度按画幅百分比算，所以 1080p 与 4K 导出看起来一样。
+                入场是位移 + 淡入，出场是位移 + 淡出，持续是低幅循环。
+                幅度按画幅百分比算，换分辨率看起来一样。
               </p>
             </Section>
           </>

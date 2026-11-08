@@ -294,7 +294,7 @@ if (!STATIC_ONLY) {
     const hasMine = await page.locator('.wb-node[data-wb-node="plug-mine"]').count()
     record('真机：插件页签存在且左栏有「我的插件」', tabCount >= 12 && hasMine > 0, `页签 ${tabCount} 枚`)
 
-    /* ② 空状态 + 边界说明（先看文案，不先装东西） */
+    /* ② 空状态（先看文案，不先装东西） */
     await page.locator('.wb-node[data-wb-node="plug-mine"]').click()
     await page.waitForTimeout(500)
     const emptyText = await page
@@ -302,13 +302,24 @@ if (!STATIC_ONLY) {
       .first()
       .textContent()
       .catch(() => '')
-    const noteText = await page
-      .locator('[data-plug-note]')
-      .first()
-      .textContent()
-      .catch(() => '')
     record('真机：没装插件时给的是说明，不是空白', Boolean(emptyText && emptyText.trim().length > 6), emptyText || '(空)')
-    record('真机：面板写明不支持 .ofx', /不支持 \.ofx/.test(noteText), noteText.slice(0, 40))
+
+    /* ②' 面板里**不许**再出现开发视角的边界说明。
+     *
+     * 2026-11-09 Jason：「不需要用户看到的提示内容都去除」。原来这里断言的是反向的
+     * —— `/不支持 \.ofx/` 必须出现（当时理由是"要让用户在点导入前就知道"）。
+     * 那句话实际是免责 + 实现说明（"那需要实现 OpenFX 宿主接口"），剪片用户不需要读；
+     * 而删掉它**不会**造成静默失败：导入入口是"选一个文件夹"，目录里没有 manifest.json
+     * 时主进程回真实错误、面板显示在 [data-plug-error] 里，用户拿到的是功能性反馈。
+     *
+     * 所以这条改成**反向断言**：既要它不出现，也要它不换个说法回来
+     * （.ofx / OpenFX / 宿主接口 三个词都不许出现在可见文本里）。 */
+    const devCopy = await page.evaluate(() => {
+      const el = document.querySelector('.wb-pane') || document.body
+      return String(el.innerText || '')
+    })
+    const hasDevCopy = /\.ofx|OpenFX|宿主接口/i.test(devCopy)
+    record('真机：面板里没有开发视角的边界说明（.ofx / OpenFX / 宿主接口）', !hasDevCopy, hasDevCopy ? '仍出现：' + devCopy.slice(0, 60) : '未出现')
 
     /* ③ 真装一次 —— 走**面板按钮**这条产品路径，不在页面里直接调 IPC。
        直调 IPC 的话面板自己的 state 不会更新，测出来的是"外力装进去了"，

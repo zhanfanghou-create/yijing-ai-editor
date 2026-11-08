@@ -387,6 +387,13 @@ async function main() {
     if (installed) {
       await page.locator('[data-wb-tab="subtitle"]').click()
       await sleep(400)
+      /* ⚠️ 这里**必须显式点进「自定义」**，不能靠"点开字幕标签就自然落在它上面"。
+         2026-11-09 实测过一次：左栏「字幕」组里加了一项（字幕预设），
+         默认落点被新项抢走 ⇒ 本节 `[data-sub-ai]` 30 秒定位超时，
+         而功能本身一点没坏。判据依赖"谁是第一个/默认项"这类**相对位置**，
+         改动别处就会红，且红得像功能坏了。第 1 节本来就是显式点的，这里补齐。 */
+      await page.locator('[data-wb-node="subtitle-custom"]').click()
+      await sleep(300)
       await page.locator('.clip[data-clip="c_speech"]').click()
       await sleep(300)
       await page.locator('[data-sub-ai]').click()

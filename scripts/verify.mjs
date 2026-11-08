@@ -472,6 +472,23 @@ const GATES = [
     count: /CLIP_PROPS_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'subtitle-preset-selftest',
+    name: '自证·字幕预设（857 款清单完整性 / 参数落点 / 多行≠多条 / 键名对得上消费端）',
+    argv: [NODE, '--no-warnings', 'tools/subtitle-preset-selftest.mjs'],
+    // 稳定数字 43。「字幕 → 字幕预设」857 款的参数翻译全在 shared/subtitlePresets.js，
+    // 这一层的错法**全是静默的**，而且错完看起来"功能是好的"：
+    //   ① 键名写成预设对象那套（anchor / align / in）而不是片段那套
+    //      （textAnchor / textAlign / textIn）⇒ 草稿里也多出一条字幕，只是落点还在底部、
+    //      也没有入场动画 —— 界面上什么都不报；
+    //   ② 把「一屏三行」当成"三条片段" ⇒ 时间线上三条一字一拍，而名字说的是并列三点；
+    //   ③ 分组 count 与清单条数漂移 ⇒ 分类按钮写着 318、点进去 317 张；
+    //   ④ 样式 key 不在 textStyles.json ⇒ textStyleDef 退回 fallback，一整批卡撞成同一个样。
+    // 期望值一律对**真源**（textStyles.json / textAnim.js 的动画表），不从被测函数反算。
+    expected: 43,
+    marker: /SUBTITLE_PRESET_SELFTEST_PASSED/,
+    count: /SUBTITLE_PRESET_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'groups-selftest',
     name: '自证·组合（逻辑成组 / 组号覆盖 / 解组只清本组夹具）',
     argv: [NODE, '--no-warnings', 'tools/groups-selftest.mjs'],
@@ -1290,7 +1307,7 @@ const GATES = [
   },
   {
     id: 'timeline-nav-e2e',
-    name: '客户端 E2E（时间线导航：切点跳转 ↑↓ / 适配全片 Shift+Z / Alt+滚轮横移）',
+    name: '客户端 E2E（时间线导航：切点跳转 ↑↓ / 适配全片 Shift+Z / Alt+滚轮横移 / 播放头拖动）',
     argv: [NODE, 'tools/timeline-nav-e2e.mjs'],
     // 稳定数字 13。为什么在 timeline-nav-selftest（35 条纯逻辑）之外还要这一道：
     // 自测证得了「切点算得对、缩放算得对」，证不了「按下去真的发生」——
@@ -1307,7 +1324,15 @@ const GATES = [
     // 13 → 16（2026-10-28 同日晚）：E 段三键播放 —— L 前进 / K 停住 / J 后退。
     // 这一族的失效形状很统一：**播放头一动没动**（方向没进 rAF）、
     // 或 **K 停不住**（只清了标志位、rAF 还在推）。两种都不报错、图标还会变。
-    expected: 16,
+    // 16 → 24（2026-11-09）：F 段播放头拖动 —— 按住左键随意拖。
+    // 起因是 Jason 报"拖动不灵活、不能按住拖到指定位置"：实现里只有 pointerdown 定位一次，
+    // 而标尺上的白色抓手是 `.playhead::before` 画的装饰（父元素 pointer-events: none）。
+    // 这一族同样**一条静态闸门都过得了**（线画对了、位置对了、不报错），
+    // 只表现为"按住不动"。八条分工：跟手（17/18）/ 松手不跳且状态复位（19）/
+    // 抓手能被 elementFromPoint 命中（20，旧的假抓手必红）/ 按下不吸到指针中心（21）/
+    // 抓手上拖 90px 换算成秒（22，用 BASE_DPS=46×zoom 这个规格常量算期望，
+    // 不拿被测函数反算）/ 越界夹到 0（23）/ 拖动不许挪动片段（24，负对照）。
+    expected: 24,
     marker: /TIMELINE_NAV_E2E_OK/,
     count: /TIMELINE_NAV_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -1706,6 +1731,56 @@ const GATES = [
     expected: 16,
     marker: /RECORDER_E2E_OK/,
     count: /RECORDER_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'text-custom-e2e',
+    name: '客户端 E2E（左栏「文字 → 自定义」「字幕 → 手写字幕」：真点击 / 真落片段 / 预览真换字体）',
+    argv: [NODE, 'tools/text-custom-e2e.mjs'],
+    // 稳定数字 18。这一族治的是「点了没反应」：
+    //   「自定义」与「创建文字」原本都映射 `panel:'text'`，「手写字幕」与「新建字幕」
+    //   也是 —— 点下去中栏一字未变。**任何静态闸门都看不见**：panel 名合法、面板有内容、
+    //   页面不报错，workbench-tabs-e2e 的"非空壳"也满足。
+    // 所以判据必须读到动作结果：输入的字变成时间线上 `data-clip-text`；点字体写到
+    // `data-clip-font`；再到**消费端**核对预览叠加层的 computed font-family。
+    // 两条反向断言（没有退化成样式网格）专门钉住"共用面板"这个旧缺陷。
+    expected: 18,
+    marker: /TEXT_CUSTOM_E2E_OK/,
+    count: /TEXT_CUSTOM_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'subtitle-preset-e2e',
+    name: '客户端 E2E（字幕 → 字幕预设：分类 / 卡面底图 / 悬停动画 / 多行一条 / 多条错峰）',
+    argv: [NODE, 'tools/subtitle-preset-e2e.mjs'],
+    // 稳定数字 23。「字幕 → 字幕预设」857 款的价值全在"点一张卡之后时间线上真的多出
+    // N 条、而且位置 / 动效 / 多行都对"。自检只能证 planPreset 这个纯函数算得对，
+    // 证明不了下面四件只在真机成立的事：
+    //   ① 左栏那一项真的打开了这一页（不是又一屏"点了没反应"）；
+    //   ② 卡面底图是**软件自己的字幕底片**（plate.webp），不是素材包里那些黑底占位图；
+    //   ③ 片段上挂的是 textStyle / textAnchor / textIn 这些**消费端真读的键**
+    //      （写成 style / anchor / in 也能存进草稿，界面不报错，只是落点还在底部）；
+    //   ④ 多行预设产出的是**一条**带换行的字幕，而不是三条一字一拍的片段。
+    // 期望值在本脚本里独立写死（60 张 / 7 个分类 / 10 张 / 3 条 / 三行），不 import 被测代码。
+    // 负对照实测过：把 planPreset 里的 textAnchor 改成 anchor，第 16 条当场红，其余 22 条照旧绿。
+    expected: 23,
+    marker: /SUBTITLE_PRESET_E2E_OK/,
+    count: /SUBTITLE_PRESET_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'record-screen-e2e',
+    name: '客户端 E2E（应用内录制：权限票据负对照 / 应用内确认 / 真 MediaRecorder / 真落盘 / 落播放头）',    argv: [NODE, 'tools/record-screen-e2e.mjs'],
+    // 稳定数字 29。这一族的核心是**负对照**（打桩之前，全走真实权限路径）：
+    //   ① 没有票据 ⇒ 摄像头必须被拒（证明闸门没被"整条放开"）；
+    //   ② 拿到 camera 票据 ⇒ 摄像头可用（证明放行确实是票据带来的）；
+    //   ③ camera 票据开不了屏（scope 不能串用）。
+    // 只加 `--use-fake-device-for-media-stream`，**不加** `--use-fake-ui-for-media-stream`：
+    // 后者会让 Chromium 直接 auto-allow、权限回调根本不参与，三条负对照会全部假绿。
+    // 屏幕这一侧只把"画面从哪来"换成 canvas.captureStream（打桩），录/编/落盘/落片段全真。
+    expected: 29,
+    marker: /RECORD_E2E_OK/,
+    count: /RECORD_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/,
     timeoutMs: 6 * 60 * 1000
   },
   {
@@ -2475,7 +2550,15 @@ const GATES = [
     // 93 → 94 加「智能抠像」（1 个叶子节点，自身就是落点）。这一条是复跑全量时才发现的：
     //   上一轮加面板时只跑了 workbench-tabs（它数的是标签栏与中栏，不含左栏树），
     //   workbench-tree 没跟着跑 ⇒ 差一个数没被发现。左栏加减节点必须两道一起跑。
-    expected: 94,
+    // 94 → 95（2026-11-09）：新增全局第 11 条 ——「同一标签内没有两个入口打开同一屏内容」。
+    //   起因是用户报「文字 → 自定义」「字幕 → 手写字幕」点了没反应：它们与
+    //   「创建文字」「新建字幕」都写 `panel: 'text'`（且无区分字段），点下去面板一字未变。
+    //   这类缺陷此前**所有闸门都能过**：panel 名合法、面板有内容、页面不报错、
+    //   workbench-tabs 的"非空壳"也满足。判据 = panel 相同 + label 不同 + 区分字段
+    //   （textStyle/sticker/material/pluginTab…）相同 ⇒ 报红；手风琴父子关系不算。
+    // 95 → 96（2026-11-09 晚）：「字幕」下新增「字幕预设」节点（857 款口播动态排版）。
+    //   左栏每加一个节点这一格就 +1 —— 断言总数 = 11（全局）+ 节点数。
+    expected: 96,
     marker: /WORKBENCH_TREE_CHECK_OK/,
     count: /WORKBENCH_TREE_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+problems=(?<f>\d+)/
   },
@@ -2517,7 +2600,14 @@ const GATES = [
     //   / 只靠能力码可达、却没有专属面板入口的族（孤儿族防空转）。
     // 22 → 23（2026-09-24）：#10 规则改成"items 与根子项全空才算缺失"（转场/滤镜/特效
     //   的参考分组树全挂根子项，items 空是合法形态），补一条反向用例钉住。
-    expected: 23,
+    // 23 → 22（2026-11-09）：占位面板清零（「录制」实现了屏幕/摄像头录制），
+    //   自检里"占位检测器一个都没识别到 → 报出"这条没有对象了，连同主检查里
+    //   "必须识别到 ≥1 个占位"的防空转条件一起删掉。防空转改由
+    //   "落点是占位面板 → 必须报出"这条**正对照**承担（检测器坏，它立刻红）。
+    // 22 → 24（2026-11-09 同日）：新增「两个入口打开同一屏」的正反对照 ——
+    //   正对照（panel 与区分字段都相同 ⇒ 必须报出）治恒真，
+    //   反对照（区分字段不同 ⇒ 不许报）治误杀（贴纸八类 / 插件三项都靠区分字段共用面板）。
+    expected: 24,
     marker: /WORKBENCH_TREE_CHECK_SELFTEST_OK/,
     count: /WORKBENCH_TREE_CHECK_SELFTEST\s+pass=(?<p>\d+)\s+total=(?<t>\d+)/
   },
@@ -2616,8 +2706,13 @@ const GATES = [
     //   （本项目注释里大量使用 ⚠️ 与 →）；← → ↑ ↓ 不禁（快捷键提示要用）。
     // ⚠️ 裸「占位」不算痕迹 —— 「时间线占位随之变成 3.2 秒」是剪辑软件正经术语，
     //    判它就是在制造假红。只查「占位图/占位素材/占位文案/占位内容」这类认账说法。
-    // ⚠️ 反空洞：第 3 条钉扫描器没空转；第 4、5 条拿合成夹具自证它会说不。
-    expected: 5,
+    // ⚠️ 反空洞：第 3 条钉扫描器没空转；第 4、5、6 条拿合成夹具自证它会说不。
+    // 5 → 6（2026-11-09）：新增「markdown 星号漏到界面上」这条判据。
+    //   当天实测渲染层有 3 处（自由变形 / 裁切 / 音量包络的说明文字写成
+    //   `画面**等比放大铺满**画布`），界面上原样显示两个星号。
+    //   成因很统一：注释里习惯用 `**加粗**` 写强调，然后把整句搬进 JSX ——
+    //   注释会被剥掉，正文不会。JSX 里要加粗只有 `<b>` / `<strong>` 一条路。
+    expected: 6,
     marker: /UI_COPY_CHECK_OK/,
     count: /UI_COPY_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+fail=(?<f>\d+)/
   },
@@ -2723,7 +2818,12 @@ const GATES = [
     // 251 → 253（2026-11-02 加「智能抠像」左栏节点）：**没有新标签**，
     //   只在「素材」页多 1 个节点 ⇒ 1 节点×2 = 2。实测 253 全过、0 跳过。
     // 253 → 254（2026-11-07 首页导航加第三项「无线画布」）：A 段逐项点击 +1。
-    expected: 254,
+    // 254 → 256（2026-11-09「字幕」页加「字幕预设」）：**没有新标签**，只在字幕页
+    //   多 1 个左栏节点 ⇒ 1 节点×2 = 2。这一轮是闸门**先红给我们看的**：
+    //   加完节点没改这张表，B 段「左栏没有表外节点」当场把新节点判成"混进了没人点的东西"。
+    //   这正是把期望值写死在脚本里（不从 AssetTree import）的价值 —— 从被测表取期望，
+    //   多一个入口它也会跟着"通过"。
+    expected: 256,
     marker: /TABS_E2E_OK/,
     count: /TABS_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -3232,7 +3332,13 @@ const GATES = [
     //     只判"返回了数组"的话，灵敏度写反、步长算错都照样绿。
     // ⚠️ `detectBeats` 是真异步：自检里同步调只会拿到 Promise，每条断言都在拿
     //    undefined 比较，报错还长得像"实现有问题"。所以 check() 统一 await。
-    expected: 15,
+    //
+    // 15 → 19（2026-11-09）：手写字体进了 `PATCHABLE`（textFont / textFontPath）。
+    //   在此之前界面能选字体、agent 完全写不了 —— 「手写字幕」只做了一半。
+    //   四条：catalog 给出 family+path / 写入并**落盘可读回** /
+    //   中文家族名必须报错（渲染层会静默忽略）/ 不存在的路径必须报错
+    //   （导出侧会悄悄退回系统字体）。后两条是负对照，缺了这两条等于没验。
+    expected: 19,
     marker: /MCP_GAP_OPS_OK/,
     count: /MCP_GAP_OPS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },

@@ -94,6 +94,9 @@ export default function Timeline({
   onSnap,
   onSeek,
   onSelect,
+  /* 开始拖动播放头（按住左键那一刻）。App 用它把播放停掉 —— 不停的话
+     Stage 的播放 rAF 每帧把播放头往前推，用户抓到的是"一条自己往前跑的线" */
+  onScrubStart,
   onRemove,
   onClear,
   onSplit,
@@ -252,29 +255,156 @@ export default function Timeline({
   /** 视频轨上的转场角标（只含真的会生效的，位置用原始坐标贴着用户看到的接缝） */
   const laneMarkers = useMemo(() => effectiveTransitions(clips), [clips])
 
-  /**
-   * 在轨道区（刻度尺 + 各条轨道）按下时定位播放头。
-   *
-   * 为什么绑 **pointerdown 而不是 click** —— 这里踩过一次真实的坑：
-   * 原来绑的是 `onClick`。而 `click` 是**独立的事件类型**，谁都没法用
-   * `pointerdown` 上的 `stopPropagation()` 把它拦住。于是"点片段只选中"这个意图
-   * 完全失效：`.clip` 里那句 `event.stopPropagation()` 白写了，点一下片段
-   * 会顺着冒泡走到这里，把播放头**跳到鼠标点的那一秒**。表现很隐蔽 ——
-   * 选中看着是对的，只有"选中后播放头自己跑了"才会露馅；修剪片段后点一下同样会跳。
-   *
-   * 换成 pointerdown 之后，凡是自己处理了 pointerdown 的子元素（片段、两端修剪手柄）
-   * 天然把事件吃掉，不需要每个子元素都记得拦一次 click —— 这才是防住同类缺陷的关键：
-   * 靠"每个子元素自觉"的设计，迟早会漏掉一个新加的子元素。
-   *
-   * 顺带排除非左键：右键是要弹菜单的，不该顺手把播放头挪走。
-   */
-  /** 把客户区横坐标换算成秒并夹到 [0, duration]，然后定位播放头 */
+  /** 客户区横坐标 → 秒（夹到 [0, duration]）。点击与拖动共用这一个换算 */
+  const secondsAtClientX = (clientX) => Math.max(0, Math.min(duration, pointerToSeconds(clientX)))
+
+  /** 换算后直接定位播放头（单点跳转用） */
   const seekToSecondsFromClientX = (clientX) => {
-    const lane = laneRef.current
-    if (!lane) return
-    const rect = lane.getBoundingClientRect()
-    const x = clientX - rect.left + lane.scrollLeft
-    onSeek(Math.max(0, Math.min(duration, x / dps)))
+    if (!laneRef.current) return
+    onSeek(secondsAtClientX(clientX))
+  }
+
+  /* ------------------------- 播放头拖动（scrub） ------------------------- */
+
+  /**
+   * 按住左键在**标尺 / 轨道空白 / 播放头手柄**上拖动，播放头实时跟手。
+   *
+   * 改动前这里只有一个 `pointerdown` 就结束：点一下跳到那一秒，之后指针再怎么动都没人管。
+   * 而标尺上那个白色圆角"抓手"是 `.playhead::before` 画出来的装饰，父元素还是
+   * `pointer-events: none` —— **形似而不可抓**。Jason 报的"不能按住随意拖"就是这两件事。
+   *
+   * 三条实现上的硬要求：
+   *   ① **按帧合并**：120Hz 鼠标一帧能来两次 pointermove，每次都 setPlayhead 等于白渲染
+   *      一遍（合成器 + 预览层视频 seek 全在这一跳里）。所以 move 只记最新坐标，
+   *      真正的定位在 rAF 里做一次；且"算出来和上一帧同一秒"就不发。
+   *   ② **抓手不许跳**：按手柄时不能把播放头吸到指针中心（那会先跳半个抓手宽再跟手），
+   *      而是记住"按下瞬间播放头与指针的差"，全程保持。标尺/轨道空白处按下则相反 ——
+   *      那里按下本身就代表"我要跳到这儿"。
+   *   ③ **边缘自动滚**：拖到可见区左右边缘时视图跟着滚，否则长片后半段永远拖不到
+   *      （指针已经顶到窗口边，秒数却卡在视口边沿）。
+   */
+  const scrubRef = useRef(null)
+  const [scrubbing, setScrubbing] = useState(false)
+
+  /** 撤掉一次拖动留下的 rAF 与 window 监听（正常松手、重复按下、卸载三处共用） */
+  const detachScrub = (state) => {
+    if (!state) return
+    if (state.raf) cancelAnimationFrame(state.raf)
+    state.raf = 0
+    window.removeEventListener('pointermove', state.onMove)
+    window.removeEventListener('pointerup', state.onUp)
+    window.removeEventListener('pointercancel', state.onUp)
+  }
+
+  /* 卸载时把还挂着的监听与 rAF 撤掉：切标签/关工作台时不会留下一个到处 setState 的循环 */
+  useEffect(
+    () => () => {
+      detachScrub(scrubRef.current)
+      scrubRef.current = null
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
+
+  /** 边缘自动滚：进入 26px 内开始滚，最快每帧 16px（约一屏宽的 1/8） */
+  const SCRUB_EDGE_PX = 26
+  const SCRUB_MAX_SCROLL = 16
+
+  /**
+   * 起一次拖动。
+   *
+   * @param {Event} event 指针按下事件
+   * @param {{anchor?: 'pointer'|'playhead', deselect?: boolean}} opts
+   *   `anchor: 'playhead'` = 按的是抓手（保持指针与播放头的差）；
+   *   `deselect` = 轨道空白处按下顺手取消选中（与改动前同一口径）。
+   */
+  const startScrub = (event, opts = {}) => {
+    if (event.button !== undefined && event.button !== 0) return
+    if (!laneRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    /* 上一次没收到 pointerup（鼠标在窗口外松开、或者被别的层吃掉）时不能直接盖掉它 ——
+       那样旧那次留下的监听与 rAF 就永远收不掉了。先结算掉旧的。 */
+    if (scrubRef.current) {
+      detachScrub(scrubRef.current)
+      scrubRef.current = null
+    }
+
+    /* 播放中按住播放头 = 要手控。不停播放的话，Stage 的 rAF 每帧把播放头往前推，
+       用户抓到的是一条自己往前跑的线（感觉像"拖不动"）。 */
+    if (onScrubStart) onScrubStart()
+    if (opts.deselect && onSelect) onSelect(null)
+
+    const anchorPlayhead = opts.anchor === 'playhead'
+    const startX = event.clientX
+    const offset = anchorPlayhead ? (Number(playhead) || 0) - secondsAtClientX(startX) : 0
+    const state = { offset, lastX: startX, lastSeconds: null, raf: 0, dirty: false }
+    scrubRef.current = state
+
+    const resolve = (clientX) => Math.max(0, Math.min(duration, secondsAtClientX(clientX) + offset))
+
+    const apply = (clientX) => {
+      state.lastX = clientX
+      state.dirty = false
+      const seconds = resolve(clientX)
+      /* 同一秒不发：指针在原地抖动、或拖动被夹到片尾时，不必重复写 App 状态 */
+      if (state.lastSeconds !== null && Math.abs(seconds - state.lastSeconds) < 0.0005) return
+      state.lastSeconds = seconds
+      onSeek(seconds)
+    }
+
+    const frame = () => {
+      state.raf = 0
+      if (scrubRef.current !== state) return
+      const lane = laneRef.current
+      if (lane) {
+        const rect = lane.getBoundingClientRect()
+        const leftEdge = rect.left + SCRUB_EDGE_PX
+        const rightEdge = rect.left + lane.clientWidth - SCRUB_EDGE_PX
+        let delta = 0
+        if (state.lastX > rightEdge) delta = Math.min(SCRUB_MAX_SCROLL, (state.lastX - rightEdge) * 1.5)
+        else if (state.lastX < leftEdge) delta = -Math.min(SCRUB_MAX_SCROLL, (leftEdge - state.lastX) * 1.5)
+        if (delta) {
+          const max = Math.max(0, lane.scrollWidth - lane.clientWidth)
+          const before = lane.scrollLeft
+          lane.scrollLeft = Math.max(0, Math.min(max, before + delta))
+          if (lane.scrollLeft !== before) {
+            /* 滚动改了坐标基准 ⇒ 必须重算一次；而且指针停着不动也要继续滚，
+               所以这里自己续一帧（只在"真的滚动了"时续，到边自然停）。 */
+            apply(state.lastX)
+            state.raf = requestAnimationFrame(frame)
+            return
+          }
+        }
+      }
+      if (state.dirty) apply(state.lastX)
+    }
+
+    /* 监听挂 window 而不是元素上：拖动会离开标尺（拖到轨道区、拖到窗口外），
+       挂在元素上就只能听到元素范围内的移动。 */
+    state.onMove = (moveEvent) => {
+      state.lastX = moveEvent.clientX
+      state.dirty = true
+      if (!state.raf) state.raf = requestAnimationFrame(frame)
+    }
+    state.onUp = (upEvent) => {
+      const x = upEvent && typeof upEvent.clientX === 'number' ? upEvent.clientX : state.lastX
+      detachScrub(state)
+      if (scrubRef.current === state) scrubRef.current = null
+      /* 松手再结算一次：最后一次 move 与 up 之间可能还差几个像素（尤其在边缘滚过之后） */
+      const seconds = resolve(x)
+      if (state.lastSeconds === null || Math.abs(seconds - state.lastSeconds) > 0.0005) onSeek(seconds)
+      setScrubbing(false)
+    }
+    window.addEventListener('pointermove', state.onMove)
+    window.addEventListener('pointerup', state.onUp)
+    window.addEventListener('pointercancel', state.onUp)
+    setScrubbing(true)
+
+    if (anchorPlayhead) state.lastSeconds = Number(playhead) || 0
+    /* 按下即定位 —— "点一下把播放头放这儿"这条老行为必须保住 */
+    else apply(startX)
   }
 
   /* --------------------------- 时间区域 --------------------------- */
@@ -328,27 +458,44 @@ export default function Timeline({
     window.addEventListener('pointerup', up)
   }
 
-  /** 标尺按下：**带 Shift 才是框选**，否则照旧挪播放头（见下面那句注释） */
+  /** 标尺按下：**带 Shift 才是框选**，否则按住就能拖着定位播放头 */
   const rulerPointerDown = (event) => {
     if (event.shiftKey) {
       startRegionDrag(event, null)
       return
     }
-    /* 不带 Shift：交给原来的 seek。这里必须自己调一次并 stopPropagation ——
+    /* 不带 Shift：交给挪播放头（按下即定位 + 按住可拖）。
+       这里必须自己调一次并 stopPropagation ——
        标尺是 .wb-tltracks 的子元素，让事件继续冒泡会被外层的 seekFromEvent 再处理一次
        （两次 seek 结果一样，但 `onSelect(null)` 会连带把片段选中也清掉，
        而"点标尺只是想挪播放头"不该取消选中）。 */
     event.stopPropagation()
-    seekFromEvent(event)
+    startScrub(event, { deselect: false })
   }
 
+  /**
+   * 在轨道区（刻度尺 + 各条轨道）按下时定位播放头。
+   *
+   * 为什么绑 **pointerdown 而不是 click** —— 这里踩过一次真实的坑：
+   * 原来绑的是 `onClick`。而 `click` 是**独立的事件类型**，谁都没法用
+   * `pointerdown` 上的 `stopPropagation()` 把它拦住。于是"点片段只选中"这个意图
+   * 完全失效：`.clip` 里那句 `event.stopPropagation()` 白写了，点一下片段
+   * 会顺着冒泡走到这里，把播放头**跳到鼠标点的那一秒**。表现很隐蔽 ——
+   * 选中看着是对的，只有"选中后播放头自己跑了"才会露馅；修剪片段后点一下同样会跳。
+   *
+   * 换成 pointerdown 之后，凡是自己处理了 pointerdown 的子元素（片段、两端修剪手柄）
+   * 天然把事件吃掉，不需要每个子元素都记得拦一次 click —— 这才是防住同类缺陷的关键：
+   * 靠"每个子元素自觉"的设计，迟早会漏掉一个新加的子元素。
+   *
+   * 顺带排除非左键：右键是要弹菜单的，不该顺手把播放头挪走。
+   */
   const seekFromEvent = (event) => {
     if (event.button !== undefined && event.button !== 0) return
-    seekToSecondsFromClientX(event.clientX)
     /* 点轨道空白 = 挪播放头 **并且** 取消选中（与预览里点画面外同一口径）。
+       拖动只是"按住不放继续挪"，取消选中只发生这一次 —— 别写进 move 里。
        片段自己会 stopPropagation，所以"点片段"永远走不到这里 ——
        不会出现"点一下片段，选中又被取消"的自相矛盾。 */
-    if (onSelect) onSelect(null)
+    startScrub(event, { deselect: true })
   }
 
   /* --------------------------- 片段拖动 --------------------------- */
@@ -743,7 +890,11 @@ export default function Timeline({
   }, [menu])
 
   return (
-    <section className={`wb-timeline ${empty ? 'is-empty' : ''} ${tlFull ? 'is-full' : ''}`} data-tl-full={tlFull ? '1' : '0'}>
+    <section
+      className={`wb-timeline ${empty ? 'is-empty' : ''} ${tlFull ? 'is-full' : ''} ${scrubbing ? 'is-scrubbing' : ''}`}
+      data-tl-full={tlFull ? '1' : '0'}
+      data-scrubbing={scrubbing ? '1' : '0'}
+    >
       {/* 顶缝把手：坐在时间线 6px 上边框上（border 当缝用），不在全屏态出现 */}
       {!tlFull && onResizeHeight && (
         <Splitter
@@ -1211,6 +1362,17 @@ export default function Timeline({
                        等于自己证明自己；而且这两个值本来就该在片段上看得见
                        （右键菜单与检查器都拿它做提示），不是为测试专门加的。 */
                     data-clip-text={track.key === 'text' ? String(clip.text || '') : undefined}
+                    /* 文字片段用的字体族（空 = 系统默认）。闸门据此断言"点了手写字幕，
+                       字体真的写到片段上了" —— 只有读得到的东西才算数：字体写在
+                       clip.textFont 里，但如果没有这个属性，闸门只能去读 state，
+                       那就成了"自己证明自己"。 */
+                    data-clip-font={track.key === 'text' ? String(clip.textFont || '') : undefined}
+                    /* 字幕的样式 / 落点 / 入场：字幕预设点下去之后，闸门要能读到
+                       "这套参数真的落到片段上了"。读 state 等于自己证明自己，
+                       而这三个值本来就该在片段上看得见（右键菜单与检查器都用它们）。 */
+                    data-clip-style={track.key === 'text' ? String(clip.textStyle || '') : undefined}
+                    data-clip-anchor={track.key === 'text' ? String(clip.textAnchor || '') : undefined}
+                    data-clip-in={track.key === 'text' ? String(clip.textIn || '') : undefined}
                     data-clip-start={Number(clip.start || 0).toFixed(3)}
                     /* 画面层级（自由层级）：叠加轨上才有多层可言，把层号挂出来，
                        闸门才能断言"菜单点了之后层号真的变了"（而不是只看画面） */
@@ -1416,7 +1578,24 @@ export default function Timeline({
 
           {/* data-playhead 是给 E2E 读的（秒）。判据读消费端：不读 state，
               读"播放头那根线现在插在哪一秒" —— 那才是用户看到的 */}
-          <div className="playhead" style={{ left: playhead * dps }} data-playhead={Number(playhead).toFixed(3)} />
+          <div className="playhead" style={{ left: playhead * dps }} data-playhead={Number(playhead).toFixed(3)}>
+            {/* 抓手：**看上去是个抓手，就必须能抓**。改动前这枚白块是 `.playhead::before`
+                画的装饰，父元素还是 pointer-events: none —— 形似而不可用，
+                用户按上去什么都不会发生（"拖动不灵活"的真身）。
+                现在它是一个真的按钮：按下去走同一条 scrub 路径，且 anchor 用 playhead
+                （保持指针与播放头的差，按下去不会先跳半格再跟手）。 */}
+            <button
+              type="button"
+              className="playhead-grip"
+              data-playhead-grip="1"
+              title="按住拖动定位播放头"
+              aria-label="拖动播放头"
+              /* 不进 Tab 序列：它是个纯指针手势，键盘上有 ←/→ 逐帧、↑/↓ 跳切点，
+                 落一个"回车没反应"的焦点等于给键盘用户挖坑 */
+              tabIndex={-1}
+              onPointerDown={(event) => startScrub(event, { anchor: 'playhead' })}
+            />
+          </div>
 
           {!clips.length ? (
             <div className="wb-tlempty">

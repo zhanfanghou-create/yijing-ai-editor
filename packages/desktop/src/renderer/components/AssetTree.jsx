@@ -166,7 +166,10 @@ export const WB_TREE = {
     root: { key: 'text-root', label: '文字' },
     items: [
       { key: 'text-create', label: '创建文字', plain: true, panel: 'text' },
-      { key: 'text-custom', label: '自定义', plain: true, panel: 'text' },
+      /* 「自定义」**不能**共用 panel 'text'：那一页是"点一张样式卡就新增一段示例文字"，
+         自定义要的是"自己敲内容再上轨"。两者指向同一个面板时，点「自定义」看到的
+         与「创建文字」一模一样 —— 用户会认为这个按钮坏了（这正是 2026-11-09 报上来的现象）。 */
+      { key: 'text-custom', label: '自定义', plain: true, panel: 'text-custom' },
       {
         key: 'text-art',
         label: '花字',
@@ -197,12 +200,24 @@ export const WB_TREE = {
        不做语音识别、不做翻译 —— 那两类要外挂模型，本机没有。 */
     root: { key: 'subtitle-root', label: '字幕' },
     items: [
+      /* 字幕预设放在第一位：口播剪辑里"挑一套排版"是浏览频率最高的事，
+         857 款的清单在 shared/subtitlePresets.json，面板见 SidePanels 的 SubtitlePresetPanel。
+         ⚠️ 但**列表顺序 ≠ 默认落点**：`landing` 仍钉在「自定义」上（下一项）。
+         理由是两件事分开 —— 顺序按浏览频率排，落点按操作顺序定：
+         口播录完第一步是「AI 识别字幕 / 按语音自动分句」把语音变成字，
+         这两个入口在「自定义」面板里。若让新加的预设栏抢走默认落点，
+         用户点开「字幕」看到的是一屏卡片，而**识别入口一个字都看不见** ——
+         那正是本仓记为"接对了但看不见"的第三类静默失效。 */
+      { key: 'sub-preset', label: '字幕预设', plain: true, panel: 'text-preset' },
       // 参考的「自定义」落的是字幕样式属性面板（PropertyPanel_SubtitleStyle 语义）：
       // 换样式 / 给播放头处的字幕换装，不是手填文本。panel 'text-style'（group 缺省 null
       // = 全部字幕样式）。此前误接到 panel 'text'，把样式网格顶成了手填面板。
-      { key: 'subtitle-custom', label: '自定义', plain: true, panel: 'text-style' },
+      // `landing`：点开「字幕」时默认停在这里（`defaultNodeOf` 优先找带 landing 的项）。
+      { key: 'subtitle-custom', label: '自定义', plain: true, landing: true, panel: 'text-style' },
       { key: 'sub-new', label: '新建字幕', plain: true, panel: 'text' },
-      { key: 'sub-hand', label: '手写字幕', plain: true, panel: 'text' }
+      /* 「手写字幕」= 手写字体（楷/行楷/仿宋/已导入）书写感 + 点一下就落到字幕轨。
+         此前它与「新建字幕」共用 panel 'text'，点下去画面一个字都没变 —— 同「文字 → 自定义」。 */
+      { key: 'sub-hand', label: '手写字幕', plain: true, panel: 'text-hand' }
     ]
   },
   audio: {
@@ -418,11 +433,13 @@ export function groupOf(tab, key) {
  * 切到这个标签时该落在哪个二级项上。
  *
  * **优先 `landing: true` 的那一项。** 「素材」标签的落点必须显式写死：
- * 若沿用下面"第一个带 panel 的项"的规则，会落在「录制」上 —— 而录制面板目前是
- * "应用内录制尚未接入"的说明文字，于是**导入完素材，中间栏显示的是那段说明，
- * 用户看不到自己刚导进来的东西**。这个缺陷躺了很久没人发现，因为它只有
- * "真的按下导入按钮"才会显形：合成片闸门那 6 条导入断言因 contextBridge 冻结
- * 恒为 SKIP，只有真实影片 E2E 走的是主进程打桩、真的按得下去。
+ * 若沿用下面"第一个带 panel 的项"的规则，会落在「录制」上 —— 于是**导入完素材，
+ * 中间栏显示的是录制面板，用户看不到自己刚导进来的东西**。这个缺陷躺了很久没人
+ * 发现，因为它只有"真的按下导入按钮"才会显形：合成片闸门那 6 条导入断言因
+ * contextBridge 冻结恒为 SKIP，只有真实影片 E2E 走的是主进程打桩、真的按得下去。
+ *
+ * （录制面板现在是真的能录了，但"导入之后该看素材"这条规则没变 ——
+ *   `landing` 与"那个面板有没有内容"无关，它是导航意图。）
  *
  * 其余标签沿用"第一个带 panel 的项"：不能一律落在 root —— root 没有 panel、
  * 也没有 caps，中间栏会退化成"显示全部素材"，于是「转场」「滤镜」这类

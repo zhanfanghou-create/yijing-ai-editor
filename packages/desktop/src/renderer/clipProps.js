@@ -75,6 +75,10 @@ export const ATTR_GROUPS = [
     keys: [
       'textStyle',
       'textFont',
+      /* ⚠️ textFontPath 必须跟着 textFont 一起搬：前者是预览的 CSS 家族名，后者是导出
+         drawtext 的 fontfile。只搬家族名的话，"复制属性 → 粘贴"之后预览是新字体、
+         成片还是系统黑体 —— 而且两端都不报错（2026-11-09 做手写字幕时发现）。 */
+      'textFontPath',
       'textColor',
       'textScale',
       'textAlign',

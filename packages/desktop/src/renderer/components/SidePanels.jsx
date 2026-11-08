@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconInfo, IconMic, IconPlugin, IconPlus, IconRefresh, IconSearch, IconSparkle, IconTrash, IconWand } from '../icons.jsx'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconMic, IconPlugin, IconPlus, IconRefresh, IconSearch, IconSparkle, IconTrash, IconWand } from '../icons.jsx'
 import { isDesktop } from '../platform.js'
 /* 内置边框库：清单进程内缓存，预览层（Stage.jsx）用的是同一份 */
 import { borderCatalog, ensureBorderCatalog, resetBorderCatalog } from '../borderCatalog.js'
@@ -39,6 +39,17 @@ import {
   isNoopTransition,
   resolveTotalDuration
 } from '../looks.js'
+/* 手写字幕的字体族清单（与 MCP catalog 共用同一份真源） */
+import { handFontChoices } from '../../shared/handFonts.js'
+/* 字幕预设：857 款口播动态排版。清单与"翻译成片段"的纯函数都在 shared 里，
+   面板只负责画卡片 —— 不在这里算时长、不在这里拼文字，否则 MCP 侧会分叉。 */
+import {
+  PRESET_COUNT,
+  PRESET_GROUPS,
+  blockTexts,
+  describePreset,
+  presetsOfGroup
+} from '../../shared/subtitlePresets.js'
 import { FILTER_GROUPS, TRANSITION_GROUPS, EFFECT_GROUPS, ADJUST_GROUPS, materialThumb } from '../materials.js'
 /* 调节的真源：面板里点一个预设写回的就是这五个键，右栏「调整」页的滑杆读同一份 */
 import { ADJUST_PARAMS, readAdjust } from '../../shared/adjust.js'
@@ -127,6 +138,17 @@ export default function SidePanels(props) {
     onSpeakText,
     ttsJob = null,
     onImport,
+    /* 录制面板：录完的片子交给 App 落成片段（素材入库 + 视频轨插在播放头处） */
+    onRecorded,
+    /* 自定义文字 / 手写字幕共用的两样：
+       · textTarget = 当前可写的字幕片段（选中的，或播放头所在的那条），没有则 null；
+       · fonts / onImportFont = 已导入字体清单与导入动作（手写面板把它们也列进候选）。 */
+    textTarget = null,
+    fonts = [],
+    onImportFont,
+    /* 「字幕 → 字幕预设」：点一款把它的排版落成字幕片段（生成在 App 里，
+       因为只有一个 commitClips 出口；面板只把 key 递出去） */
+    onAddSubtitlePreset,
     onSetBackdrop,
     /* 当前预览底图（素材 → 背景选的那张）。导出面板要用它把背景也渲进成片。 */
     backdrop = null,
@@ -186,6 +208,25 @@ export default function SidePanels(props) {
     )
   }
   if (mode === 'text') return <TextPanel onAddTextClip={onAddTextClip} />
+  /* 「文字 → 自定义」：自己敲内容再上轨（与「创建文字」共用面板等于这个入口不存在） */
+  if (mode === 'text-custom') {
+    return <TextCustomPanel onAddTextClip={onAddTextClip} textTarget={textTarget} />
+  }
+  /* 「字幕 → 手写字幕」：手写字体 + 一键写字幕（预览与导出同一个字体文件） */
+  if (mode === 'text-hand') {
+    return (
+      <HandTextPanel
+        onAddTextClip={onAddTextClip}
+        fonts={fonts}
+        onImportFont={onImportFont}
+        textTarget={textTarget}
+      />
+    )
+  }
+  /* 「字幕 → 字幕预设」：857 款口播动态排版的排版配方，点一下落 1~4 条字幕 */
+  if (mode === 'text-preset') {
+    return <SubtitlePresetPanel onAddPreset={onAddSubtitlePreset} />
+  }
   /* 「文字 → 花字」与「字幕 → 字幕模板」共用样式页，靠 textStyleGroup 区分：
      null = 显示全部字幕样式（字幕模板），数字 = 花字的第 N 组。 */
   if (mode === 'text-style') {
@@ -312,7 +353,7 @@ export default function SidePanels(props) {
     )
   }
   if (mode === 'preset') return <PresetPanel selectedClip={selectedClip} onPatchClip={onPatchClip} />
-  if (mode === 'record') return <RecordPanel onImport={onImport} />
+  if (mode === 'record') return <RecordPanel onImport={onImport} onRecorded={onRecorded} />
   if (mode === 'ref-art')
     return (
       <RefArtPanel familyKey={refArtFamily} onSetBackdrop={onSetBackdrop} />
@@ -518,18 +559,332 @@ function TextPanel({ onAddTextClip }) {
   }
   return (
     <Shell kicker="TEXT" title="文字" extra={<span className="pill">{items.length} 种样式</span>}>
-      <div className="notice" style={{ marginBottom: 12 }}>
-        <IconInfo size={14} />
-        <span>
-          点一个样式就会在<b>播放头位置</b>新增一段文字，并把播放头停在它的起点 ——
-          所以在预览画面里立刻能看到效果。之后可以在时间线上拖动、修剪，也可以按 Ctrl+B 分割。
-        </span>
-      </div>
-
       <StyleGrid items={items} picked={picked} onPick={pick} sizeKey="title" testid="text" />
       {/* ⚠️ 这一页**不再**挂「字幕轨」清单：2026-11-02 起它独立成右栏一枚页签
           （`Inspector.jsx` 的 CAPTION_TAB）。左栏只管"往轨上加东西"，
           轨上现有什么在右栏看 —— 同一份清单摆在两页底部，加完一条还得滚到底核对。 */}
+    </Shell>
+  )
+}
+
+/**
+ * 「文字 → 自定义」页 —— 自己敲内容，再决定用什么样式、多长。
+ *
+ * 与「创建文字」的分工：
+ *   · 创建文字 = 从样式模板里挑一个，文字内容固定是示例句；
+ *   · 自定义   = **先有内容**，再挑样式。
+ * 两者必须落在不同的面板上 —— 共用 `panel: 'text'` 时点「自定义」看到的是
+ * 同一屏样式卡，等于这个入口不存在（2026-11-09 用户报的就是这个）。
+ *
+ * 预览用的是**同一条** `textStyleCss`（与预览叠加层、样式卡三处同一份），
+ * 所以这里看到的长相就是画面里的长相，不是另画的示意图。
+ */
+function TextCustomPanel({ onAddTextClip, textTarget }) {
+  const [draft, setDraft] = useState('')
+  const [styleKey, setStyleKey] = useState('title-hero')
+  const [duration, setDuration] = useState(4)
+  const items = titleStyles()
+  const text = draft.trim()
+  /* 空输入时预览用占位句：空白预览框会让人以为"这一页没东西" */
+  const previewText = text || '在这里输入文字'
+  const { box, inner } = textStyleCss(styleKey)
+  const target = textTarget || null
+
+  const submit = (apply) =>
+    onAddTextClip?.({
+      apply,
+      text,
+      label: text.length > 10 ? `${text.slice(0, 10)}…` : text,
+      style: styleKey,
+      duration
+    })
+
+  return (
+    <Shell>
+      <div className="section-title">
+        <span>文字内容</span>
+        <span className="pill">{text.length} 字</span>
+      </div>
+      <textarea
+        className="input"
+        rows={3}
+        data-text-custom-input
+        value={draft}
+        placeholder="在这里输入文字，换行会照原样保留"
+        onChange={(event) => setDraft(event.target.value)}
+        style={{ resize: 'vertical', lineHeight: 1.6 }}
+      />
+
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <select
+          className="input grow"
+          data-text-custom-style
+          value={styleKey}
+          onChange={(event) => setStyleKey(event.target.value)}
+          title="文字样式（与「创建文字」里那些样式卡是同一份表）"
+        >
+          {items.map((item) => (
+            <option key={item.key} value={item.key}>
+              {item.label || item.key}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          data-text-custom-duration
+          value={duration}
+          onChange={(event) => setDuration(Number(event.target.value) || 4)}
+          style={{ width: 84 }}
+          title="停留时长（之后可以在时间线上拖长）"
+        >
+          {[2, 3, 4, 5, 8].map((sec) => (
+            <option key={sec} value={sec}>
+              {sec} 秒
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* 实况预览：16:9、容器查询单位，套的是同一份 textStyleCss */}
+      <div className="wb-tc-stage" data-text-custom-preview aria-hidden="true">
+        <div style={box}>
+          <span style={inner}>{previewText}</span>
+        </div>
+      </div>
+
+      <button
+        className="btn block primary"
+        type="button"
+        data-text-custom-add
+        disabled={!text}
+        onClick={() => submit('add')}
+        title={text ? '在播放头位置新增这段文字' : '先输入文字'}
+      >
+        <IconPlus size={14} />
+        加到字幕轨
+      </button>
+      <button
+        className="btn block"
+        type="button"
+        data-text-custom-apply
+        disabled={!text || !target}
+        onClick={() => submit('update')}
+        title={
+          target
+            ? `把这段文字写进「${target.name || '当前字幕'}」`
+            : '先在时间线上选中一条字幕，或把播放头停在字幕上'
+        }
+        style={{ marginTop: 8 }}
+      >
+        <IconCheck size={14} />
+        {target ? '写进当前字幕' : '写进选中字幕'}
+      </button>
+      <div className="wb-muted-sm" style={{ marginTop: 8, lineHeight: 1.65 }}>
+        字体、字号、颜色、位置在右侧检查器的「文字」页里调。
+      </div>
+    </Shell>
+  )
+}
+
+/**
+ * 「字幕 → 手写字幕」页 —— 用手写字体写一条字幕。
+ *
+ * 为什么是"字体"而不是"手写动画"：
+ *   逐笔手写需要每个字的笔画矢量数据，本机没有这份资产；而"预览里逐笔、成片里淡入"
+ *   正是我们自己列为红线的那类静默分叉。手写字体是**预览与导出同一条通路**
+ *   （预览用家族名、导出用同一个字体文件的绝对路径），点了就真的有手写的样子。
+ *
+ * 卡片点一下即生效（与样式卡一致）：有可写的目标字幕就换字体，没有就新建一条。
+ * 每张卡都带 `data-hand-font`，闸门据此断言"点下去字幕上真的出现了这个字体"。
+ *
+ * ⚠️ 卡上**不标**"本机装没装"：`document.fonts.check` 对任意名字都返回 true，
+ *    canvas 量宽度对汉字又分不出（全角定宽），能确认存在却无法确认不存在 ——
+ *    标错一次（四张卡全写"本机没有"）比不标更糟。见 handFonts.js 头注释。
+ */
+function HandTextPanel({ onAddTextClip, fonts, onImportFont, textTarget }) {
+  const [picked, setPicked] = useState('')
+  const choices = handFontChoices(fonts)
+  const target = textTarget || null
+
+  const use = (item) => {
+    setPicked(item.key)
+    onAddTextClip?.({
+      apply: 'update',
+      /* 有目标字幕就保留它原来的正文；没有就写一句能立刻看见效果的示范句 */
+      text: target ? String(target.text || '手写文字') : '手写文字',
+      label: '手写字幕',
+      /* ⚠️ 样式只在**新建**时给：给已有字幕换字体时若也带上 `sub-plain`，
+         用户那条居中的大标题会当场缩成底部小字幕 —— 看着像"点手写把样式弄坏了"。
+         换字体就只换字体（实测踩过：第一次做时写死 sub-plain，点第二张卡标题就没了）。 */
+      style: target ? '' : 'sub-plain',
+      duration: 3,
+      font: item.family,
+      fontPath: item.path
+    })
+  }
+
+  return (
+    <Shell>
+      <div className="wb-hand-grid" data-hand-grid>
+        {choices.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`wb-hand-card ${picked === item.key ? 'active' : ''}`}
+            data-hand-font={item.key}
+            title={`${item.label}：${item.hint}`}
+            onClick={() => use(item)}
+          >
+            <span className="wb-hand-art" style={{ fontFamily: `"${item.family}", inherit` }}>
+              手写
+            </span>
+            <span className="wb-hand-name">{item.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <button
+          className="btn grow"
+          type="button"
+          data-hand-import
+          onClick={() => onImportFont?.()}
+          title="导入本机的手写字体文件（.ttf / .otf / .ttc，会复制进素材目录）"
+        >
+          <IconPlus size={14} />
+          导入手写字体
+        </button>
+      </div>
+      <div className="wb-muted-sm" style={{ marginTop: 8, lineHeight: 1.65 }}>
+        {target
+          ? `当前目标：「${target.name || '选中字幕'}」—— 点字体就换成手写体，正文不变。`
+          : '现在没有选中字幕，点字体会新建一条；想改已有字幕就先在时间线上选中它。'}
+      </div>
+    </Shell>
+  )
+}
+
+/**
+ * 「字幕 → 字幕预设」页 —— 857 款口播动态排版的**排版配方**库。
+ *
+ * 一款预设 = 一套参数（样式 / 落点 / 对齐 / 字号 / 入场 / 循环 / 行数 / 条数），
+ * 由 `shared/subtitlePresets.js` 从清单里取；点一下就把这套参数翻成 1~4 条字幕片段
+ * （`planPreset`），落点、动效、文字全都是真的 —— 预览与导出读的是同一份字段。
+ *
+ * ── 三个必须说清楚的取舍 ────────────────────────────────────────────
+ *
+ * ① **卡片不用素材包里的封面图**。实测那些封面是黑底占位图，有的还带卖家水印
+ *    （旋转的「河爸@同学」），有的横有的竖。按 Jason 的要求，卡面统一用软件自己的
+ *    字幕底图（`.style-art` 的 plate.webp）—— 也就是「字幕模板」那页同一张底片，
+ *    所以这里直接复用 `.style-art` / `.style-card` 那一套。
+ *
+ * ② **卡片里的字是这套参数真渲出来的**：同一份 `textStyleCss`（预览与样式卡共用）、
+ *    同一套 `ta-in-*`（与预览的入场动画同一组 keyframes），数字来自预设本身。
+ *    不是截图，也不是另写一套缩略图逻辑 ——「预览与成片不一致」这类缺陷的源头就是两套。
+ *
+ * ③ **857 张卡不能一次全渲**。默认 60 张，滚到底点一次加 120。
+ *    一次挂 857 个带 `container-type` 的节点会让面板卡成 PPT，
+ *    而"卡成 PPT"在用户那里读作"这个功能坏了"。
+ */
+function SubtitlePresetPanel({ onAddPreset }) {
+  const [group, setGroup] = useState('all')
+  const [limit, setLimit] = useState(60)
+  /* 悬停的那一款才播入场动画：让 60 张卡同时动既费电又看不清 */
+  const [hover, setHover] = useState('')
+
+  const items = useMemo(() => presetsOfGroup(group), [group])
+  const shown = items.slice(0, limit)
+
+  const pickGroup = (key) => {
+    setGroup(key)
+    setLimit(60)
+    setHover('')
+  }
+
+  return (
+    <Shell>
+      <div className="wb-sp-tabs" data-sp-tabs>
+        <button
+          type="button"
+          className={`wb-sp-tab ${group === 'all' ? 'active' : ''}`}
+          data-sp-group="all"
+          onClick={() => pickGroup('all')}
+        >
+          全部 <i>{PRESET_COUNT}</i>
+        </button>
+        {PRESET_GROUPS.map((g) => (
+          <button
+            key={g.key}
+            type="button"
+            className={`wb-sp-tab ${group === g.key ? 'active' : ''}`}
+            data-sp-group={g.key}
+            title={g.note}
+            onClick={() => pickGroup(g.key)}
+          >
+            {g.label} <i>{g.count}</i>
+          </button>
+        ))}
+      </div>
+
+      <div className="wb-sp-grid" data-sp-grid={group} onMouseLeave={() => setHover('')}>
+        {shown.map((preset) => {
+          const blocks = blockTexts(preset)
+          /* 一条多行时卡片照原样换行（pre-wrap），多条错峰时只展示第一块 + 角标。
+             两种都在告诉用户"点下去会得到什么"，不额外画一张示意图。 */
+          const preview = blocks[0]
+          const { box, inner } = textStyleCss(preset.style, CARD_BASE_WIDTH, {
+            textAnchor: preset.anchor,
+            textOffset: preset.offset,
+            textAlign: preset.align,
+            textScale: preset.scale
+          })
+          const playing = hover === preset.key
+          return (
+            <button
+              key={preset.key}
+              type="button"
+              className="wb-sp-card"
+              data-sp-preset={preset.key}
+              data-sp-style={preset.style}
+              data-sp-anchor={preset.anchor}
+              data-sp-count={preset.chain}
+              data-sp-play={playing ? '1' : '0'}
+              title={`${preset.name}｜${describePreset(preset)}`}
+              onMouseEnter={() => setHover(preset.key)}
+              onFocus={() => setHover(preset.key)}
+              onClick={() => onAddPreset?.(preset.key)}
+            >
+              <span className="style-art">
+                <span className="wb-sp-box" style={box}>
+                  <span
+                    className={`wb-sp-line ${playing ? `ta-in-${preset.in}` : ''}`}
+                    style={{ ...inner, '--ta-in-dur': `${preset.inDur}s` }}
+                  >
+                    {preview}
+                  </span>
+                </span>
+                {blocks.length > 1 ? (
+                  <span className="wb-sp-badge">{`${blocks.length} 条${preset.mode === 'seq' ? '依次' : '叠加'}`}</span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {!items.length ? <div className="empty">这一组还没有预设。</div> : null}
+
+      {items.length > shown.length ? (
+        <button
+          className="btn block"
+          type="button"
+          data-sp-more
+          style={{ marginTop: 12 }}
+          onClick={() => setLimit((n) => n + 120)}
+        >
+          再显示 120 款（还有 {items.length - shown.length} 款）
+        </button>
+      ) : null}
     </Shell>
   )
 }
@@ -661,7 +1016,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
         data-sub-ai
         disabled={busy}
         onClick={() => onRecognizeSubtitles?.()}
-        title="把选中片段里的说话内容转成字幕（本机模型，不上传任何素材）"
+        title="把选中片段里的说话内容转成字幕"
       >
         {busy ? <IconRefresh size={14} /> : <IconMic size={14} />}
         {busy ? `正在识别 ${percent}%` : 'AI 识别字幕'}
@@ -673,8 +1028,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
       ) : (
         <>
           <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
-            按口型逐句出文字，识别完可以直接在时间线上改。第一次用会引导你下载语音识别模型
-            （78MB 起，装完永久离线可用）。
+            识别完可以直接在时间线上改文字。第一次用会引导你下载语音识别模型。
           </div>
           {/* 档位：轻量版出得快、多语种版更准（还能认粤语/日语/英语混说）。
               没装的档位照样列出来但不可选 —— 只列能用的，用户就永远不知道还有更好的那档。 */}
@@ -687,7 +1041,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
                 value={activeModel}
                 disabled={busy}
                 onChange={(event) => onPickSpeechModel?.(event.target.value)}
-                title="轻量版快、多语种版更准；两档都在本机跑，素材不出本机"
+                title="轻量版快，多语种版更准"
               >
                 {rows.map((row) => (
                   <option key={row.id} value={row.id} disabled={!row.ready}>
@@ -744,7 +1098,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
           data-tts-run
           disabled={ttsBusy || !chars}
           onClick={() => onSpeakText?.({ text: sayText, speed: saySpeed })}
-          title="把文字读成人声（本机合成，不上传文字）"
+          title="把文字读成人声"
         >
           {ttsBusy ? <IconRefresh size={14} /> : <IconSparkle size={14} />}
           {ttsBusy ? '合成中' : '生成配音'}
@@ -754,8 +1108,8 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
         {ttsJob && ttsJob.error
           ? ttsJob.error
           : chars
-            ? `${chars} 字 · 生成在本机完成（声音不会上传）。第一次用会引导你下载音色包（131MB）。`
-            : '配音在本机合成，文字与声音都不出本机。第一次用会引导你下载音色包。'}
+            ? `${chars} 字 · 第一次用会引导你下载音色包。`
+            : '第一次用会引导你下载音色包。'}
       </div>
 
       <div className="section-title" style={{ marginTop: 16 }}>
@@ -790,8 +1144,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
         按语音自动分句
       </button>
       <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
-        导入支持 SRT / VTT / LRC / ASS。「按语音分句」只按"有人说话的区间"切段落、
-        **不出文字**（它不用模型，也不联网）；要文字请用上面的 AI 识别。
+        导入支持 SRT / VTT / LRC / ASS。按语音分句只切时间轴、不出文字。
       </div>
     </>
   )
@@ -954,11 +1307,6 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
       <div className="section-title">
         <span>提取音频</span>
       </div>
-      <div className="notice">
-        <IconInfo size={14} />
-        <span>把片段里的音轨单独抽成一条音频素材，抽出来可以放到音频轨上复用。全程用本机 ffmpeg，不依赖任何服务。</span>
-      </div>
-
       {cut ? (
         <div className="list">
           <div className="list-item">
@@ -977,10 +1325,6 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
 
       <div className="section-title" style={{ marginTop: 16 }}>
         <span>AI 语音降噪</span>
-      </div>
-      <div className="notice">
-        <IconInfo size={14} />
-        <span>压掉环境噪声、风噪、键盘声，让人声更清楚。本机推理、素材不出本机；处理 1 分钟音频约 3 秒。</span>
       </div>
       <div className="list">
         <div className="list-item">
@@ -1008,8 +1352,7 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
         </div>
       </div>
       <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
-        降噪在 16kHz 下进行（模型的工作采样率），处理完自动升到 48kHz 立体声。
-        素材本身很干净时开了会显得发闷 —— 它适合"噪声大到听不清词"的素材。
+        素材很干净时开了会显得发闷，它适合噪声大到听不清词的情况。
       </div>
     </Shell>
   )
@@ -1240,13 +1583,6 @@ function MattePanel({ selectedClip, activeClip, onAddAsset }) {
       <div className="section-title">
         <span>智能抠像</span>
       </div>
-      <div className="notice">
-        <IconInfo size={14} />
-        <span>
-          把人和背景分开，产出一条背景透明的素材，可以叠到任何画面上。本机推理、素材不出本机。
-          人像模型只认人 —— 宠物、商品这类主体它抠不出来。
-        </span>
-      </div>
 
       {cut ? (
         <>
@@ -1344,8 +1680,7 @@ function MattePanel({ selectedClip, activeClip, onAddAsset }) {
                 ))}
               </div>
               <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
-                视频文件装不下透明通道，所以抠完会把背景换掉再交给你（预览看到的就是最终效果）。
-                想叠在别的画面上，用图片抠像拿透明 PNG。
+                视频装不下透明通道，抠完会把背景换掉再交给你。想叠在别的画面上，用图片抠像拿透明 PNG。
               </div>
             </>
           ) : null}
@@ -1451,11 +1786,16 @@ function StockPanel({ assets, onAddToTimeline }) {
  *    不能点了什么都不发生（那会被读作"面板坏了"）。
  */
 /**
- * 「插件」面板 —— 装的是**素材包**（自定义边框 / 贴纸），不是 .ofx 原生特效插件。
+ * 「插件」面板 —— 装的是**素材包**（自定义边框 / 贴纸）。
  *
- * 参考客户端的插件是 OpenFX（`.ofx` 原生动态库）：宿主得实现一整套 C++ 特效宿主 API
- * 才能加载、还得把参数暴露成它自己的属性面板。本工程不做这件事，**也不摆假入口** ——
- * 面板顶上一句话把边界说明白，用户不会点进来期待能装 DaVinci 的插件。
+ * 2026-11-09 Jason：「不需要用户看到的提示内容都去除」⇒ 原先面板顶上那条
+ * 「插件是本地素材包…本版本不支持 .ofx 原生插件（那需要实现 OpenFX 宿主接口）」
+ * 整块删掉了。理由是它属于**开发视角的免责**：讲我们实现了什么、没实现什么、
+ * 缺的接口叫什么名字 —— 剪片用户不需要读这些，而「导入插件文件夹」这个按钮名
+ * 本身已经把动作说清了。
+ * ⚠️ 删它**不会**造成静默失败：这里的导入入口是「选一个文件夹」，
+ *    目录里没有 `manifest.json` 时主进程会回一条真实错误、面板照原样显示在
+ *    `[data-plug-error]` 里。也就是说「拿 .ofx 来试」得到的是功能性反馈，不是沉默。
  *
  * 这里能做的是一件真事：选一个文件夹，读 `manifest.json`，把里面的 PNG 收进
  * `<userData>/plugins/<id>/`。装完立刻出现在「特效 → 边框」和「贴纸」里，
@@ -1578,16 +1918,6 @@ function PluginPanel({ tab = 'mine', version = 0, onPacksChanged }) {
         </span>
       </div>
 
-      {/* 把边界写在最上面：不支持 .ofx 是要让用户在点"导入"之前就知道的事 */}
-      <div className="plug-note" data-plug-note="1">
-        {/* ⚠️ 文件名必须包成 {'...'}：JSX 文本里的裸 `manifest.json` 会被
-            check-imports 的自由变量扫描当成成员表达式，报 `manifest` 未定义。
-            字符串字面量会被它剥掉，裸文本不会。 */}
-        插件是<strong>本地素材包</strong>：一个文件夹，里面放 <code>{'manifest.json'}</code> 和几张 PNG。
-        装好后立刻出现在「特效 → 边框」与「贴纸」里，预览和导出都直接生效。
-        本版本<strong>不支持 .ofx 原生插件</strong>（那需要实现 OpenFX 宿主接口）。
-      </div>
-
       <div className="plug-actions-bar">
         <button type="button" className="btn" data-plug-import="1" disabled={Boolean(busy)} onClick={doInstall}>
           <IconPlus size={14} />
@@ -1667,11 +1997,6 @@ function PluginPanel({ tab = 'mine', version = 0, onPacksChanged }) {
           ))}
         </div>
       )}
-
-      <p className="plug-tip">
-        插件素材会复制到本机用户目录（<code>plugins</code> 下），<strong>不上传任何地方</strong>。
-        删除时进系统回收站，误点还能捞回来。
-      </p>
     </Shell>
   )
 }
@@ -2456,12 +2781,8 @@ function RefArtPanel({ familyKey, onSetBackdrop }) {
 
   if (!family) {
     return (
-      <Shell kicker="参考配图" title="未找到配图族">
-        <div className="empty">
-          左栏这一项指向的配图族「{String(familyKey)}」在 artSet.js 里不存在。
-          <br />
-          这是配置错误，不是数据为空 —— 请在 artSet.js 的 ART_FAMILIES 里补上。
-        </div>
+      <Shell kicker="参考配图" title="未找到配图">
+        <div className="empty">这一类暂时没有配图。</div>
       </Shell>
     )
   }
@@ -2582,9 +2903,8 @@ function TransitionPanel({ clips, selectedClip, activeClip, onPatchClip, materia
           <div className="notice" style={{ marginTop: 8 }}>
             <IconWand size={14} />
             <span>
-              转场会让成片<b>缩短</b>对应时长（交叠部分不重复计时）：当前结算后
+              转场会让成片<b>缩短</b>对应时长：结算后
               <b> {timecode(total, false)}</b>（原 {timecode(rawTotal, false)}）。
-              时间线上的角标与这里读的是同一份结算。
             </span>
           </div>
         </>
@@ -2826,11 +3146,6 @@ function PresetPanel({ selectedClip, onPatchClip }) {
 
   return (
     <Shell kicker="PRESETS" title="我的预设" extra={<span className="pill">{saved.length} 套</span>}>
-      <div className="notice" style={{ marginBottom: 12 }}>
-        <IconInfo size={14} />
-        <span>把选中片段当前的<b>滤镜 + 转场</b>存成一套，之后一键套到别的片段上。预设存在本机。</span>
-      </div>
-
       <div className="row" style={{ gap: 8 }}>
         <input className="input" style={{ flex: 1 }} value={name} placeholder="预设名称（可留空）" onChange={(event) => setName(event.target.value)} />
         <button className="btn small primary" type="button" onClick={save} disabled={!selectedClip}>
@@ -2925,13 +3240,6 @@ function SmartPanel({ clips, onSplitEvenly, onCloseGaps, onClearTextTrack }) {
           </button>
         </div>
       </div>
-
-      <div className="notice" style={{ marginTop: 12 }}>
-        <IconSparkle size={14} />
-        <span>
-          以上每一项都是当场执行的真实操作，并会写进撤销历史（Ctrl+Z 可回退）。
-        </span>
-      </div>
     </Shell>
   )
 }
@@ -2939,56 +3247,534 @@ function SmartPanel({ clips, onSplitEvenly, onCloseGaps, onClearTextTrack }) {
 /* ------------------------------- 录制 ------------------------------- */
 
 /**
- * 「录制」面板 —— 这个标签在参考客户端里对应屏幕/摄像头录制。
+ * 「录制」面板 —— 屏幕 / 摄像头，真采、真落盘、真落片段。
  *
- * 本项目**没有**实现应用内录制，原因不是没想到，而是它需要动安全基线：
- * Electron 里做录制必须放开渲染进程的 media 权限（或由主进程接管 desktopCapturer），
- * 而现有基线明确写着「拒一切权限申请」。这个取舍不该由实现方单方面改掉。
+ * 权限这一关是本面板最要紧的设计：主进程的权限闸**只认一次性票据**
+ * （见 main/index.js 的 recordGrant）。票据由本面板在用户点过下面的确认框之后，
+ * 才通过 `recorder.grant` 换到。所以顺序不能倒 —— 先确认、再换票、最后建流。
+ * 没有票据时 getUserMedia / getDisplayMedia 会被拒（与"全拒"一模一样），
+ * 这也正是负对照要钉住的东西。
  *
- * 所以这里不摆一个点了没反应的假按钮，而是把「现在能做什么」和「还缺什么决定」讲清楚，
- * 并给一个确实可用的入口：导入系统录屏得到的文件。
+ * 三处静默失效，各自都有对应处理：
+ *   ① 录到了但没落盘 → 时间线上一个 0 秒片段；保存失败必须报出来，不能只关面板；
+ *   ② 落了盘没进 `yjai-media://` 白名单 → 卡片画得好好的、播放全黑（主进程负责登记）；
+ *   ③ 系统声音与麦克风各挂一条音轨 → MediaRecorder 只录第一条
+ *      ⇒ 两条都要时必须在 AudioContext 里混成一条。
  */
-function RecordPanel({ onImport }) {
+const RECORD_MIMES = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+
+function recordConfirmText(mode) {
+  return mode === 'camera'
+    ? {
+        title: '允许使用摄像头？',
+        body: '接下来会打开摄像头并开始录制。录到的画面只保存在本机，不会上传到任何地方。'
+      }
+    : {
+        title: '允许录制屏幕？',
+        body: '接下来会录下你选中的屏幕或窗口。录到的画面只保存在本机，不会上传到任何地方。'
+      }
+}
+function RecordPanel({ onImport, onRecorded }) {
+  const bridge = isDesktop && typeof window !== 'undefined' ? window.yjai : null
+  /* 录什么 */
+  const [mode, setMode] = useState('screen')
+  /* idle → asking（应用内确认）→ starting → recording → saving → idle */
+  const [phase, setPhase] = useState('idle')
+  const [sources, setSources] = useState([])
+  const [sourceId, setSourceId] = useState('')
+  const [sourcesErr, setSourcesErr] = useState('')
+  const [loadingSources, setLoadingSources] = useState(false)
+  const [cams, setCams] = useState([])
+  const [camId, setCamId] = useState('')
+  const [withMic, setWithMic] = useState(true)
+  const [withSysAudio, setWithSysAudio] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [error, setError] = useState('')
+
+  const previewRef = useRef(null)
+  const streamRef = useRef(null)
+  const audioCtxRef = useRef(null)
+  const recorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const timerRef = useRef(0)
+  const startAtRef = useRef(0)
+  /* 视频轨 ended（用户从系统层面点了"停止共享"）时要收尾，而 stop 定义在 effect 之后 —— 用 ref 接 */
+  const stopRef = useRef(() => {})
+
+  const recording = phase === 'recording'
+  const locked = phase === 'starting' || phase === 'saving' || recording
+  const confirm = phase === 'asking' ? recordConfirmText(mode) : null
+
+  /** 放掉流 / 定时器 / 音频上下文。轨道不 stop 的话，摄像头指示灯会一直亮着 */
+  const release = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = 0
+    }
+    const stream = streamRef.current
+    streamRef.current = null
+    if (previewRef.current) {
+      try {
+        previewRef.current.srcObject = null
+      } catch {
+        /* 已经卸载 */
+      }
+    }
+    if (stream) {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop()
+        } catch {
+          /* 已经停了 */
+        }
+      }
+    }
+    const ctx = audioCtxRef.current
+    audioCtxRef.current = null
+    if (ctx && typeof ctx.close === 'function') Promise.resolve(ctx.close()).catch(() => {})
+    setElapsed(0)
+  }, [])
+
+  const loadSources = useCallback(async () => {
+    if (!bridge?.recorder?.sources) {
+      setSourcesErr('录制需要在桌面客户端里使用')
+      return
+    }
+    setLoadingSources(true)
+    setSourcesErr('')
+    try {
+      const result = await bridge.recorder.sources()
+      if (!result || !result.ok) {
+        setSourcesErr((result && result.error) || '列不出可录的画面')
+        setSources([])
+        return
+      }
+      const list = Array.isArray(result.sources) ? result.sources : []
+      setSources(list)
+      setSourceId((current) => (current && list.some((item) => item.id === current) ? current : list[0] ? list[0].id : ''))
+    } catch (err) {
+      setSourcesErr(`列不出可录的画面：${(err && err.message) || '未知原因'}`)
+      setSources([])
+    } finally {
+      setLoadingSources(false)
+    }
+  }, [bridge])
+
+  /* 切到屏幕模式就刷一次源（窗口列表随时在变，缓存下来会录到已经关掉的窗口） */
+  useEffect(() => {
+    if (mode !== 'screen') return
+    loadSources()
+  }, [mode, loadSources])
+
+  /* 摄像头设备。未授权前 label 是空的 —— 给"摄像头 1/2…"，不给一串空白选项 */
+  useEffect(() => {
+    if (mode !== 'camera' || typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return undefined
+    let alive = true
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((list) => {
+        if (!alive) return
+        const inputs = list
+          .filter((item) => item.kind === 'videoinput')
+          .map((item, index) => ({ id: item.deviceId, label: item.label || `摄像头 ${index + 1}` }))
+        setCams(inputs)
+        setCamId((current) => current || (inputs[0] ? inputs[0].id : ''))
+      })
+      .catch(() => {
+        if (alive) setCams([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [mode])
+
+  /* 卸载 / 切走页签：停录、放流、作废票据。切页签会卸载本面板，
+     不清理就会留下一个还在录的 MediaRecorder（用户看不到任何界面） */
+  useEffect(
+    () => () => {
+      const rec = recorderRef.current
+      recorderRef.current = null
+      if (rec) {
+        rec.onstop = null
+        rec.ondataavailable = null
+        if (rec.state !== 'inactive') {
+          try {
+            rec.stop()
+          } catch {
+            /* 已经停了 */
+          }
+        }
+      }
+      release()
+      if (bridge?.recorder?.cancelGrant) bridge.recorder.cancelGrant()
+    },
+    [bridge, release]
+  )
+
+  const stop = useCallback(() => {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === 'inactive') return
+    /* 时长取墙钟：MediaRecorder 产的 webm 头里没有 duration，读 blob 拿到的是 Infinity */
+    const duration = Math.max(0, (performance.now() - startAtRef.current) / 1000)
+    setPhase('saving')
+    recorder.onstop = async () => {
+      const chunks = chunksRef.current
+      chunksRef.current = []
+      recorderRef.current = null
+      release()
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' })
+      if (!blob.size) {
+        setError('没有录到内容：确认录制没有被系统中断')
+        setPhase('idle')
+        return
+      }
+      try {
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        const result = await bridge.recorder.save({ bytes, mime: blob.type, duration, kind: 'video' })
+        if (!result || !result.ok) {
+          setError((result && result.error) || '保存失败')
+          setPhase('idle')
+          return
+        }
+        /* 交给 App：素材入库 + 视频轨在**播放头**处插一段（录屏是"配着这段画面录的"） */
+        if (onRecorded) onRecorded(result.asset, duration)
+        setPhase('idle')
+      } catch (err) {
+        setError(`保存失败：${(err && err.message) || '未知原因'}`)
+        setPhase('idle')
+      }
+    }
+    try {
+      recorder.stop()
+    } catch (err) {
+      setError(`停止录制失败：${(err && err.message) || '未知原因'}`)
+      release()
+      setPhase('idle')
+    }
+  }, [bridge, onRecorded, release])
+  stopRef.current = stop
+
+  /* 用户从系统的「停止共享」结束屏幕共享时，视频轨会 ended ——
+     界面必须跟着收尾，否则看着还在录、文件里其实只剩前一秒 */
+  useEffect(() => {
+    if (!recording) return undefined
+    const track = streamRef.current && streamRef.current.getVideoTracks()[0]
+    if (!track) return undefined
+    const onEnded = () => stopRef.current()
+    track.addEventListener('ended', onEnded)
+    return () => track.removeEventListener('ended', onEnded)
+  }, [recording])
+
+  /** 把麦克风并进视频流。两条音轨都挂上去时 MediaRecorder 只录第一条，必须先混一条 */
+  const attachAudio = useCallback(async (videoStream, micStream) => {
+    const sysTracks = videoStream.getAudioTracks()
+    const micTrack = micStream && micStream.getAudioTracks()[0]
+    if (!sysTracks.length) {
+      if (micTrack) videoStream.addTrack(micTrack)
+      return
+    }
+    if (!micTrack) return
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    audioCtxRef.current = ctx
+    const dest = ctx.createMediaStreamDestination()
+    ctx.createMediaStreamSource(new MediaStream(sysTracks)).connect(dest)
+    ctx.createMediaStreamSource(micStream).connect(dest)
+    /* 先接上混音节点再从流里摘掉：直接 stop 原轨会把混音一起弄断 */
+    for (const track of sysTracks) {
+      try {
+        videoStream.removeTrack(track)
+      } catch {
+        /* 已经不在流里 */
+      }
+    }
+    const mixed = dest.stream.getAudioTracks()[0]
+    if (mixed) videoStream.addTrack(mixed)
+  }, [])
+
+  /** 用户点过「允许并开始」之后才走这里：换票 → 建流 → 开录 */
+  const beginRecording = useCallback(async () => {
+    if (!bridge?.recorder?.grant) {
+      setError('录制需要在桌面客户端里使用')
+      setPhase('idle')
+      return
+    }
+    setError('')
+    setPhase('starting')
+    try {
+      let stream = null
+      if (mode === 'screen') {
+        if (!sourceId) throw new Error('先选一个要录的屏幕或窗口')
+        const granted = await bridge.recorder.grant({ scope: 'screen', sourceId, withAudio: withSysAudio })
+        if (!granted || !granted.ok) throw new Error((granted && granted.error) || '没有被授权录制屏幕')
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: withSysAudio })
+        } catch (err) {
+          if (!withSysAudio) throw err
+          /* 系统声音不可用（驱动/平台不支持 loopback）会把整条请求一起失败：
+             降级成"只录画面"重试一次，并把原因说出来，而不是整个录制不可用 */
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false })
+          setError('这个环境拿不到系统声音，已改为只录画面')
+        }
+      } else {
+        const granted = await bridge.recorder.grant({ scope: 'camera' })
+        if (!granted || !granted.ok) throw new Error((granted && granted.error) || '没有被授权使用摄像头')
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: camId ? { deviceId: { exact: camId } } : true,
+          audio: withMic
+        })
+      }
+
+      if (mode === 'screen' && withMic) {
+        let mic = null
+        try {
+          mic = await navigator.mediaDevices.getUserMedia({ audio: true })
+        } catch {
+          mic = null
+        }
+        if (mic) {
+          await attachAudio(stream, mic)
+        } else {
+          setError(withSysAudio ? '麦克风没拿到，只录了系统声音' : '麦克风没拿到，只录了画面')
+        }
+      }
+
+      streamRef.current = stream
+      if (previewRef.current) {
+        previewRef.current.srcObject = stream
+        try {
+          previewRef.current.muted = true
+        } catch {
+          /* 有些内核对 muted 属性写入有限制，忽略即可 */
+        }
+      }
+
+      const mimeType = RECORD_MIMES.find((type) => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) || ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      chunksRef.current = []
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size) chunksRef.current.push(event.data)
+      }
+      recorder.onerror = (event) => {
+        setError(`录制出错：${(event && event.error && event.error.message) || '未知原因'}`)
+        release()
+        setPhase('idle')
+      }
+      recorderRef.current = recorder
+      recorder.start(500)
+      startAtRef.current = performance.now()
+      setElapsed(0)
+      setPhase('recording')
+      timerRef.current = setInterval(() => {
+        setElapsed(Math.max(0, (performance.now() - startAtRef.current) / 1000))
+      }, 100)
+    } catch (err) {
+      release()
+      setPhase('idle')
+      if (bridge?.recorder?.cancelGrant) bridge.recorder.cancelGrant()
+      const name = String((err && err.name) || '')
+      setError(
+        name === 'NotAllowedError'
+          ? '没有拿到录制权限：请点「开始录制」，在确认框里选「允许并开始」再试一次'
+          : name === 'NotFoundError'
+            ? mode === 'screen'
+              ? '没有可录的画面：换一个源再试'
+              : '没有找到可用的摄像头'
+            : `录制打不开：${(err && err.message) || name || '未知原因'}`
+      )
+    }
+  }, [attachAudio, bridge, camId, mode, release, sourceId, withMic, withSysAudio])
+
+  const cancelAsk = useCallback(() => {
+    setPhase('idle')
+    if (bridge?.recorder?.cancelGrant) bridge.recorder.cancelGrant()
+  }, [bridge])
+
   return (
     <Shell kicker="RECORD" title="录制">
-      <div className="notice warn" style={{ marginBottom: 12 }}>
-        <IconAlert size={14} />
-        <span>
-          <b>应用内录制尚未接入。</b>
-          参考客户端在这一项下做的是屏幕/摄像头录制，本项目要支持它必须放开渲染进程的
-          media 权限（现基线是「拒一切权限申请」），这个取舍需要单独确认后才会动。
-        </span>
+      <div className="wb-record-modes">
+        <button
+          type="button"
+          className={`wb-record-mode${mode === 'screen' ? ' on' : ''}`}
+          data-rec-mode="screen"
+          disabled={locked}
+          onClick={() => setMode('screen')}
+        >
+          录制屏幕
+        </button>
+        <button
+          type="button"
+          className={`wb-record-mode${mode === 'camera' ? ' on' : ''}`}
+          data-rec-mode="camera"
+          disabled={locked}
+          onClick={() => setMode('camera')}
+        >
+          录制摄像头
+        </button>
       </div>
 
-      <div className="section-title">
-        <span>现在可以走的路</span>
+      {mode === 'screen' ? (
+        <div className="wb-record-sources" data-rec-source-list="1">
+          {loadingSources ? <p className="wb-record-hint">正在列出可录的画面…</p> : null}
+          {sourcesErr ? (
+            <div className="notice warn" style={{ marginBottom: 8 }}>
+              <IconAlert size={14} />
+              <span>{sourcesErr}</span>
+              <button type="button" className="btn small" onClick={loadSources} disabled={locked || loadingSources}>
+                重试
+              </button>
+            </div>
+          ) : null}
+          <div className="wb-record-grid">
+            {sources.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`wb-record-src${sourceId === item.id ? ' on' : ''}`}
+                data-rec-source={item.id}
+                data-rec-src-kind={item.kind}
+                disabled={locked}
+                onClick={() => setSourceId(item.id)}
+              >
+                <span className="wb-record-src-thumb">
+                  {item.thumbnail ? <img src={item.thumbnail} alt="" /> : null}
+                </span>
+                <span className="wb-record-src-name" title={item.name}>
+                  {item.name}
+                </span>
+              </button>
+            ))}
+          </div>
+          {!loadingSources && !sourcesErr && !sources.length ? (
+            <p className="wb-record-hint">没有列出可录的画面，点「重试」再试一次。</p>
+          ) : null}
+        </div>
+      ) : (
+        <div className="field" style={{ marginBottom: 10 }}>
+          <span>摄像头</span>
+          <select
+            className="select"
+            data-rec-cam="1"
+            value={camId}
+            disabled={locked}
+            onChange={(event) => setCamId(event.target.value)}
+          >
+            {cams.length ? (
+              cams.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))
+            ) : (
+              <option value="">默认摄像头</option>
+            )}
+          </select>
+        </div>
+      )}
+
+      <div className="wb-record-toggles">
+        <label className="wb-record-toggle">
+          <input
+            type="checkbox"
+            data-rec-mic="1"
+            checked={withMic}
+            disabled={locked}
+            onChange={(event) => setWithMic(event.target.checked)}
+          />
+          <span>录制麦克风</span>
+        </label>
+        {mode === 'screen' ? (
+          <label className="wb-record-toggle">
+            <input
+              type="checkbox"
+              data-rec-sysaudio="1"
+              checked={withSysAudio}
+              disabled={locked}
+              onChange={(event) => setWithSysAudio(event.target.checked)}
+            />
+            <span>同时录系统声音</span>
+          </label>
+        ) : null}
       </div>
-      <div className="list">
+
+      {/* 预览与计时：录的时候必须看得见画面和"已经录了多久" */}
+      <div className={`wb-record-monitor${locked ? ' live' : ''}`} data-rec-monitor={locked ? 'on' : 'off'}>
+        <video ref={previewRef} className="wb-record-preview" data-rec-preview="1" muted playsInline autoPlay />
+        {locked ? (
+          <div className="wb-record-status">
+            {recording ? (
+              <span className="wb-record-live" data-rec-live="1">
+                <i aria-hidden="true" />
+                录制中
+              </span>
+            ) : null}
+            <span className="wb-rec-time" data-rec-timer={Number(elapsed.toFixed(2))}>
+              {timecode(elapsed, false)}
+            </span>
+          </div>
+        ) : (
+          <span className="wb-record-idle">预览会在这里出现</span>
+        )}
+      </div>
+
+      {/* 应用内确认：系统的权限请求在 Electron 里只回 true/false，用户看不到"在问什么"。
+          这一步就是那个"问"的地方 —— 只有点了「允许并开始」才会去换票据。 */}
+      {confirm ? (
+        <div className="wb-record-confirm" data-rec-confirm="1">
+          <strong>{confirm.title}</strong>
+          <p>{confirm.body}</p>
+          <div className="wb-record-confirm-actions">
+            <button type="button" className="btn small" data-rec-deny="1" onClick={cancelAsk}>
+              暂不录制
+            </button>
+            <button type="button" className="btn small" data-rec-allow="1" onClick={beginRecording}>
+              允许并开始
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="wb-rec-actions">
+          {recording ? (
+            <button type="button" className="btn" data-rec-btn="stop" onClick={stop}>
+              停止录制
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              data-rec-btn="start"
+              disabled={phase === 'saving' || phase === 'starting'}
+              onClick={() => {
+                setError('')
+                setPhase('asking')
+              }}
+            >
+              {phase === 'saving' ? '正在保存…' : phase === 'starting' ? '正在开始…' : '开始录制'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {error ? (
+        <p className="wb-insphint" data-rec-error="1" style={{ color: 'var(--warn, #e8b04b)' }}>
+          {error}
+        </p>
+      ) : (
+        <p className="wb-insphint" data-rec-hint="1">
+          录完会进素材库，并作为视频片段落在播放头处。录制期间请保持这个窗口打开。
+        </p>
+      )}
+
+      <div className="list" style={{ marginTop: 10 }}>
         <div className="list-item">
           <div className="grow">
-            <strong>用系统自带录屏，再导入</strong>
-            <small>Windows 按 Win+G 录屏，macOS 按 Cmd+Shift+5，存好后从这里导入</small>
+            <strong>导入已有的录像</strong>
+            <small>用系统录屏或手机拍的素材，也可以直接拖进窗口</small>
           </div>
-          <button className="btn small" type="button" onClick={onImport}>
+          <button className="btn small" type="button" disabled={locked} onClick={onImport}>
             <IconPlus size={14} />
             导入
           </button>
         </div>
-        <div className="list-item">
-          <div className="grow">
-            <strong>把录像拖进窗口</strong>
-            <small>资源管理器里直接把文件拖到软件窗口任意位置</small>
-          </div>
-          <span className="chip">可用</span>
-        </div>
-      </div>
-
-      <div className="notice" style={{ marginTop: 12 }}>
-        <IconInfo size={14} />
-        <span>
-          接入应用内录制需要新增主进程 desktopCapturer 通道并将 media 权限收敛到本应用源，
-          属于安全基线变更，已列入待确认清单。
-        </span>
       </div>
     </Shell>
   )

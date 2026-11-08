@@ -93,7 +93,12 @@ const TABS = [
     key: 'subtitle',
     label: '字幕',
     root: '字幕',
-    nodes: ['subtitle-custom', 'sub-new', 'sub-hand']
+    /* 2026-11-09：新增「字幕预设」（857 款口播排版，见 shared/subtitlePresets.json）。
+       排在最前 —— 口播剪辑的主路径是"先挑一套排版、再往里填字"，
+       下面三项（自定义 / 新建字幕 / 手写字幕）都是"单独做一条"的补充。
+       注意它是 `plain: true` 的**直接面板项**，不是可展开的分组，
+       中栏该出网格而不是再一层子项。 */
+    nodes: ['sub-preset', 'subtitle-custom', 'sub-new', 'sub-hand']
   },
   {
     key: 'audio',
@@ -517,21 +522,15 @@ async function main() {
         check(`C. ${tab.key}/${nodeKey} 进入选中态`, isActive)
 
         const state = await centerState(page)
-        if (nodeKey === 'record') {
-          /* 「录制」是**已知且刻意**的占位（应用内录制要放开 media 权限，需单独确认）。
-             这里不放行「有字就算过」—— 要求它确实讲清楚了、而不是空白或者空壳。 */
-          check(
-            `C. ${tab.key}/record 是刻意的占位面板（说明了原因）`,
-            state.exists && state.notice && !state.text.includes(SHELL_TEXT),
-            state.notice ? '' : '没有说明文案，可能变成了空壳'
-          )
-        } else {
-          check(
-            `C. ${tab.key}/${nodeKey} 中栏有真实内容（非空壳）`,
-            state.exists && !state.shell,
-            state.exists ? (state.shell ? `空壳：「${state.text.slice(0, 40)}」` : `${state.text.length} 字`) : '找不到 .wb-media'
-          )
-        }
+        /* 「录制」曾经是占位面板（只写一段"尚未接入"的说明），当时这里单开一个分支，
+           要求它"至少讲清了原因"。现在它是真面板（源列表 / 预览 / 计时 / 确认框），
+           所以和白名单里的其它项走同一条判据：有真实内容、不是空壳。
+           ⚠️ 别把这条改回"有字就算过"—— 空壳面板最难发现的就是"看着有字"。 */
+        check(
+          `C. ${tab.key}/${nodeKey} 中栏有真实内容（非空壳）`,
+          state.exists && !state.shell,
+          state.exists ? (state.shell ? `空壳：「${state.text.slice(0, 40)}」` : `${state.text.length} 字`) : '找不到 .wb-media'
+        )
       }
     }
 

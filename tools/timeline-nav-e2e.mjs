@@ -1,8 +1,9 @@
 /**
- * 时间线导航 E2E：真启 Electron + 真按键，验「切点跳转 / 适配全片 / Alt+滚轮横移」。
+ * 时间线导航 E2E：真启 Electron + 真按键 + 真拖动，验「切点跳转 / 适配全片 /
+ * Alt+滚轮横移 / 播放头拖动」。
  *
  * 为什么纯逻辑自测（tools/timeline-nav-selftest.mjs）之外还要这一道：
- * 自测只能证明 `stepCut` / `fitZoom` 算得对，证明不了下面四件只在真机成立的事 ——
+ * 自测只能证明 `stepCut` / `fitZoom` 算得对，证明不了下面五件只在真机成立的事 ——
  *   1. **键真的接上了**：`prevCut`/`nextCut`/`zoomFit` 在 ACTIONS 里、在派发表里、
  *      而且按下去改的是**播放头**而不是别的状态（"接错到别的动作"是静默失效的一类）；
  *   2. **播放头真的动了**：判据读的是那根线的 `data-playhead`（用户看到的位置），
@@ -11,9 +12,11 @@
  *      不是读 slider 的 value。算出来的缩放写进了 state、但样式没跟上（或者反过来）
  *      都只表现为"按了没反应"；
  *   4. **Alt+滚轮真的横向滚**：wheel 监听是原生挂的，React 的 onWheel 拦不住
- *      preventDefault，这里派发真实 WheelEvent 看 scrollLeft。
+ *      preventDefault，这里派发真实 WheelEvent 看 scrollLeft；
+ *   5. **按住左键真的能拖着播放头走**：pointerdown 定位一次 + 无 move 处理，
+ *      和"抓手上没有 pointer-events"，两种都表现为"拖不动"，但都过得了所有静态闸门。
  *
- * 断言总数恒为 13：找不到 electron / 中途出错时逐条补 SKIP（不是少跑）。
+ * 断言总数恒为 24：找不到 electron / 中途出错时逐条补 SKIP（不是少跑）。
  * 用法：node tools/timeline-nav-e2e.mjs
  */
 import { _electron as electron } from 'playwright-core'
@@ -28,7 +31,7 @@ const EXE = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 /** profile 按 pid 唯一：固定目录名在前一轮异常退出时删不掉，会带着上一轮状态启动 */
 const PROFILE = path.join(os.tmpdir(), 'yjai-e2e', `.timeline-nav-profile-${process.pid}`)
 
-const TOTAL_ASSERTIONS = 16
+const TOTAL_ASSERTIONS = 24
 let emitted = 0
 let pass = 0
 let fail = 0
@@ -137,6 +140,20 @@ function layoutOf(page) {
       laneRight: rect.right,
       clipRight: clips.length ? Math.max(...clips.map((c) => c.getBoundingClientRect().right)) : 0
     }
+  })
+}
+
+/**
+ * 时间线的几何：左沿 / 可视宽 / 当前横向滚动。
+ * 拖动判据全靠它把像素换成秒 —— 换算公式必须与实际实现同源：
+ * 秒 = (clientX − lane.left + lane.scrollLeft) / (46 × zoom)，其中 46 是 BASE_DPS（规格常量）。
+ */
+function laneGeom(page) {
+  return page.evaluate(() => {
+    const lane = document.querySelector('[data-tracks]')
+    if (!lane) return null
+    const rect = lane.getBoundingClientRect()
+    return { left: rect.left, top: rect.top, width: lane.clientWidth, scrollLeft: lane.scrollLeft }
   })
 }
 
@@ -324,6 +341,141 @@ async function main() {
     /* 收尾：让播放停下来，免得后面的闸门（若共用窗口）拿到还在跑的播放头 */
     await page.keyboard.press('K')
     await sleep(80)
+
+    /* -------------------- F. 播放头拖动（按住左键随意拖） --------------------
+     * Jason 报的是"拖动不灵活、不能按住左键随意拖"：
+     *   · 改动前只有 pointerdown 定位一次，之后的 pointermove 没人管；
+     *   · 标尺上那个白色"抓手"是 `.playhead::before` 画的装饰，父元素 pointer-events: none。
+     * 所以这里既验"拖得动、跟手、松手不跳"，也验"抓手真的能被指针命中"（旧的假抓手必红）。
+     * 判据一律读消费端：`.playhead[data-playhead]`、`data-scrubbing`、`elementFromPoint`。
+     */
+    await page.keyboard.press('Home')
+    await sleep(200)
+    const geom = await laneGeom(page)
+    const zoomNow = await zoomOf(page)
+    const dpsNow = 46 * zoomNow
+    const rulerY = geom.top + 11
+    /** 像素 → 秒（与实现同一口径） */
+    const toSeconds = (x) => Math.max(0, (x - geom.left + geom.scrollLeft) / dpsNow)
+    /**
+     * 片段在**内容坐标**里的横位（= rect.left − lane.left + scrollLeft）。
+     * 不能直接比 rect.left：拖到左端时会顺手把视图滚回 0（这是刻意的边缘自动滚），
+     * 所有片段的视口坐标会整体平移 —— 那是滚动，不是"被挪了"。
+     */
+    const clipContentXs = () =>
+      page.evaluate(() => {
+        const lane = document.querySelector('[data-tracks]')
+        const base = lane.getBoundingClientRect().left - lane.scrollLeft
+        return [...document.querySelectorAll('.clip[data-clip]')].map((node) =>
+          Math.round(node.getBoundingClientRect().left - base)
+        )
+      })
+    const clipsBefore = await clipContentXs()
+
+    const x1 = geom.left + 200
+    const x2 = geom.left + 380
+    await page.mouse.move(x1, rulerY)
+    await page.mouse.down()
+    await sleep(120)
+    const pressed = await playheadOf(page)
+    await page.mouse.move(x2, rulerY, { steps: 8 })
+    await sleep(120)
+    const dragging = await playheadOf(page)
+    check(
+      '17. 按住标尺拖动，松手前播放头就已经跟到指针处（实时，不是松手才跳）',
+      Math.abs(dragging - toSeconds(x2)) < 0.15 && Math.abs(dragging - pressed) > 0.2,
+      `按下=${pressed?.toFixed?.(2)} 拖到=${dragging?.toFixed?.(2)} 期望=${toSeconds(x2).toFixed(2)}`
+    )
+
+    const x3 = geom.left + 300
+    await page.mouse.move(x3, rulerY, { steps: 6 })
+    await sleep(120)
+    const draggedBack = await playheadOf(page)
+    check(
+      '18. 继续往回拖仍然在跟（不是只认按下那一下）',
+      Math.abs(draggedBack - toSeconds(x3)) < 0.15 && draggedBack < dragging,
+      `拖到=${draggedBack?.toFixed?.(2)} 期望=${toSeconds(x3).toFixed(2)}`
+    )
+
+    await page.mouse.up()
+    await sleep(150)
+    const released = await playheadOf(page)
+    const scrubFlag = await page.getAttribute('.wb-timeline', 'data-scrubbing')
+    check(
+      '19. 松手后停在最后位置，拖动状态复位（data-scrubbing 回到 0，没有卡在拖动态）',
+      Math.abs(released - draggedBack) < 0.06 && scrubFlag === '0',
+      `松手=${released?.toFixed?.(2)} 松手前=${draggedBack?.toFixed?.(2)} data-scrubbing=${scrubFlag}`
+    )
+
+    /* 抓手：能不能命中，是"真按钮 vs 装饰"唯一能自动判的东西 */
+    const gripHit = await page.evaluate(() => {
+      const grip = document.querySelector('[data-playhead-grip]')
+      if (!grip) return null
+      const rect = grip.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        onGrip: Boolean(hit && hit.getAttribute('data-playhead-grip') === '1')
+      }
+    })
+    check(
+      '20. 播放头抓手真的能被指针命中（不是 pointer-events:none 的装饰）',
+      Boolean(gripHit) && gripHit.onGrip && gripHit.height >= 16,
+      gripHit ? `${gripHit.width}×${gripHit.height} 命中=${gripHit.onGrip}` : '找不到 [data-playhead-grip]'
+    )
+
+    /* 抓手拖动：抓在**左沿**按下去。若实现按"指针位置"锚定，播放头会先往后跳半个抓手；
+       按"播放头 + 抓取偏移"锚定则一动不动。7px ≈ 0.038s（dps=184）/ 0.108s（dps=65）。 */
+    const gripBox = await page.evaluate(() => {
+      const grip = document.querySelector('[data-playhead-grip]')
+      const rect = grip.getBoundingClientRect()
+      return { left: rect.left, top: rect.top, cy: rect.top + rect.height / 2 }
+    })
+    const basePlayhead = await playheadOf(page)
+    const grabX = gripBox.left + 2
+    await page.mouse.move(grabX, gripBox.cy)
+    await page.mouse.down()
+    await sleep(120)
+    const afterGrab = await playheadOf(page)
+    check(
+      '21. 抓住手柄按下那一刻播放头不跳（保持抓取偏移，而不是吸到指针中心）',
+      Math.abs(afterGrab - basePlayhead) < 0.02,
+      `按下前=${basePlayhead?.toFixed?.(3)} 按下后=${afterGrab?.toFixed?.(3)}`
+    )
+
+    await page.mouse.move(grabX + 90, gripBox.cy, { steps: 6 })
+    await sleep(120)
+    const gripDragged = await playheadOf(page)
+    await page.mouse.up()
+    await sleep(120)
+    check(
+      '22. 抓着手柄拖 90px，播放头前进对应的秒数',
+      Math.abs(gripDragged - (basePlayhead + 90 / dpsNow)) < 0.15,
+      `=${gripDragged?.toFixed?.(2)} 期望=${(basePlayhead + 90 / dpsNow).toFixed(2)}`
+    )
+
+    /* 越界：拖到时间线左端之外。夹取只在 [0, duration]，不能出负数（负数会让预览 seek 到负时间） */
+    await page.mouse.move(geom.left + 40, rulerY)
+    await page.mouse.down()
+    await page.mouse.move(geom.left - 260, rulerY, { steps: 8 })
+    await sleep(250)
+    const clampedLeft = await playheadOf(page)
+    await page.mouse.up()
+    await sleep(100)
+    check(
+      '23. 拖过左端夹在 0（不出负数、不把播放头甩飞）',
+      clampedLeft === 0,
+      `playhead=${clampedLeft}`
+    )
+
+    /* 负对照：整段拖动不许挪动任何片段 —— 拖动播放头被误接成"拖片段"是最隐蔽的一种 */
+    const clipsAfter = await clipContentXs()
+    check(
+      '24. 拖动播放头不会挪动片段（负对照：没被误接成拖片段）',
+      clipsAfter.length === clipsBefore.length && clipsAfter.every((value, index) => value === clipsBefore[index]),
+      `${clipsBefore.join(',')} → ${clipsAfter.join(',')}`
+    )
   } catch (error) {
     console.error(`\n[!] E2E 中断：${String(error?.stack || error)}`)
     // 中断占最后一条：先补到 TOTAL-1 再用一条失败收尾，否则总数会多一条，

@@ -5,10 +5,24 @@
  *   - contextIsolation 开、nodeIntegration 关、sandbox 开
  *   - 渲染进程只能用 preload 明确暴露的那几个方法
  *   - 禁止渲染进程自行导航与开新窗口；外链一律交给系统浏览器
- *   - 拒绝一切权限申请（摄像头/麦克风/通知等按需再单独开）
+ *   - 权限按功能点最小放开：麦克风（录音配音）常开；摄像头 / 录屏**只认一次性票据**，
+ *     票据由渲染层在用户点过「应用内确认」后才换得到（见 recordGrant）
  *   - 令牌用 safeStorage 加密后落盘，不散落在 localStorage
  */
-const { app, BrowserWindow, shell, ipcMain, safeStorage, nativeTheme, dialog, protocol, Tray, Menu } = require('electron')
+const {
+  app,
+  BrowserWindow,
+  shell,
+  ipcMain,
+  safeStorage,
+  nativeTheme,
+  dialog,
+  protocol,
+  Tray,
+  Menu,
+  /* 录屏要列可录的屏幕 / 窗口（缩略图给用户选），并在 getDisplayMedia 里指定源 */
+  desktopCapturer
+} = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 /* 素材入库要用它给副本文件名加短哈希（不同目录下的同名文件不能互相覆盖） */
@@ -447,6 +461,49 @@ const hdrCache = new Map()
  *    表现是截图截到半张、或 `waitForSelector` 莫名其妙超时。所以无窗模式下必须
  *    同时关掉 backgroundThrottling，否则"能截到图"这件事本身不可靠。
  */
+/* --------------------------- 应用内录制 · 授权票据 --------------------------- */
+
+/**
+ * 屏幕 / 摄像头录制在 Electron 里必须放开渲染进程的权限，而这一层的基线是
+ * 「权限按功能最小放开」。一刀切放行不行（任何被注入的脚本都能开摄像头），
+ * 一律拒绝更不行 —— `getUserMedia` / `getDisplayMedia` 直接抛 NotAllowedError，
+ * 用户看到的是「点了没反应」，系统连「要不要允许」都不会问（应用先自己拒了）。
+ *
+ * 折中是**一次性票据**：
+ *   · 渲染层先弹自己的确认框，用户点「允许」之后才调 `record:grant` 换票据；
+ *   · 票据 30 秒有效（够覆盖「授权 → 建流 → 录完首帧」这段时间），
+ *     过期即作废，不做长期驻留；
+ *   · 票据绑定 scope（screen / camera），拿摄像头的票据开不了屏；
+ *   · 权限回调只认票据 —— 没有票据 = 与改动前完全一样，一律拒。
+ *
+ * ⚠️ 票据**不在建立流之后立刻删**：Chromium 除「申请」之外还会「复查」
+ *    （换设备、第二次调用时走 permission check），删早了表现为
+ *    「第一次能录、第二次报 NotAllowedError」，而界面只会显示一句失败。
+ */
+let recordGrant = null
+const RECORD_GRANT_TTL = 30 * 1000
+
+function grantRecordAccess(scope, extra = {}) {
+  recordGrant = {
+    scope: String(scope || ''),
+    sourceId: String(extra.sourceId || ''),
+    withAudio: Boolean(extra.withAudio),
+    expires: Date.now() + RECORD_GRANT_TTL
+  }
+  return recordGrant
+}
+
+/** 取一张仍然有效、且 scope 对得上的票据；顺手清掉过期的 */
+function activeRecordGrant(scope) {
+  if (!recordGrant) return null
+  if (recordGrant.expires <= Date.now()) {
+    recordGrant = null
+    return null
+  }
+  if (scope && recordGrant.scope !== scope) return null
+  return recordGrant
+}
+
 const HEADLESS = process.env.YJAI_NO_WINDOW === '1'
 
 function createWindow() {
@@ -523,18 +580,19 @@ function createWindow() {
   })
 
   /**
-   * 系统权限：**只放行「本窗口 + 只要麦克风 + 只要音频」这一种**。
+   * 系统权限：**按功能点最小放开，且只放行主窗口**。
    *
-   * 原来是 `callback(false)` 通吃 —— 那条规则写在"这个应用没有任何需要系统权限的功能"
-   * 的年代。现在有了「录音配音」，麦克风是**功能的一部分**：一律拒绝的话，
-   * getUserMedia 直接抛 NotAllowedError，用户看到的是"录音按钮点了没反应"，
-   * 而系统连"要不要允许"都不会问（因为应用先自己拒了）。
+   * 三类，各自的门槛不同：
+   *   · 麦克风（`media` + 全部是 audio）：录音配音是既有功能，直接放行。
+   *     原来这里是 `callback(false)` 通吃 —— 那条规则写在"这个应用没有任何需要系统
+   *     权限的功能"的年代，一律拒绝的表现是 getUserMedia 抛 NotAllowedError。
+   *   · 摄像头（`media` + 全部是 video）：**必须有 camera 票据**。
+   *   · 录屏（`display-capture`）：**必须有 screen 票据**。
+   *   其余（通知、地理位置、剪贴板、MIDI…）照旧全拒。
    *
-   * 放开的最小面：
-   *   · 只有**主窗口**能申请（别的 webContents / 将来开的子页一律拒）；
-   *   · 只有 `media` 这一种权限，其他（摄像头、通知、地理位置、剪贴板、MIDI…）照旧全拒；
-   *   · media 的 mediaTypes 必须**全部是 audio** —— 请求里只要带了 video
-   *     （摄像头），整条请求就拒，不给"顺手把摄像头也开了"留缝。
+   * 票据从哪来：渲染层弹完自己的确认框、用户点了「允许」之后才调 `record:grant`。
+   * 也就是说"系统权限"这一层不弹窗、也不问用户 —— 问的那一次发生在界面上，
+   * 用户看得懂（"接下来要录你的屏幕"），而不是一个英文的 Chromium 提示条。
    *
    * 另外要设 check 处理器：Chromium 除了"申请"还会"复查"（同一 origin 第二次调用、
    * 设备切换时会走 check），只设 request 时表现为"第一次能录、第二次报 NotAllowedError"。
@@ -544,18 +602,63 @@ function createWindow() {
     if (!types.length) return false
     return types.every((type) => String(type).toLowerCase() === 'audio')
   }
+  const videoOnlyMedia = (details) => {
+    const types = Array.isArray(details && details.mediaTypes) ? details.mediaTypes : []
+    if (!types.length) return false
+    return types.every((type) => String(type).toLowerCase() === 'video')
+  }
   /* ⚠️ 四个形参都要写全：`details` 是第 4 个参数，`arguments[3]` 在箭头函数里根本不存在
      （箭头函数没有自己的 arguments），写成那样等于恒 undefined ⇒ 权限永远被拒，
      而"全拒"看起来跟"还没放开"一模一样，极难定位。 */
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
-    if (permission !== 'media') return callback(false)
     if (!mainWindow || wc !== mainWindow.webContents) return callback(false)
-    return callback(audioOnlyMedia(details))
+    if (permission === 'media') {
+      if (audioOnlyMedia(details)) return callback(true)
+      return callback(videoOnlyMedia(details) && Boolean(activeRecordGrant('camera')))
+    }
+    if (permission === 'display-capture') return callback(Boolean(activeRecordGrant('screen')))
+    return callback(false)
   })
   mainWindow.webContents.session.setPermissionCheckHandler((wc, permission, _origin, details) => {
-    if (permission !== 'media') return false
     if (!mainWindow || (wc && wc !== mainWindow.webContents)) return false
-    return Boolean(details && String(details.mediaType || '').toLowerCase() === 'audio')
+    if (permission === 'media') {
+      const mediaType = String((details && details.mediaType) || '').toLowerCase()
+      if (mediaType === 'audio') return true
+      if (mediaType === 'video') return Boolean(activeRecordGrant('camera'))
+      return false
+    }
+    if (permission === 'display-capture') return Boolean(activeRecordGrant('screen'))
+    return false
+  })
+
+  /**
+   * 录屏的源由**应用自己选**（面板里一排缩略图），不用 Chromium 的系统选择器：
+   * Windows 上 `useSystemPicker` 不可用（那是 macOS 15+ 的东西），
+   * 不设这个 handler 时 `getDisplayMedia` 会直接 reject —— 又是"点了没反应"。
+   *
+   * ⚠️ 选中哪个源由票据带进来，这里**不再问一次**：用户在面板里已经指过那一块屏。
+   *    票据过期或 sourceId 对不上就 `callback({})`（等于拒绝），不偷偷给个默认屏。
+   */
+  mainWindow.webContents.session.setDisplayMediaRequestHandler(async (request, callback) => {
+    const grant = activeRecordGrant('screen')
+    if (!grant) return callback({})
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        /* 这里只要 source 对象本身，缩略图另走 record:sources 那条路，不重复抓帧 */
+        thumbnailSize: { width: 0, height: 0 },
+        fetchWindowIcons: false
+      })
+      const picked = sources.find((item) => item.id === grant.sourceId)
+      if (!picked) return callback({})
+      const options = { video: picked }
+      /* 系统声音：Windows 的 loopback 可用；不支持的环境下带上它会连画面一起失败，
+         所以由渲染层勾选决定，失败后由渲染层降级重试（不静默吞） */
+      if (grant.withAudio && request.audioRequested) options.audio = 'loopback'
+      return callback(options)
+    } catch {
+      return callback({})
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -998,35 +1101,107 @@ function registerIpc() {
     return extractAudioTrack({ sourcePath, outPath })
   })
 
-  /* ------------------------------ 录音配音 ------------------------------ */
+  /* ---------------------------- 应用内录制 · 源与授权 ---------------------------- */
 
   /**
-   * 保存一段录音（配音）。
+   * 列出「可以录的东西」：屏幕 + 各个窗口，带缩略图。
+   *
+   * 必须由主进程给：`desktopCapturer` 只在主进程可用（渲染层拿到的是空数组，
+   * 表现出来就是"列表一直是空的、但也没有报错"）。
+   *
+   * ⚠️ 要排掉自己这个窗口：录自己会把软件界面录进去，而界面里又显示着录制的预览 ——
+   *    无限回廊。`getMediaSourceId()` 是唯一能与 source.id 对上的标识
+   *    （按标题匹配在改了文档名之后会失准）。
+   */
+  ipcMain.handle('record:sources', async () => {
+    try {
+      const selfId = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getMediaSourceId() : ''
+      const list = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        thumbnailSize: { width: 320, height: 180 },
+        fetchWindowIcons: true
+      })
+      const sources = list
+        .filter((item) => item.id !== selfId)
+        .map((item) => ({
+          id: item.id,
+          name: item.name || (item.id.startsWith('screen') ? '整个屏幕' : '窗口'),
+          kind: item.id.startsWith('screen') ? 'screen' : 'window',
+          /* 空 NativeImage 直接 toDataURL 会得到 "data:image/png;base64," 这种空图，
+             <img> 上就是一块碎图，看起来像界面坏了 */
+          thumbnail: item.thumbnail && !item.thumbnail.isEmpty() ? item.thumbnail.toDataURL() : '',
+          icon: item.appIcon && !item.appIcon.isEmpty() ? item.appIcon.toDataURL() : ''
+        }))
+      return { ok: true, sources }
+    } catch (error) {
+      return { ok: false, error: `读不到可录制的画面：${error.message}` }
+    }
+  })
+
+  /**
+   * 签发录制票据。**只有渲染层弹完自己的确认框、用户点了「允许」之后才该被调用。**
+   * 签发本身不建流、不问系统 —— 它只是把"用户同意了"这件事告诉权限层。
+   */
+  ipcMain.handle('record:grant', (_event, payload) => {
+    const scope = String((payload && payload.scope) || '')
+    if (scope !== 'screen' && scope !== 'camera') return { ok: false, error: '未知的录制类型' }
+    const grant = grantRecordAccess(scope, payload || {})
+    return { ok: true, expires: grant.expires }
+  })
+
+  /** 用户点了「暂不录制」/ 面板关闭：立刻作废，不留给后续调用 */
+  ipcMain.handle('record:grantCancel', () => {
+    recordGrant = null
+    return { ok: true }
+  })
+
+  /* ------------------------- 录音配音 / 录屏落盘 ------------------------- */
+
+  /**
+   * 保存一段录音（配音）或录屏。
    *
    * 分工：**浏览器侧只负责录**（MediaRecorder 产 blobs），**路径与落盘全在主进程** ——
    * 与 `media:extractAudio` 同一道防线：渲染层能传字节，但传不进"往任意路径写文件"这个能力。
    *
    * ⚠️ 时长由渲染层**测量**后带过来，不在主进程 probe：
    *    MediaRecorder 产出的 webm 头里没有 duration（Chromium 一直是这个行为），
-   *    `<audio>` 的 loadedmetadata 拿到的是 Infinity，ffprobe 也要啃完整条流才算得出。
+   *    `<audio>` 的 loadedMetadata 拿到的是 Infinity，ffprobe 也要啃完整条流才算得出。
    *    以"用户按开始到按停止的墙钟时间"为准，误差在几十毫秒内，而那正是用户期望的长度。
    *    （这也意味着录音片段**不允许被拉长**：sourceDuration 就是它自己，超出即黑/静音。）
    */
   ipcMain.handle('recording:save', async (_event, payload) => {
+    /* 录屏与录音共用这一条通道：落盘规则（路径、白名单、描述）完全一样，
+       只有"多大算异常 / 多短算空录 / 归到哪个轨道"不同。分两条 IPC 只会让两份规则分叉。 */
+    const kind = String((payload && payload.kind) || 'audio') === 'video' ? 'video' : 'audio'
     const bytes = payload && payload.bytes
     const byteLength = bytes && typeof bytes.byteLength === 'number' ? bytes.byteLength : 0
-    if (!byteLength) return { ok: false, error: '没有收到录音数据' }
-    /* 上限 200MB：一小时的高质量 opus 也远小于这个数，超过基本是调用方传错了缓冲区 */
-    if (byteLength > 200 * 1024 * 1024) return { ok: false, error: '录音数据异常（超过 200MB）' }
+    if (!byteLength) return { ok: false, error: kind === 'video' ? '没有收到录制数据' : '没有收到录音数据' }
+    /* audio 上限 200MB：一小时的高质量 opus 也远小于这个数，超过基本是调用方传错了缓冲区。
+       video 上限 800MB：录屏 10 分钟约 60~120MB，800MB 已是二十多分钟的量级；
+       再大就不该指望一整块缓冲区过 IPC —— 那时要做的是分段落盘，不是把上限调到 2GB。 */
+    const limit = kind === 'video' ? 800 * 1024 * 1024 : 200 * 1024 * 1024
+    if (byteLength > limit) {
+      return {
+        ok: false,
+        error:
+          kind === 'video'
+            ? `这段录屏太大（${Math.round(byteLength / 1048576)}MB，上限 800MB），请拆成几段录`
+            : '录音数据异常（超过 200MB）'
+      }
+    }
     const buffer = Buffer.from(bytes.buffer ? bytes : new Uint8Array(bytes))
-    /* 太短的（< 1KB）基本是"按下就停"：写进去之后在时间线上是一个几乎看不见的片段，
-       用户以为记录成功、实际什么都没录到。这里明确拒掉，让界面说一句真话。 */
-    if (buffer.length < 1024) return { ok: false, error: '这段录音太短了（几乎没有声音）' }
+    /* 太短的（音频 <1KB / 视频 <4KB）基本是"按下就停"：写进去之后在时间线上是一个
+       几乎看不见的片段，用户以为记录成功、实际什么都没录到。这里明确拒掉，让界面说真话。 */
+    if (buffer.length < (kind === 'video' ? 4096 : 1024)) {
+      return { ok: false, error: kind === 'video' ? '这段录屏太短了（几乎没有画面）' : '这段录音太短了（几乎没有声音）' }
+    }
     const dir = path.join(app.getPath('userData'), 'recordings')
     fs.mkdirSync(dir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const ext = /mp4|m4a|aac/i.test(String(payload.mime || '')) ? '.m4a' : '.webm'
-    const outPath = path.join(dir, `配音-${stamp}${ext}`)
+    const mime = String(payload.mime || '')
+    const ext = /mp4|m4a|aac/i.test(mime) ? (kind === 'video' ? '.mp4' : '.m4a') : '.webm'
+    const prefix = kind === 'video' ? '录屏' : '配音'
+    const outPath = path.join(dir, `${prefix}-${stamp}${ext}`)
     try {
       fs.writeFileSync(outPath, buffer)
     } catch (error) {
@@ -1043,9 +1218,10 @@ function registerIpc() {
         ...described,
         /* .webm 在扩展名表里默认算 **video**（普通 webm 多半是视频），
            而录音录制出来的一定是音频 —— 这里显式改掉，否则它会落到视频轨，
-           预览去建 <video> 元素（能出声但没有画面层，用户以为录坏了）。 */
-        kind: 'audio',
-        name: `配音 ${stamp.slice(11, 19).replace(/-/g, ':')}`,
+           预览去建 <video> 元素（能出声但没有画面层，用户以为录坏了）。
+           录屏反过来：.webm 本来就该是 video，别被这条规则压成 audio。 */
+        kind,
+        name: `${prefix} ${stamp.slice(11, 19).replace(/-/g, ':')}`,
         duration: Number(payload.duration) > 0 ? Number(Number(payload.duration).toFixed(3)) : 0
       }
     }
