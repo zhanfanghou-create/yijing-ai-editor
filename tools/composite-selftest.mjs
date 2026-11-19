@@ -32,6 +32,9 @@ import {
   visualCandidates
 } from '../packages/desktop/src/renderer/composite.js'
 import { replacePatch, sourceTimeAt } from '../packages/desktop/src/renderer/trim.js'
+/* 画中画的默认值与上限直接读**规格**（shared/pip.json 的投影），不另抄一份数字 ——
+   抄一份的话，规格改了这条断言仍在验旧值，等于在测自己。 */
+import { PIP_DEFAULT_ANCHOR, PIP_DEFAULT_SIZE, PIP_MAX_SIZE, boxOf } from '../packages/desktop/src/shared/pip.js'
 
 const results = []
 
@@ -193,7 +196,26 @@ check('画中画带自己的锚点与尺寸', both.pip[0].anchor === 'left-top' 
 check('画中画锚点写错/缺省时退回默认锚点（不让画面飞出画布）', (() => {
   const dirty = [{ ...MULTI[3], pip: { anchor: 'top-left', size: 999 } }]
   const shot = compositeAt(dirty, ASSETS, 2)
-  return shot.pip[0].anchor === 'right-bottom' && shot.pip[0].size === 60
+  return shot.pip[0].anchor === PIP_DEFAULT_ANCHOR && shot.pip[0].size === PIP_MAX_SIZE
+})())
+/* 用户的诉求原话：「默认按比例铺开到预览窗，不是只占画中画的一部分」。
+   铺满这件事有两个必要条件，缺一个都不成：
+     · size = 100（宽度 = 整幅），上限还得够（以前 maxSize=60，最大只有六成宽）；
+     · 锚点居中（换成 right-bottom，size=100 时盒子整体偏出画布右上角）。
+   判定直接算**左边缘**：1280 宽的画布上，铺满 ⇒ 左边缘 0、右边缘 1280。
+   期望值 0 / 1280 是几何定义，不是拿 boxOf 反算出来的。 */
+check('画中画默认尺寸就是铺满（规格 defaultSize=100 / 上限≥100）', PIP_DEFAULT_SIZE === 100 && PIP_MAX_SIZE >= 100, `defaultSize=${PIP_DEFAULT_SIZE} maxSize=${PIP_MAX_SIZE}`)
+check('缺省 pip 的片段按"铺满 + 居中"渲染（左边缘贴 0、宽 = 整幅）', (() => {
+  const clip = { ...MULTI[3] }
+  delete clip.pip
+  const shot = compositeAt([clip], ASSETS, 2)
+  const box = boxOf(shot.pip[0], 1280, 720)
+  return near(box.x - box.fx * box.w, 0) && near(box.w, 1280)
+})(), (() => {
+  const clip = { ...MULTI[3] }
+  delete clip.pip
+  const box = boxOf(compositeAt([clip], ASSETS, 2).pip[0], 1280, 720)
+  return `left=${(box.x - box.fx * box.w).toFixed(2)} w=${box.w.toFixed(2)}`
 })())
 check('错开之后只剩各自的（t=7.5 无画中画、只剩配乐二）', compositeAt(MULTI, ASSETS, 7.5).pip.length === 0 && ids(compositeAt(MULTI, ASSETS, 7.5).audio) === 'b2')
 

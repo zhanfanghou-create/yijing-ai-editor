@@ -7,7 +7,7 @@ import {
   IconSkipForward
 } from '../icons.jsx'
 import { FRAME_RATE } from '../keymap.js'
-import { frameEffectClass, frameEffectDuration, frameEffectStyle, overlayEffectClass, isPackEffect, isWarpEffect, packEffectId } from '../frameEffects.js'
+import { frameEffectClass, frameEffectDuration, frameEffectStyle, overlayEffectClass, isPackEffect, isWarpEffect, packEffectId, fisheyeScale } from '../frameEffects.js'
 import { useFxPacks } from '../fxpack.js'
 
 /**
@@ -44,6 +44,9 @@ import HslCanvas from './HslCanvas.jsx'
 /* 内置边框库：把 `clip.border` 这个 key 换成 yjai-media 地址。
    清单进程内缓存，预览与边框面板共用一份（见 renderer/borderCatalog.js）。 */
 import { borderUrlOf, ensureBorderCatalog } from '../borderCatalog.js'
+/* 声音效果（声像 / 人声增强 / 变声）：预览把媒体元素接进 WebAudio，节点按
+   shared/audioGraph.js 的计划建。见 renderer/previewAudio.js 顶部那三条规矩。 */
+import { applyAudioFx, detachAudioFx } from '../previewAudio.js'
 /* 效果（圆角 / 蒙版 / 抠像 / 混合 / 变形 / 描边 / 阴影）—— 真源在 shared/effects.js，
    导出侧 render.js 用的是同一份换算（见那份文件的说明：两侧不许各写一遍）。 */
 import {
@@ -251,7 +254,16 @@ function AudioTrackLayer({ track, playing, volume }) {
     apply()
     if (playing) el.play().catch(() => {})
     else el.pause()
+    /* 声音效果（声像 / 人声增强 / 变声）—— 以前只有导出认，预览里调了等于没调。
+       中性计划时这一步什么都不做（元素继续走 el.volume 的老路）。 */
+    applyAudioFx(el, track)
   }, [apply, playing, url, volume, track?.gain, track?.keepPitch, track?.speed])
+
+  /* 卸载时把这条链拆掉（元素本身也要没了，断开只是卫生 + 释放音源节点） */
+  useEffect(() => {
+    const el = ref.current
+    return () => detachAudioFx(el)
+  }, [])
 
   if (!url) return null
   return <audio ref={ref} src={url} preload="auto" onLoadedMetadata={apply} data-audio-track={track?.id || ''} />
@@ -574,6 +586,43 @@ function useBorderUrl(key) {
   return url
 }
 
+/**
+ * 一层的"长相"：调色串、剪裁盒、媒体元素的变换、分区 HSL 是否启用。
+ *
+ * 主画面、转场层、画中画**三个渲染分支都从这里取**。
+ * 以前画中画是第三份手抄实现 —— 只抄了特效（圆角/描边/阴影/抠像），
+ * 于是右栏对叠加轨开放的调色、调节、美颜、曲线、色轮、分区 HSL、裁剪、
+ * 位置/缩放/旋转全部**没有进预览**：滑杆能动、脏点亮、数字在变，画面一像素不动。
+ * 导出侧（`render.js`）是照 `describeLayer` 的完整字段跑的，成片反而是对的 ——
+ * 这种"预览里不行、导出却正常"的分叉最容易被当成"预览卡了"。
+ *
+ * 顺序与 render.js 的 ffmpeg 链逐字对应：增益 → 磨皮 → 对比度/饱和度 → 调色。
+ *
+ * @param {object} layer       合成层（composite.describeLayer 的产物）
+ * @param {number|string} aspectRatio 画布比例（剪裁盒按比例算）
+ * @param {{w:number,h:number}|null} box 画框像素尺寸（只有自由变形需要；画中画传 null）
+ */
+function lookOf(layer, aspectRatio, box) {
+  const cssFilter = cssFilterFor(layer.filter, layer.filterIntensity)
+  const adjustOps = cssFilterOps(layer.adjust, layer.beauty)
+  const gradeRef = gradeMatrix(layer.adjust, layer.beauty) ? `url(#yjai-grade-${layer.id})` : ''
+  const curveRef = isNeutral(layer.curves) ? '' : `url(#yjai-curve-${layer.id})`
+  const wheelRef = wheelsNeutral(layer.wheels) ? '' : `url(#yjai-wheel-${layer.id})`
+  const fx = readEffects(layer.effects)
+  /* 分区 HSL：合成层带来了非中性参数才启用（不启用时不建 WebGL 上下文，零代价）。
+     这一份同时是 <Previews> 的入参与 `data-hsl` 钩子的判据 —— 两者必须同源，
+     否则会出现"钩子说开了、画面没开"这种自欺的绿。 */
+  const hslOn = Boolean(layer.hsl) && !hslNeutral(layer.hsl)
+  const parts = effectFilterParts(layer, fx, { grade: gradeRef, wheel: wheelRef, curve: curveRef }, adjustOps, cssFilter)
+  return {
+    fx,
+    hslOn,
+    filter: parts.length ? parts.join(' ') : '',
+    clipBox: clipStyleFor(fx, aspectRatio),
+    mediaStyle: mediaStyleOf(layer, fx, box)
+  }
+}
+
 function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
   const ref = useRef(null)
   const sourceTime = Number(layer.sourceTime) || 0
@@ -628,7 +677,32 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
     align()
     if (layer.visible && playing) el.play().catch(() => {})
     else el.pause()
-  }, [align, audible, layer.gain, layer.keepPitch, layer.speed, layer.visible, playing, url, volume])
+    /* 声音效果（声像 / 人声增强 / 变声）。中性计划 → 完全不碰元素（见 previewAudio ①） */
+    applyAudioFx(el, layer)
+  }, [
+    align,
+    audible,
+    /* ⚠️ 不要加 `layer`：合成层是每帧新建的对象，把它放进依赖会让这个副作用
+       每帧重跑（align + play + 音量赋值 60 次/秒）。声音效果只认下面这四个字段。 */
+    layer.audioDenoise,
+    layer.gain,
+    layer.keepPitch,
+    layer.pan,
+    layer.speed,
+    layer.visible,
+    layer.voiceBoost,
+    layer.voiceFx,
+    playing,
+    url,
+    volume
+  ])
+
+  /* 元素卸载：拆链（同一个元素上 createMediaElementSource 只能建一次，
+     留着不拆会在下次挂载时撞 InvalidStateError） */
+  useEffect(() => {
+    const el = ref.current
+    return () => detachAudioFx(el)
+  }, [])
 
   /**
    * 调色（CSS filter）、调节/美颜、缩放/位置/旋转分开挂：
@@ -641,18 +715,11 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
    * 合成**一条** filter 声明，顺序与 render.js 的 ffmpeg 链一致：
    *   增益 → 磨皮 → 对比度/饱和度 → 调色。
    */
-  const cssFilter = cssFilterFor(layer.filter, layer.filterIntensity)
-  const adjustOps = cssFilterOps(layer.adjust, layer.beauty)
-  const gradeRef = gradeMatrix(layer.adjust, layer.beauty) ? `url(#yjai-grade-${layer.id})` : ''
-  const curveRef = isNeutral(layer.curves) ? '' : `url(#yjai-curve-${layer.id})`
-  const wheelRef = wheelsNeutral(layer.wheels) ? '' : `url(#yjai-wheel-${layer.id})`
-  const fx = readEffects(layer.effects)
-  /* 分区 HSL：合成层带来了非中性参数才启用（不启用时不建 WebGL 上下文，零代价）。
-     这一份同时是 <Previews> 的入参与 `data-hsl` 钩子的判据 —— 两者必须同源，
-     否则会出现"钩子说开了、画面没开"这种自欺的绿。 */
-  const hslOnLayer = Boolean(layer.hsl) && !hslNeutral(layer.hsl)
-  const filterParts = effectFilterParts(layer, fx, { grade: gradeRef, wheel: wheelRef, curve: curveRef }, adjustOps, cssFilter)
-  const layerFilter = filterParts.length ? filterParts.join(' ') : ''
+  const look = lookOf(layer, aspectRatio, box)
+  const fx = look.fx
+  const hslOnLayer = look.hslOn
+  const layerFilter = look.filter
+  const { clipBox, mediaStyle } = look
   const boxStyle = {}
   if (layerFilter) boxStyle.filter = layerFilter
   if (!layer.visible) boxStyle.display = 'none'
@@ -660,9 +727,6 @@ function MediaLayer({ layer, playing, volume, audible, aspectRatio, box }) {
      导出侧 render.js 也只在 overlay 合成那一处用 blend。 */
   const mix = layer.role === 'main' ? '' : blendCss(fx)
   if (mix) boxStyle.mixBlendMode = mix
-
-  const clipBox = clipStyleFor(fx, aspectRatio)
-  const mediaStyle = mediaStyleOf(layer, fx, box)
 
   const inner = (
     <Previews
@@ -986,7 +1050,7 @@ const EXACT_XFADE = [
  * 时间对齐与主层同源：对齐**源文件时间**（不是播放头秒数）、阈值 0.25s，
  * 所以片段被拖到别处或被剪过左端之后，取到的仍是该取的那一帧。
  */
-function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1, keepPitch = true }) {
+function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1, keepPitch = true, style, pan, voiceBoost, voiceFx, audioDenoise }) {
   const ref = useRef(null)
   const align = useCallback(() => {
     const el = ref.current
@@ -1011,7 +1075,16 @@ function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1, kee
     else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keepPitch !== false
     if (playing) el.play().catch(() => {})
     else el.pause()
-  }, [gain, keepPitch, playing, speed, url, volume])
+    /* 画中画的原声同样吃声像 / 人声增强 / 变声（导出侧 bedTail 对叠加轨也挂了这几项）。
+       ⚠️ 依赖里只放这四个标量，不放整个 item —— item 每帧都是新对象，会把这个
+          副作用变成"每帧跑一次"，而它里面有 play / 音量赋值。 */
+    applyAudioFx(el, { pan, voiceBoost, voiceFx, audioDenoise })
+  }, [audioDenoise, gain, keepPitch, pan, playing, speed, url, voiceBoost, voiceFx, volume])
+
+  useEffect(() => {
+    const el = ref.current
+    return () => detachAudioFx(el)
+  }, [])
 
   return (
     <video
@@ -1021,6 +1094,9 @@ function PipVideo({ url, sourceTime, playing, volume, gain = 100, speed = 1, kee
       preload="auto"
       onLoadedMetadata={align}
       data-pip-video="1"
+      /* 位置 / 缩放 / 旋转 / 镜像 / 斜切 / 裁剪位移 —— 与主画面共用 mediaStyleOf 的结果。
+         以前画中画的 <video> 没有任何 style，面板上推位置、拉缩放对它毫无作用。 */
+      style={style}
     />
   )
 }
@@ -1126,12 +1202,16 @@ export default function Stage({
     return () => cancelAnimationFrame(rafRef.current)
   }, [playing, totalDuration, onSeek, direction])
 
-  /* 倒放到头就停：单独一条 effect，因为上面那条的 rAF 里读不到"最新的 playhead"
-     （闭包会一直拿到 effect 创建时的那一帧）。用 prop 就能读到。 */
+  /* 播放到头就停（正反双向）：单独一条 effect，因为上面那条的 rAF 里读不到
+     "最新的 playhead"（闭包会一直拿到 effect 创建时的那一帧）。用 prop 就能读到。
+     ⚠️ 以前只处理倒放（direction===-1），正向播到片尾时 rAF 把 playhead 夹在
+     totalDuration 后就不动了、playing 却一直是 true —— 画面停住、按钮还显示"暂停"，
+     用户以为卡死。现在正向 / 倒放到各自端点都主动停，两向共用同一口径。 */
   useEffect(() => {
-    if (!playing || direction !== -1) return
-    if (playhead <= 0) onTogglePlay()
-  }, [playing, direction, playhead, onTogglePlay])
+    if (!playing) return
+    const atEnd = direction === -1 ? playhead <= 0 : playhead >= totalDuration
+    if (atEnd) onTogglePlay()
+  }, [playing, direction, playhead, totalDuration, onTogglePlay])
 
   /**
    * 预览底图。
@@ -1373,7 +1453,9 @@ export default function Stage({
                       <feDisplacementMap
                         in="SourceGraphic"
                         in2="dispmap"
-                        scale="0.25"
+                        /* 随畸变档位变（t 的绝对值越大越强），与导出侧 lenscorrection=k1=t 同向。
+                           真源 shared/fxParams.js:fisheyeScale —— 三档 = 0.189/0.25/0.311。 */
+                        scale={fisheyeScale(frameFx)}
                         xChannelSelector="R"
                         yChannelSelector="G"
                       />
@@ -1441,10 +1523,15 @@ export default function Stage({
                 ⚠️ 这一层必须声明 container-type（见 CSS）：盒子用的是 cqw 单位，
                    少了它画中画会按视口算尺寸，跑到屏幕角上去。 */}
             {pip.map((item) => {
-              const pfx = readEffects(item.effects)
-              const pKeyRef = pfx.key.on ? `url(#yjai-key-${item.id})` : ''
-              const pFilter = [pKeyRef, strokeShadows(pfx), shadowFilter(pfx)].filter(Boolean).join(' ')
-              const pClip = clipStyleFor(pfx, aspectValue)
+              /* ⚠️ 这一层的长相必须走 lookOf（与主画面同一份）。
+                 以前这里是第三份手抄：只算 readEffects 的描边/阴影/抠像，
+                 于是右栏对叠加轨开放的调色、调节、美颜、曲线、色轮、分区 HSL、
+                 裁剪、位置/缩放/旋转**全都不进预览** —— 滑杆能动、脏点亮、
+                 数字在变，画面一像素不动，而成片（走 describeLayer 全字段）却是对的。
+                 box 传 null：自由变形（四角透视）的 matrix3d 需要画框像素尺寸，
+                 画中画的盒子尺寸由锚点+比例推出来，这里拿不到，明确不支持（面板也不对它开放）。 */
+              const look = lookOf(item, aspectValue, null)
+              const pfx = look.fx
               const pMix = blendCss(pfx)
               return (
                 <span
@@ -1459,6 +1546,10 @@ export default function Stage({
                   data-selectable={layerOwnerId(item)}
                   data-pip-anchor={item.anchor}
                   data-pip-size={item.size}
+                  /* 调色与分区 HSL 是否真的到了这一层：面板写回片段 ≠ 合成层拿到了它。
+                     读旋钮上的值等于自己证明自己，所以钩子挂在**渲染出来的那一层**上。 */
+                  data-pip-filter={item.filter || 'none'}
+                  data-hsl={look.hslOn ? '1' : ''}
                   data-fx-radius={pfx.radius > 0.01 ? String(pfx.radius) : ''}
                   data-fx-mask={pfx.mask.shape}
                   data-fx-key={pfx.key.on ? '1' : ''}
@@ -1470,18 +1561,20 @@ export default function Stage({
                   <span
                     className="canvas-pip"
                     data-pip-box="1"
+                    data-pip-offset-x={Number(item.offset && item.offset.x) || 0}
+                    data-pip-offset-y={Number(item.offset && item.offset.y) || 0}
                     style={{
-                      ...pipBoxCss(item.anchor, item.size),
+                      ...pipBoxCss(item.anchor, item.size, item.offset),
                       ...(Number(item.opacity) < 99.5 ? { opacity: String(Number(item.opacity) / 100) } : null),
-                      ...(pFilter ? { filter: pFilter } : null),
+                      ...(look.filter ? { filter: look.filter } : null),
                       ...(pMix ? { mixBlendMode: pMix } : null)
                     }}
                   >
                     {/* 剪裁盒单独一层：filter 与 mask 挤同一个元素时，圆角会把描边切掉一圈
                         （CSS 合成顺序是 filter → clip → mask，见 clipStyleFor 的说明）。 */}
-                    <span className="canvas-pip-clip" style={pClip || undefined}>
+                    <span className="canvas-pip-clip" style={look.clipBox || undefined}>
                       {item.kind === 'image' ? (
-                        <img src={item.url} alt="" data-pip-img="1" />
+                        <img src={item.url} alt="" data-pip-img="1" style={look.mediaStyle} />
                       ) : (
                         <PipVideo
                           url={item.url}
@@ -1491,6 +1584,12 @@ export default function Stage({
                           gain={item.gain}
                           speed={item.speed}
                           keepPitch={item.keepPitch}
+                          pan={item.pan}
+                          voiceBoost={item.voiceBoost}
+                          voiceFx={item.voiceFx}
+                          audioDenoise={item.audioDenoise}
+                          /* 位置 / 缩放 / 旋转 / 裁剪位移 / 镜像 / 斜切：与主画面同一份 mediaStyleOf */
+                          style={look.mediaStyle}
                         />
                       )}
                     </span>

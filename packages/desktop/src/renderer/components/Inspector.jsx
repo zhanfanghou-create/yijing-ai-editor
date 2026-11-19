@@ -1539,7 +1539,7 @@ function ClipInspector({
                       title={`画中画放在${anchor.label}`}
                       aria-pressed={(clip.pip?.anchor || PIP_DEFAULT_ANCHOR) === anchor.key}
                       data-pip-anchor={anchor.key}
-                      onClick={() => patch({ pip: { ...clip.pip, anchor: anchor.key } })}
+                      onClick={() => patch({ pip: { ...clip.pip, anchor: anchor.key, offset: { x: 0, y: 0 } } })}
                     >
                       <i />
                     </button>
@@ -1756,8 +1756,8 @@ function ClipInspector({
               onChange={(value) => patch({ voiceBoost: value })}
             />
             <p className="wb-insphint">
-              削掉低频隆隆声、提亮辅音、把忽大忽小压平。
-              <b>只在导出时生效</b>。建议先降噪再加增强。
+              削掉低频隆隆声、提亮辅音、把忽大忽小压平。<b>预览里实时生效</b>
+              （预览侧用等价的滤波 + 压缩器，参数与导出同一份）。建议先降噪再加增强。
             </p>
           </Section>
         ) : null}
@@ -1791,17 +1791,17 @@ function ClipInspector({
               })}
             </div>
             <p className="wb-insphint">
-              变调会把时长拉回原样，片段不会缩水。
-              <b>只在导出时生效</b> —— 预览听的是原声。
+              「电话 / 电台 / 机器人」<b>预览里实时生效</b>（同一套滤波、位深压缩、颤动）。
+              「花栗鼠 / 低沉」要改音高却保持时长，预览做不到，<b>只在导出时生效</b>。
             </p>
           </Section>
         ) : null}
 
-        {/* ---------------- 立体声平衡（导出阶段） ----------------
-            ⚠️ 预览里做不了：`<audio>` 只有一个 volume，没法按声道分增益。
-               真要做只能把每个媒体元素接进 WebAudio（MediaElementSource 每个元素
-               只能建一次，建失败就是整条预览静音）—— 代价远大于收益，所以
-               和降噪/防抖同一档：面板上明写「导出时应用」。 */}
+        {/* ---------------- 立体声平衡 ----------------
+            预览与导出同源：导出写 `pan=c0=l*c0|c1=r*c1`，预览把元素接进 WebAudio
+            后走「左右各乘一个增益 → 合并」，系数都来自 shared/audio.js 的 panGains()。
+            ⚠️ 不用 StereoPanner —— 那是声像（把立体声折成单声道再摆位），
+               而这里要的是平衡（左右各自缩放），两者听感差别就是"声场变窄"。 */}
         {active === 'audio' && !containerClip ? (
           <Section
             title="立体声平衡"
@@ -1823,7 +1823,8 @@ function ClipInspector({
               }}
             />
             <p className="wb-insphint">
-              把这一轨整体往左/右偏。<b>只在导出时生效</b> —— 预览没法按声道分。
+              把这一轨整体往左/右偏，声道不混单。<b>预览里实时生效</b>，
+              拖到最左时右声道会明显变小 —— 不用导出就能听出来。
             </p>
           </Section>
         ) : null}

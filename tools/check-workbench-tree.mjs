@@ -137,7 +137,7 @@ const propFlag = (text, name) => new RegExp(`(?:^|[\\s,{])${name}\\s*:\\s*true\\
  * 2026-11-09 用户报的「文字 → 自定义」「字幕 → 手写字幕」点击无效，就是这种：
  * 两者与「创建文字」「新建字幕」共用 `panel: 'text'`，且没有任何区分字段。
  */
-const VARIANT_KEYS = ['textStyle', 'sticker', 'material', 'pluginTab', 'capability', 'template', 'enhance', 'refArt', 'packMode', 'group', 'kinds']
+const VARIANT_KEYS = ['textStyle', 'sticker', 'material', 'pluginTab', 'capability', 'template', 'enhance', 'refArt', 'packMode', 'group', 'kinds', 'music']
 function variantOf(text) {
   return VARIANT_KEYS.map((key) => {
     const m = new RegExp(`(?:^|[\\s,{])${key}\\s*:\\s*([^,}\\n]+)`).exec(text)

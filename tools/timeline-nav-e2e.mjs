@@ -31,7 +31,7 @@ const EXE = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
 /** profile 按 pid 唯一：固定目录名在前一轮异常退出时删不掉，会带着上一轮状态启动 */
 const PROFILE = path.join(os.tmpdir(), 'yjai-e2e', `.timeline-nav-profile-${process.pid}`)
 
-const TOTAL_ASSERTIONS = 24
+const TOTAL_ASSERTIONS = 29
 let emitted = 0
 let pass = 0
 let fail = 0
@@ -475,6 +475,109 @@ async function main() {
       '24. 拖动播放头不会挪动片段（负对照：没被误接成拖片段）',
       clipsAfter.length === clipsBefore.length && clipsAfter.every((value, index) => value === clipsBefore[index]),
       `${clipsBefore.join(',')} → ${clipsAfter.join(',')}`
+    )
+
+    /* -------------------- G. 轨道空白 = 选择 / 框选（不是拖动播放头） --------------------
+     * Jason 报的是「鼠标不移动到播放条上不应该是拖动效果，应该是选择或者框选」。
+     * 改动前轨道空白处也走 startScrub ⇒ 整片轨道都是拖动语义，而且 `is-scrubbing`
+     * 那条 `cursor: ew-resize !important` 会把一切光标都盖掉。这类失效**不报错**：
+     * 播放头照动、片段照选，只是"我明明想框选，结果把播放头拖走了"。
+     * 判据读消费端：`data-scrubbing`（状态的对外投影）、computed cursor（用户看到的箭头）、
+     * `[data-marquee]`（真的画出来的那块矩形）、`.clip.multi`（松手后真的多选了）。
+     */
+    const emptyLane = await page.evaluate(() => {
+      const lane = document.querySelector('.wb-tllane[data-lane="overlay"]')
+      const first = document.querySelector('.clip[data-clip]')
+      if (!lane) return null
+      const r = lane.getBoundingClientRect()
+      return {
+        x: r.x,
+        y: r.y,
+        w: r.width,
+        h: r.height,
+        cursor: getComputedStyle(lane).cursor,
+        /* 空轨上该有 0 条片段 —— 夹具只放了 video 轨的三段 */
+        clips: lane.querySelectorAll('.clip[data-clip]').length,
+        /* 第一条片段此刻在**视口**里的横/纵位：框选矩形必须落在它身上才有命中，
+           而视图可能被前面的用例滚过（横向滚动是致命的），
+           轨道顺序也不该假设（纵向直接取片段自己的 y，别去推"哪条在上边"） */
+        clipX: first ? first.getBoundingClientRect().x : null,
+        clipY: first ? first.getBoundingClientRect().y + first.getBoundingClientRect().height / 2 : null
+      }
+    })
+    check(
+      '25. 空轨道（叠加轨）确实没有片段，可以当"空白区"用',
+      Boolean(emptyLane) && emptyLane.clips === 0 && Number.isFinite(emptyLane.clipX),
+      emptyLane ? `${Math.round(emptyLane.w)}×${Math.round(emptyLane.h)} 条=${emptyLane.clips} 首段@${Math.round(emptyLane.clipX)}` : 'null'
+    )
+
+    /* 空白处按下：光标不能变成左右箭头（那是拖动播放头的语义）。
+       x 取"第一条片段右侧一段"，保证框选矩形横跨它（见上面的 clipX 说明）。 */
+    const blankX = emptyLane ? emptyLane.clipX + 200 : 0
+    const blankY = emptyLane ? emptyLane.y + emptyLane.h / 2 : 0
+    await page.mouse.move(blankX, blankY)
+    await page.mouse.down()
+    await sleep(120)
+    const blankState = await page.evaluate(() => ({
+      scrubbing: document.querySelector('.wb-timeline')?.getAttribute('data-scrubbing'),
+      cursor: getComputedStyle(document.querySelector('.wb-tllane[data-lane="overlay"]')).cursor
+    }))
+    check(
+      '26. 在轨道空白处按下 ⇒ 不是"拖动播放头"语义（data-scrubbing=0 且光标不是 ew-resize）',
+      blankState.scrubbing === '0' && blankState.cursor !== 'ew-resize',
+      `data-scrubbing=${blankState.scrubbing} cursor=${blankState.cursor}`
+    )
+
+    /* 往片段所在的那一行拖 ⇒ 框选矩形出现（矩形要真的画出来，不是只记状态）。
+       ⚠️ 纵向要**够到片段的像素**：轨道行高 52，而片段本身没占满整行（上下有留白），
+       只按"行高的一半"去估会落在留白里 ⇒ 矩形画出来了、hits 却是 0。
+       所以终点直接用片段的 y —— 不猜行序、也不猜留白。 */
+    await page.mouse.move(blankX - 140, emptyLane.clipY, { steps: 10 })
+    await sleep(150)
+    const marqueeBox = await page.evaluate(() => {
+      const el = document.querySelector('[data-marquee]')
+      const clip = document.querySelector('.clip[data-clip]')
+      const cr = clip ? clip.getBoundingClientRect() : null
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return {
+        w: r.width,
+        h: r.height,
+        hits: Number(el.getAttribute('data-marquee-hits')),
+        rect: [Math.round(r.left), Math.round(r.top), Math.round(r.bottom)],
+        clipRect: cr ? [Math.round(cr.left), Math.round(cr.top), Math.round(cr.bottom)] : null
+      }
+    })
+    check(
+      '27. 拖出一块矩形 ⇒ 选框真的画出来了，且框住的片段数 > 0',
+      Boolean(marqueeBox) && marqueeBox.w > 40 && marqueeBox.h > 4 && marqueeBox.hits > 0,
+      marqueeBox
+        ? `${Math.round(marqueeBox.w)}×${Math.round(marqueeBox.h)} hits=${marqueeBox.hits} 矩形x/t/b=${marqueeBox.rect.join('/')} 首段y=${marqueeBox.clipRect?.slice(1).join('/')}`
+        : 'null'
+    )
+
+    await page.mouse.up()
+    await sleep(250)
+    /* 数 `.selected` 与 `.multi` 的**并集**：主选中带 `.selected`，其余多选的才带 `.multi`
+       （两套描边不同色，叠在一起会打架）。只数 `.multi` 的话，框住一段时永远是 0 ——
+       那会把"真的选中了"误判成红。 */
+    const selectedCount = await page.locator('.clip.selected, .clip.multi').count()
+    check(
+      '28. 松手后框住的片段真的进入选中（选框画了却没落到选中上 = 纯装饰）',
+      selectedCount >= 1,
+      `${selectedCount} 段选中`
+    )
+    /* 负对照：标尺上按下仍然要进入拖动语义 —— 别为了"空白不拖动"把播放头拖动也废了 */
+    await page.mouse.move(geom.left + 150, rulerY)
+    await page.mouse.down()
+    await sleep(120)
+    const rulerScrub = await page.evaluate(() => document.querySelector('.wb-timeline')?.getAttribute('data-scrubbing'))
+    await page.mouse.up()
+    await sleep(100)
+    check(
+      '29. 负对照：在标尺上按下仍然进入拖动播放头（data-scrubbing=1）',
+      rulerScrub === '1',
+      `data-scrubbing=${rulerScrub}`
     )
   } catch (error) {
     console.error(`\n[!] E2E 中断：${String(error?.stack || error)}`)

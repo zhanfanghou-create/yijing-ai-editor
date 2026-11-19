@@ -14,11 +14,67 @@ const win = require('./win-integration')
 
 const isDev = process.env.NODE_ENV === 'development'
 
-/** 智能体无人值守安装：带 --silent 就完全不开窗口，装完写结果文件并退出 */
-const silentOpts = silent.parseSilentArgs(process.argv.slice(1))
+/** 智能体无人值守安装：带 --silent 就完全不开窗口，装完写结果文件并退出。
+ *  也认 `YJAI_SETUP_*` 环境变量 —— 两条通道同时给（`ExecWait` 必然继承环境），
+ *  命令行优先。排查历史见 silent.js 里 applyEnv 的注释。 */
+const silentOpts = silent.parseSilentArgs(process.argv.slice(1), process.env)
 
 let mainWindow = null
 let installing = false
+
+/**
+ * 静默安装的**早期现场**（只在 `--silent` 下写）。
+ *
+ * 为什么需要：静默模式不开窗口，一旦在 `runSilentInstall` 走完之前就退出，
+ * 调用方只看得到"结果文件没出现"这一个二值。2026-11-15 实测过一次真实翻车：
+ * 客户端自动更新要拉起 `--silent`，而当时**带任何参数启动都以退出码 9 结束、连结果
+ * 文件都不留**，完全查不出卡在哪一步。真因是宿主注入了 `ELECTRON_RUN_AS_NODE=1`
+ * （安装器退化成纯 Node，主进程一行都跑不到）—— 但这套 trace 正是查出它的工具，
+ * 以后遇到同类"点了没反应"也先看它。
+ *
+ * ⚠️ **非终态阶段绝不能写进结果文件**（2026-11-15 踩过，代价是整条 agent 安装链路红）。
+ * 第一版把 `boot` / `started` 也覆盖写进 `--result` 指定的那个文件，注释还写着
+ * "最后的结果会把它盖掉"—— 那句话只对**装完才读一次**的调用方成立。
+ * 而 `yijing_install`（以及任何轮询式调用方）是"文件一出现就读"：
+ * 它读到 `{phase:'started'}` 里面没有 ok / code / reason，于是判
+ * `安装失败（code=undefined）：未知原因` —— 而安装器其实 3.9 秒就装成功了。
+ * 现在只有两种情况写结果文件：`crash`（终态，能把"等到 300s 超时"变成一句可读
+ * 的失败原因）与正常收尾（`writeResult` 由 runSilentInstall 自己写）。
+ * 早期现场一律只进下面那份 append 日志。
+ */
+function silentTrace(phase, extra) {
+  if (!silentOpts.silent) return
+  if (phase === 'crash') {
+    try {
+      silent.writeResult(silentOpts.resultFile, {
+        ok: false,
+        code: 3,
+        silent: true,
+        reason: `安装器异常：${(extra && extra.reason) || '未知错误'}`,
+        resultFile: silentOpts.resultFile
+      })
+    } catch {
+      /* 写不进去还有下面的 append 日志 */
+    }
+  }
+  /* 追加到一个固定路径：覆盖写的结果文件在进程被杀时只剩半截现场，
+     这份 append 日志能回答"到底走到第几步"（拿到用户机器上排障时最省事） */
+  try {
+    const setupEnv = Object.keys(process.env)
+      .filter((k) => k.startsWith('YJAI_SETUP_'))
+      .map((k) => `${k}=${process.env[k]}`)
+      .join(' ')
+    const line = `${new Date().toISOString()}\t${phase}\t pid=${process.pid}\t argv=${JSON.stringify(process.argv.slice(1))}\t ${setupEnv}\n`
+    fs.appendFileSync(path.join(os.tmpdir(), 'yjai-installer-trace.log'), line, 'utf8')
+  } catch {
+    /* 写不进去绝不能把安装带崩 */
+  }
+}
+
+/* 顶层就落一份：这一行能证明"参数确实到了安装器进程"。
+   反过来说——**这个文件不出现**，就说明连主进程都没跑起来（参数没到 / 进程被
+   降级成纯 Node / 启动即崩），排查方向与"安装失败"完全不同。 */
+silentTrace('boot')
 
 // ---------------------------------------------------------------- 路径
 
@@ -308,6 +364,7 @@ async function runSilentInstall() {
   const started = Date.now()
   const logs = []
   const version = app.getVersion()
+  silentTrace('started')
   let target = silentOpts.targetPath
   try {
     if (!target) target = (await findExistingInstallDir()) || defaultInstallDir()
@@ -349,9 +406,15 @@ async function runSilentInstall() {
 // ---------------------------------------------------------------- 生命周期
 
 process.on('uncaughtException', (err) => {
+  /* 静默模式下这是唯一的现场：不写下来，调用方只能看到"没装成" */
+  silentTrace('crash', {
+    reason: (err && err.message) || String(err),
+    stack: String((err && err.stack) || '').slice(0, 1500)
+  })
   send('installer:log', { level: 'error', text: `安装器异常：${(err && err.message) || String(err)}` })
 })
 process.on('unhandledRejection', (reason) => {
+  silentTrace('crash', { reason: String(reason) })
   send('installer:log', { level: 'error', text: `安装器未处理异常：${String(reason)}` })
 })
 

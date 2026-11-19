@@ -33,17 +33,53 @@ function argValue(argv, i, name) {
   return null
 }
 
+/** 环境变量的真值判定：`1` / `true` / `yes` 算真，其余（含空）算假 */
+function envOn(value) {
+  const s = String(value == null ? '' : value).trim().toLowerCase()
+  return s === '1' || s === 'true' || s === 'yes'
+}
+
+/**
+ * 从环境变量铺底（`YJAI_SETUP_*`）。
+ *
+ * 为什么两条通道同时给（2026-11-15 实测，别删）：命令行透传要看启动器/NSIS 的实现，
+ * 而环境变量由 `ExecWait` **必然继承** —— 任一通道生效就够，代价只有几行。
+ * **命令行优先**（智能体显式给的参数覆盖环境变量），见 `parseSilentArgs` 的合并顺序。
+ *
+ * ⚠️ 排查时踩过一个**假因**，记在这里免得下一个人再信：开发机上「带任何参数启动
+ * 安装器都退出码 9、连 `silentTrace('boot')` 都不落盘」，当时归因成"portable 启动器
+ * 不透传参数"。真因是宿主给子进程注入了 `ELECTRON_RUN_AS_NODE=1` —— Electron 应用
+ * 整体退化成纯 Node，`require('electron')` 变字符串，主进程一行都跑不到。
+ * 用**干净环境**复测：命令行 11.9s、环境变量 11.7s，**两条都通**
+ * （`_probe/clean-env-probe.mjs`）。所以客户端交接时才必须剔掉那个变量与 `NODE_OPTIONS`。
+ */
+function applyEnv(out, env) {
+  if (envOn(env.YJAI_SETUP_NO_SHORTCUTS)) out.shortcuts = false
+  if (envOn(env.YJAI_SETUP_NO_REGISTER)) out.register = false
+  if (envOn(env.YJAI_SETUP_AUTOSTART)) out.autoStart = true
+  if (envOn(env.YJAI_SETUP_LAUNCH)) out.launch = true
+  if (env.YJAI_SETUP_INSTALL_DIR) {
+    const dir = String(env.YJAI_SETUP_INSTALL_DIR).trim()
+    if (dir) out.targetPath = dir
+  }
+  if (env.YJAI_SETUP_RESULT) {
+    const file = String(env.YJAI_SETUP_RESULT).trim()
+    if (file) out.resultFile = path.resolve(file)
+  }
+}
+
 /**
  * 解析命令行。**只有带了 --silent / -s / /S 才算静默**，
  * 其余参数（例如 Windows 资源管理器双击时可能带进来的文件路径）一律忽略，
  * 不会把正常图形安装带偏。
  *
  * @param {string[]} argv 一般传 process.argv.slice(1)
- * @param {{tmpdir?:string}} [env]
+ * @param {{tmpdir?:string}} [env] 也接受 process.env（读 `YJAI_SETUP_*`）
  */
 function parseSilentArgs(argv = [], env = {}) {
   const list = Array.isArray(argv) ? argv.map(String) : []
-  const silent = list.some((a) => a === '--silent' || a === '-s' || a === '/S' || a === '/s')
+  const silent =
+    list.some((a) => a === '--silent' || a === '-s' || a === '/S' || a === '/s') || envOn(env.YJAI_SETUP_SILENT)
   const out = {
     silent,
     targetPath: '',
@@ -51,10 +87,12 @@ function parseSilentArgs(argv = [], env = {}) {
     register: true,
     autoStart: false,
     launch: false,
-    resultFile: defaultResultFile(env.tmpdir),
+    /* `tmpdir` 是自检注入的名字；真实调用传的是 process.env（TEMP / TMP） */
+    resultFile: defaultResultFile(env.tmpdir || env.TEMP || env.TMP),
     unknown: []
   }
   if (!silent) return out
+  applyEnv(out, env)
 
   for (let i = 0; i < list.length; i++) {
     const a = list[i]

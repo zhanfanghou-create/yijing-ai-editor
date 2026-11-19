@@ -396,6 +396,67 @@
   white-space: nowrap;
 }
 
+/* 更新弹窗：版本对比 + 说明滚动区。
+   说明正文可能很长（Release 里写了十几条），所以给固定上限 + 自己的滚动条，
+   否则整个 Modal 会被撑出屏幕，底部的按钮点不到。 */
+.update-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--wb-text);
+}
+
+.update-versions {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.update-from {
+  font-size: 12px;
+  color: var(--wb-muted);
+}
+
+/* 版本之间的箭头用伪元素画：放进 DOM 就得给它一个类名，
+   而导入闸门会把类名里的孤立小写词当成未声明标识符（2026-11-15 实测）。 */
+.update-to::before {
+  content: '→';
+  margin-right: 8px;
+  color: var(--wb-muted);
+  font-weight: 400;
+}
+
+.update-to {
+  /* 字号规范里没有 15，用 14 */
+  font-size: 14px;
+  color: var(--violet);
+}
+
+.update-meta {
+  font-size: 11px;
+  color: var(--wb-muted);
+}
+
+.update-notes {
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.update-notes p {
+  margin: 0 0 6px;
+  line-height: 1.7;
+  font-size: 12px;
+  color: var(--wb-text);
+}
+
+.update-notes p:last-child {
+  margin-bottom: 0;
+}
+
 .wb-menu-title {
   /* ⚠️ 项目名是**窗口居中**，不是「品牌区与右簇之间的居中」。
      实测参考的项目名墨迹是 x917..999（中心 958 ≈ 窗口中心 960）；
@@ -1509,6 +1570,15 @@
   color: var(--wb-text);
 }
 
+/* 键盘焦点：select 自身的 outline:0（原生下拉的必备重置）特异性压过了全局
+   :where(select):focus-visible，Tab 到这里完全没有焦点提示。
+   在 label 上补 :focus-within + 现成 --state-ring，键盘用户才看得到焦点在哪。 */
+.wb-mb-select:focus-within {
+  background: var(--state-hover);
+  color: var(--wb-text);
+  box-shadow: var(--state-ring);
+}
+
 .wb-mb-select select {
   appearance: none;
   border: 0;
@@ -1764,6 +1834,13 @@
 
 .wb-import:hover {
   filter: brightness(1.08);
+}
+
+/* 空素材态最显眼的主操作：文件对话框弹出前给一档按压反馈，
+   纯 brightness + transform，不动紫→品红渐变本身（参考实测色）。 */
+.wb-import:active {
+  filter: brightness(0.95);
+  transform: translateY(1px);
 }
 
 .wb-import svg {
@@ -2105,6 +2182,19 @@
   color: var(--wb-accent);
 }
 
+/* 传输键（播放/逐帧/全屏）：剪辑中点得最密集的控件，按下给即时反馈。
+   用现成 --state-active；transform 只压 1px，不改 26px 方槽的尺寸。 */
+.wb-transport-btns button:active,
+.wb-transport-right > button:active {
+  background: var(--state-active);
+  transform: translateY(1px);
+}
+
+/* 播放键是参考里的纯字形键（无底框），只给位移不给底色，保持对齐。 */
+.wb-transport-btns button.play:active {
+  background: transparent;
+}
+
 /* ------------------------------ 信息面板 ------------------------------ */
 
 .wb-info {
@@ -2149,7 +2239,9 @@
 .wb-field > span {
   display: block;
   margin-bottom: 6px;
-  color: var(--wb-faint);
+  /* 属性名是调参时的定位依据，和属性值(white)亮度差 4 倍会被误读成禁用态。
+     faint 在面板底 #262626 上 3.83:1 → muted 9.42:1，字号仍 12 保持与值 13 的层级差。 */
+  color: var(--wb-muted);
   font-size: 12px;
 }
 
@@ -2448,7 +2540,10 @@
 
 .wb-insphint {
   margin: 0;
-  color: var(--wb-faint);
+  /* 这些是解释「为什么某操作不生效」的功能性文案（如"图片片段没有源素材时间，
+     不支持变速"），读不到会让用户反复试错。faint 3.83:1 → muted 9.42:1。
+     错误态由调用方内联 --warn 覆盖，不受此处影响。 */
+  color: var(--wb-muted);
   font-size: 11px;
   line-height: 1.55;
 }
@@ -2943,6 +3038,23 @@
   background: var(--wb-accent);
 }
 
+/* 开关是高频启用位：原先 hover/active 都没有反馈，18px 高还容易点空。
+   hover 提亮边框（rgba 白，不引入新色值）；::before 把热区上下各扩 4px 到 26px，
+   视觉尺寸仍是参考的 34×18，不改变布局。 */
+.wb-switch:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.wb-switch::before {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
+}
+
+.wb-switch:active {
+  filter: brightness(0.88);
+}
+
 /* 取色行（键色 / 描边色 / 阴影色）：与字幕那行同一形制 */
 .wb-colorfield {
   display: flex;
@@ -3050,6 +3162,14 @@
 .wb-tlbar button:hover:not(:disabled) {
   background: var(--state-hover);
   color: #fff;
+}
+
+/* 按压反馈：撤销/重做/分割这些键一天点几百次，按下必须即时"沉下去"，
+   快速连点时才分得清命中。复用现成 --state-active，不引入新色值；
+   translateY(1px) 只作用 Transform，不动布局。禁用态不参与。 */
+.wb-tlbar button:active:not(:disabled) {
+  background: var(--state-active);
+  transform: translateY(1px);
 }
 
 /* 禁用态必须**看得出来**。
@@ -3922,7 +4042,10 @@ kbd {
 }
 
 .wb-caps-meta {
-  color: var(--wb-faint);
+  /* 字幕的时间/时长/样式是每条卡的关键元数据，落在卡片底 #3b3b3b 上；
+     原本用 faint(#808080) 只有 2.84:1，连 WCAG 大字的 3:1 都不到。
+     改消费 muted(#cccccc) → 6.98:1，字号不变。令牌数值本身不动（参考对齐）。 */
+  color: var(--wb-muted);
   font-size: var(--fs-11);
   font-variant-numeric: tabular-nums;
 }
@@ -4248,6 +4371,125 @@ kbd {
  * 卡里那行字由 textStyleCss(key, CARD_BASE_WIDTH, {textAnchor...}) 现算，
  * 单位是 cqw，所以卡片改成 160×90 也不会错位（`.style-art` 自带 container-type: size）。
  */
+/* ------------------------- 预置曲库（音频 → 音乐 / 音效） -------------------------
+ *
+ * 行式卡片而不是网格：曲目之间要"横向读时长、纵向扫名字"，一行 44px 能放下
+ * 名字 + 时长 + 原名 + 两个动作；做成方格反而每格只能放名字，挑曲时看不到时长。
+ * 颜色一律走量表（`--wb-accent` 表示"已在本机 / 正在播"），不新造色值 ——
+ * 一旦这里出现了自己的绿，"已缓存"就会和别处的语义色打架。
+ */
+.wb-music-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-2);
+  margin-bottom: var(--gap-2);
+}
+
+.wb-music-title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--wb-text);
+}
+
+.wb-music-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-1);
+}
+
+.wb-music-card {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-2);
+  min-height: 44px;
+  padding: 0 var(--gap-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  background: var(--wb-card);
+}
+
+.wb-music-card:hover {
+  background: var(--state-hover);
+}
+
+.wb-music-card.playing {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent-glow);
+}
+
+.wb-music-play {
+  flex: 0 0 auto;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--wb-deep2);
+  color: var(--wb-text);
+  cursor: pointer;
+}
+
+.wb-music-card.playing .wb-music-play {
+  background: var(--wb-accent);
+}
+
+.wb-music-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wb-music-meta strong {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--wb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-music-meta small {
+  font-size: var(--fs-10);
+  color: var(--wb-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-music-bar {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--wb-deep);
+  overflow: hidden;
+}
+
+.wb-music-bar i {
+  display: block;
+  height: 100%;
+  background: var(--wb-accent);
+  transition: width 0.2s linear;
+}
+
+.wb-music-cached {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--wb-accent);
+}
+
+.wb-music-cloud {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--wb-faint);
+}
+
 .wb-sp-tabs {
   display: flex;
   flex-wrap: wrap;

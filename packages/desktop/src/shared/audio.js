@@ -110,6 +110,35 @@ function volumeExpr(points) {
 }
 
 /**
+ * 片段级淡入 / 淡出的**增益倍率**（0–1）。
+ *
+ * 这是"预览与导出同源"的第二种东西（第一种是上面的音量包络）：
+ *   · 导出侧 `render.js` 的 `fadePartFor()` 把它写成 `afade=t=in:st=0:d=<fin>`
+ *     与 `afade=t=out:st=<dur-fout>:d=<fout>`；
+ *   · 预览侧 `composite.js` 直接把它乘进 `gain`，每帧落成 `<video>.volume`。
+ * `afade` 的默认曲线 `tri` 就是**线性**，所以这里的斜坡必须是直的，不能做成
+ * 余弦 / 指数 —— 那样两边听感会不一样（而两者的差别只有耳朵能分辨，闸门比不出来）。
+ *
+ * ⚠️ 以前这个字段**只有导出认**：面板上拖「淡入时长」、时间线上脏点亮、成片里真有淡入，
+ *    预览却一点变化都没有，而且界面上没写「仅导出」——属于最坏的一类静默失效。
+ *
+ * @param {object} clip  片段（读 `fadeIn` / `fadeOut`，单位秒）
+ * @param {number} local 片段内秒数（= 播放头 − clip.start）
+ * @param {number} dur   片段时长（秒）—— 淡出的起点是 `dur - fadeOut`
+ * @returns {number} 0–1 的倍率（无淡入淡出时恒为 1）
+ */
+function fadeGainAt(clip, local, dur) {
+  const total = Math.max(0, num(dur, 0))
+  const fin = clamp(num(clip?.fadeIn, 0), 0, total)
+  const fout = clamp(num(clip?.fadeOut, 0), 0, total)
+  const t = Math.max(0, num(local, 0))
+  let gain = 1
+  if (fin > 0.01) gain = Math.min(gain, clamp(t / fin, 0, 1))
+  if (fout > 0.01) gain = Math.min(gain, clamp((total - t) / fout, 0, 1))
+  return round4(gain)
+}
+
+/**
  * 响度统一（导出阶段）。
  *
  * 数值是行业里那几套常用目标：
@@ -186,18 +215,22 @@ function stabilizeFilter(level, round = round4) {
  * 增益用**线性**（不是等功率）：中心必须恰好是 1/1，否则"没动过"的片段
  * 也会被削 3 dB —— 那是经典误用，症状是"加了功能以后所有片子都变小声"。
  *
- * ⚠️ 预览里不做：`<audio>`/`<video>` 的 `volume` 是单值，没法按声道分增益；
- *    要真做只能把每个媒体元素接进 WebAudio 图（MediaElementSource 只能建一次，
- *    建失败就是整条预览静音）。所以它和降噪/防抖同一档：面板标「导出时应用」。
+ * ⚠️ 预览侧从 **`panGains()`** 取同一对数（见 `shared/audioGraph.js`）：
+ *    预览走 WebAudio 的「左右各乘一个增益」，导出走 `pan=c0=left*c0|c1=right*c1`，
+ *    两边的系数**来自同一个函数**，不是各写一遍。
  */
-function panFilter(pan, round = round4) {
+function panGains(pan) {
   const value = Number(pan)
-  if (!Number.isFinite(value)) return ''
+  if (!Number.isFinite(value)) return null
   const p = clamp(value, -100, 100) / 100
-  if (Math.abs(p) < 0.005) return ''
-  const left = round(Math.min(1, 1 - p), 3)
-  const right = round(Math.min(1, 1 + p), 3)
-  return `pan=stereo|c0=${left}*c0|c1=${right}*c1`
+  if (Math.abs(p) < 0.005) return null
+  return { left: round4(Math.min(1, 1 - p)), right: round4(Math.min(1, 1 + p)) }
+}
+
+function panFilter(pan, round = round4) {
+  const gains = panGains(pan)
+  if (!gains) return ''
+  return `pan=stereo|c0=${round(gains.left, 3)}*c0|c1=${round(gains.right, 3)}*c1`
 }
 
 /**
@@ -208,20 +241,41 @@ function panFilter(pan, round = round4) {
  *   · `highpass` 去 85Hz 以下的隆隆声（桌面震动、空调低频、手持摩擦）；
  *   · `equalizer` 在 280Hz 压一点（"闷"的来源）、2.8kHz 提一点（辅音的清晰度所在）；
  *   · `acompressor` 把忽大忽小压到同一个水平，`makeup` 补回被压掉的响度。
- * ⚠️ 预览里不做（`<audio>` 没有等价滤镜），面板上标「导出时应用」。
+ *
+ * ⚠️ 这五段在**预览里也生效**（WebAudio 有等价节点：BiquadFilter ×4 + DynamicsCompressor），
+ *    数值从本函数产出的 `voiceEnhanceParams()` 取，两侧同一份（见 shared/audioGraph.js）。
  */
-function voiceEnhanceFilter(level, round = round4) {
+function voiceEnhanceParams(level, round = round4) {
   const strength = clamp(num(level, 0), 0, 100)
-  if (strength < 1) return ''
+  if (strength < 1) return null
   const k = strength / 100
-  const mid = round(1.5 + k * 3.5, 1)
-  const cut = round(-0.5 - k * 2.5, 1)
-  const ratio = round(1.5 + k * 2.5, 1)
+  return {
+    hp: 85,
+    lp: 12000,
+    cutFreq: 280,
+    /* 带宽单位是**倍频程**（ffmpeg 的 width_type=o）。WebAudio 的 peaking 没有倍频程，
+       预览侧按 `Q = √(2^N) / (2^N − 1)` 换算（见 shared/audioGraph.js 的 octaveToQ）。 */
+    cutWidth: 1.6,
+    cutGain: round(-0.5 - k * 2.5, 1),
+    midFreq: 2800,
+    midWidth: 1.2,
+    midGain: round(1.5 + k * 3.5, 1),
+    threshold: round(-12 - k * 10, 0),
+    ratio: round(1.5 + k * 2.5, 1),
+    attack: 0.006,
+    release: 0.16,
+    makeup: 2
+  }
+}
+
+function voiceEnhanceFilter(level, round = round4) {
+  const p = voiceEnhanceParams(level, round)
+  if (!p) return ''
   return (
-    'highpass=f=85,lowpass=f=12000,' +
-    `equalizer=f=280:width_type=o:width=1.6:g=${cut},` +
-    `equalizer=f=2800:width_type=o:width=1.2:g=${mid},` +
-    `acompressor=threshold=${round(-12 - k * 10, 0)}dB:ratio=${ratio}:attack=6:release=160:makeup=2`
+    `highpass=f=${p.hp},lowpass=f=${p.lp},` +
+    `equalizer=f=${p.cutFreq}:width_type=o:width=${p.cutWidth}:g=${p.cutGain},` +
+    `equalizer=f=${p.midFreq}:width_type=o:width=${p.midWidth}:g=${p.midGain},` +
+    `acompressor=threshold=${p.threshold}dB:ratio=${p.ratio}:attack=${Math.round(p.attack * 1000)}:release=${Math.round(p.release * 1000)}:makeup=${p.makeup}`
   )
 }
 
@@ -250,29 +304,60 @@ const VOICE_CHANGES = [
   { key: 'radio', label: '电台' }
 ]
 
-function voiceChangeFilter(key) {
+/**
+ * 变声预设的**数值参数**（预览与导出同源）。
+ *
+ * 返回的是"要做什么"，不是"ffmpeg 怎么写"：滤波频点、位深、颤动、压缩器参数。
+ *   · 导出：`voiceChangeFilter()` 把它们拼成 ffmpeg 串；
+ *   · 预览：`shared/audioGraph.js` 把它们编成 WebAudio 节点（BiquadFilter / WaveShaper /
+ *     LFO 调幅 / DynamicsCompressor）。
+ *
+ * ⚠️ `pitch` 这一类（花栗鼠 / 低沉）预览做不了：改音高同时保持时长需要时间伸缩，
+ *    `<video>`/`<audio>` 上没有任何等价开关（`playbackRate` 会连速度一起改）。
+ *    它们带 `exportOnly: true` —— 面板上照实说明，不假装预览里已经变了。
+ */
+function voiceChangeParams(key) {
   switch (String(key || 'none')) {
     case 'chipmunk':
-      /* 采样率 ×1.32 ⇒ 音高升高约 5 个半音；atempo 1/1.32 把时长拉回原样。
-         ⚠️ 开头那句 `aformat` 不是装饰：`asetrate` 的数值是**绝对采样率**，
-            上游如果不是 48kHz（44.1kHz 的素材很常见），倍率就不是 1.32，
-            症状是"变调了、时长也短了一截"，而轨道和面板一切正常。
-            自己声明一次，链内就不依赖调用方的顺序。 */
-      return 'aformat=sample_rates=48000,asetrate=63360,aresample=48000,atempo=0.7576'
+      /* 采样率 ×1.32 ⇒ 音高升约 5 个半音 */
+      return { exportOnly: true, pitch: 1.32 }
     case 'deep':
-      /* ×0.78 ⇒ 降低约 4.5 个半音，同样拉回时长 */
-      return 'aformat=sample_rates=48000,asetrate=37440,aresample=48000,atempo=1.2821'
+      /* ×0.78 ⇒ 降约 4.5 个半音 */
+      return { exportOnly: true, pitch: 0.78 }
     case 'phone':
       /* 300–3400Hz 是电话频段；再叠一点位深压缩做出"压缩感" */
-      return 'highpass=f=300,lowpass=f=3400,acrusher=bits=10:mode=log:mix=0.25'
+      return { hp: 300, lp: 3400, crush: { bits: 10, mix: 0.25 } }
     case 'robot':
       /* 位深压缩 + 快速颤动 = 机械感。颤动频率取 32Hz（人声基频之上，听着像"金属"） */
-      return 'acrusher=bits=6:mode=log:mix=0.4,tremolo=f=32:d=0.75'
+      return { crush: { bits: 6, mix: 0.4 }, tremolo: { f: 32, d: 0.75 } }
     case 'radio':
-      return 'highpass=f=180,lowpass=f=6200,acompressor=threshold=-16dB:ratio=5:attack=4:release=120'
+      return { hp: 180, lp: 6200, comp: { threshold: -16, ratio: 5, attack: 0.004, release: 0.12 } }
     default:
-      return ''
+      return null
   }
+}
+
+function voiceChangeFilter(key) {
+  const p = voiceChangeParams(key)
+  if (!p) return ''
+  /* 改采样的两个：`asetrate` 吃的是**绝对采样率**，所以必须先 aformat 到 48kHz，
+     再用 atempo 的倒数把时长拉回来（单级 atempo 只吃 0.5–2.0，这两档都在范围内）。 */
+  if (p.exportOnly) {
+    const rate = Math.round(48000 * p.pitch)
+    const tempo = Number((1 / p.pitch).toFixed(4))
+    return `aformat=sample_rates=48000,asetrate=${rate},aresample=48000,atempo=${tempo}`
+  }
+  const parts = []
+  if (p.hp) parts.push(`highpass=f=${p.hp}`)
+  if (p.lp) parts.push(`lowpass=f=${p.lp}`)
+  if (p.crush) parts.push(`acrusher=bits=${p.crush.bits}:mode=log:mix=${p.crush.mix}`)
+  if (p.tremolo) parts.push(`tremolo=f=${p.tremolo.f}:d=${p.tremolo.d}`)
+  if (p.comp) {
+    parts.push(
+      `acompressor=threshold=${p.comp.threshold}dB:ratio=${p.comp.ratio}:attack=${Math.round(p.comp.attack * 1000)}:release=${Math.round(p.comp.release * 1000)}`
+    )
+  }
+  return parts.join(',')
 }
 
 module.exports = {
@@ -283,11 +368,15 @@ module.exports = {
   hasVolumeKf,
   volumeAt,
   volumeExpr,
+  fadeGainAt,
   loudnormFor,
   audioDenoiseFilter,
   videoDenoiseFilter,
   stabilizeFilter,
+  panGains,
   panFilter,
+  voiceEnhanceParams,
   voiceEnhanceFilter,
+  voiceChangeParams,
   voiceChangeFilter
 }

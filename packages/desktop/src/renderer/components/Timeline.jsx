@@ -32,7 +32,7 @@ import {
 import { timecode, timecodeFrames } from '../ui.jsx'
 import { AUDIO_CAPABLE } from '../composite.js'
 import { clipSpeed, readCurve, trimPatch } from '../trim.js'
-import { pipAnchor } from '../pip.js'
+import { pipAnchor, PIP_DEFAULT_ANCHOR } from '../pip.js'
 import { effectiveTransitions, filterDef, isNoopFilter } from '../looks.js'
 /* 画面特效的名称：片段上要挂「特效」角标，否则改完特效回到时间线看不出变没变
    （预览里还得正好停在这一段上才看得见）。标签与真源同在 shared/frameEffects.json。 */
@@ -98,9 +98,13 @@ export default function Timeline({
      Stage 的播放 rAF 每帧把播放头往前推，用户抓到的是"一条自己往前跑的线" */
   onScrubStart,
   onRemove,
+  /* 框选：框住一片片段后一次性交回 id 数组（空数组 = 取消选中） */
+  onSelectMany,
   onClear,
   onSplit,
   onSplitClipAt,
+  /* 分离音频（右键菜单）：把这一段的声音拆到音频轨上，原片段静音 */
+  onDetachAudio,
   onUndo,
   onRedo,
   onImport,
@@ -474,28 +478,83 @@ export default function Timeline({
   }
 
   /**
-   * 在轨道区（刻度尺 + 各条轨道）按下时定位播放头。
+   * 轨道区空白处按下：**框选**，不再挪播放头。
    *
-   * 为什么绑 **pointerdown 而不是 click** —— 这里踩过一次真实的坑：
-   * 原来绑的是 `onClick`。而 `click` 是**独立的事件类型**，谁都没法用
-   * `pointerdown` 上的 `stopPropagation()` 把它拦住。于是"点片段只选中"这个意图
-   * 完全失效：`.clip` 里那句 `event.stopPropagation()` 白写了，点一下片段
-   * 会顺着冒泡走到这里，把播放头**跳到鼠标点的那一秒**。表现很隐蔽 ——
-   * 选中看着是对的，只有"选中后播放头自己跑了"才会露馅；修剪片段后点一下同样会跳。
+   * 以前这里是 `seekFromEvent` —— 在轨道上随便按一下，播放头就跳到鼠标那一秒，
+   * 而且按住还能拖着走。后果是轨道区**整片都是拖动语义**：想框几段不行、
+   * 想拖片段得小心别点到缝里、光标一按下去就变成左右箭头（`is-scrubbing` 那条
+   * `cursor: ew-resize !important` 会盖住一切都）。
    *
-   * 换成 pointerdown 之后，凡是自己处理了 pointerdown 的子元素（片段、两端修剪手柄）
-   * 天然把事件吃掉，不需要每个子元素都记得拦一次 click —— 这才是防住同类缺陷的关键：
-   * 靠"每个子元素自觉"的设计，迟早会漏掉一个新加的子元素。
+   * 现在按角色分工，与参考客户端一致：
+   *   · **标尺 / 播放头抓手** = 定位与拖动播放头（`rulerPointerDown` → `startScrub`）；
+   *   · **轨道空白** = 选择语义：点一下取消选中，按住拉出选框（框住谁选谁）；
+   *   · **片段本体** = 选中 / 拖动（片段自己 stopPropagation，走不到这里）。
+   * 切割、修剪这些"改变结构"的操作各有自己的工具与手柄，不靠空白拖动表达。
    *
-   * 顺带排除非左键：右键是要弹菜单的，不该顺手把播放头挪走。
+   * 选框画在**视口坐标**（position: fixed）里：`.wb-tltracks` 是横向滚动容器，
+   * 画在它内部就要一路补偿 scrollLeft，拖到边缘自动滚动时框会跟着抖。
    */
-  const seekFromEvent = (event) => {
+  const [marquee, setMarquee] = useState(null)
+  const [marqueeIds, setMarqueeIds] = useState([])
+  const marqueeRef = useRef(null)
+
+  const blankPointerDown = (event) => {
     if (event.button !== undefined && event.button !== 0) return
-    /* 点轨道空白 = 挪播放头 **并且** 取消选中（与预览里点画面外同一口径）。
-       拖动只是"按住不放继续挪"，取消选中只发生这一次 —— 别写进 move 里。
-       片段自己会 stopPropagation，所以"点片段"永远走不到这里 ——
-       不会出现"点一下片段，选中又被取消"的自相矛盾。 */
-    startScrub(event, { deselect: true })
+    const lane = laneRef.current
+    if (!lane) return
+    event.preventDefault()
+    /* 点空白即取消选中（与预览里点画面外同一口径）。
+       框选成功时松手会再设一次，所以这里不用等结果。 */
+    if (onSelect) onSelect(null)
+    const startX = event.clientX
+    const startY = event.clientY
+    const state = { moved: false }
+    marqueeRef.current = state
+
+    const hitIds = (x, y) => {
+      const box = {
+        left: Math.min(startX, x),
+        right: Math.max(startX, x),
+        top: Math.min(startY, y),
+        bottom: Math.max(startY, y)
+      }
+      return [...lane.querySelectorAll('.clip[data-clip]')]
+        .filter((node) => {
+          const r = node.getBoundingClientRect()
+          /* 相交即算选中：要求"完全框住"会让用户为了选一条长片段而横跨整条时间线 */
+          return r.left < box.right && r.right > box.left && r.top < box.bottom && r.bottom > box.top
+        })
+        .map((node) => node.getAttribute('data-clip'))
+    }
+
+    const move = (moveEvent) => {
+      if (Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) > 3) state.moved = true
+      if (!state.moved) return
+      const left = Math.min(startX, moveEvent.clientX)
+      const top = Math.min(startY, moveEvent.clientY)
+      setMarquee({
+        left,
+        top,
+        width: Math.abs(moveEvent.clientX - startX),
+        height: Math.abs(moveEvent.clientY - startY)
+      })
+      setMarqueeIds(hitIds(moveEvent.clientX, moveEvent.clientY))
+    }
+    const up = (upEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      marqueeRef.current = null
+      setMarquee(null)
+      setMarqueeIds([])
+      /* 纯点击（没拖动）：按下时已经取消选中，到此为止 ——
+         不要让"点一下空白"在松手时又变回"选中了上次那几段"。 */
+      if (!state.moved) return
+      if (onSelectMany) onSelectMany(hitIds(upEvent.clientX, upEvent.clientY))
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   /* --------------------------- 片段拖动 --------------------------- */
@@ -709,8 +768,12 @@ export default function Timeline({
    */
   const multiSet = useMemo(() => {
     const ids = Array.isArray(selection?.clipIds) ? selection.clipIds : []
-    return new Set(ids.filter((id) => id && id !== selection?.clipId))
-  }, [selection])
+    const set = new Set(ids.filter((id) => id && id !== selection?.clipId))
+    /* 框选进行中：框住的那几段当场高亮。它们还没写进 selection（松手才写），
+       所以这里必须单独并进来，否则"框了半天看不出框到了谁"。 */
+    if (marqueeIds.length) marqueeIds.forEach((id) => id && set.add(id))
+    return set
+  }, [selection, marqueeIds])
 
   /**
    * 右键菜单「新建复合片段」到底吃哪几段。
@@ -1227,9 +1290,9 @@ export default function Timeline({
         <div
           className="wb-tltracks"
           ref={laneRef}
-          /* pointerdown 而不是 click：见 seekFromEvent 上方的说明 —— click 拦不住，
-             会让"点片段"顺带把播放头挪到鼠标位置 */
-          onPointerDown={seekFromEvent}
+          /* 空白处按下 = 框选（见 blankPointerDown 的说明）。
+             以前绑的是"定位播放头"，导致整片轨道都是拖动语义。 */
+          onPointerDown={blankPointerDown}
           data-tracks="1"
           onDragOver={(event) => {
             if (!onDropAsset) return
@@ -1349,12 +1412,16 @@ export default function Timeline({
                     onPointerCancel={() => endDrag(null, clip)}
                     onDoubleClick={(event) => {
                       event.stopPropagation()
-                      // 锁定轨不让双击删除：删除是结构性编辑
-                      if (trackLocked(clip) || clip.enabled === false) return
-                      onRemove(clip.id)
+                      /* 双击 = 定位到片段起点 + 选中（右栏属性跟着 selection 走）。
+                         以前这里是「直接删除」：用户想打开属性、反复定位、修剪时手抖双击，
+                         片段瞬间消失，只能靠撤销救 —— 与主流剪辑器「双击=在监视器打开」相反。
+                         删除只保留 Delete 键与右键菜单；定位/选中是非破坏性的，
+                         锁定轨与停用片段也允许（只是查看，不改片段）。 */
+                      if (onSeek) onSeek(clip.start)
+                      if (onSelect) onSelect(clip)
                     }}
                     onContextMenu={(event) => openMenu(event, clip)}
-                    title={`${clip.name}｜拖动改起点 · 拖两端修剪 · 单击定位播放头 · 右键更多 · 双击删除`}
+                    title={`${clip.name}｜拖动改起点 · 拖两端修剪 · 单击定位播放头 · 双击定位并打开属性 · 右键更多（删除用 Delete 键）`}
                     data-clip={clip.id}
                     data-disabled={clip.enabled === false ? '1' : '0'}
                     /* 字幕片段的**正文**与**起点**挂在 DOM 上：
@@ -1374,6 +1441,12 @@ export default function Timeline({
                     data-clip-anchor={track.key === 'text' ? String(clip.textAnchor || '') : undefined}
                     data-clip-in={track.key === 'text' ? String(clip.textIn || '') : undefined}
                     data-clip-start={Number(clip.start || 0).toFixed(3)}
+                    /* 片段音量与"这条声音是从哪一段拆出来的"。两个都是片段本身就有的属性
+                       （右栏读它、导出按它混音），挂到 DOM 上闸门才能断言
+                       "分离音频之后原片段真的静音了 / 删掉音频片段后真的还原了" ——
+                       读 state 等于自己证明自己。 */
+                    data-clip-gain={Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100}
+                    data-clip-detached={clip.detachedFrom || undefined}
                     /* 画面层级（自由层级）：叠加轨上才有多层可言，把层号挂出来，
                        闸门才能断言"菜单点了之后层号真的变了"（而不是只看画面） */
                     data-clip-z={track.key === 'overlay' ? String(layersTable.readZ(clip)) : undefined}
@@ -1469,6 +1542,9 @@ export default function Timeline({
                       <span className="clip-name">{clip.name}</span>
                       <span className="clip-hsep" aria-hidden="true" />
                       <span className="clip-dur mono">{timecodeFrames(clip.duration)}</span>
+                      {/* 所有属性角标收进同一 flex 行：多属性片段上它们要横向排开，
+                          不能各自 absolute 到同一角互相盖住（只露最后一个） */}
+                      <span className="clip-badges">
                       {/* 多机位角标：路数必须读得出来（1 路的多机位根本建不出来，见 App） */}
                       {clip.kind === 'multicam' ? (
                         <span
@@ -1514,7 +1590,7 @@ export default function Timeline({
                           少了它，改完锚点回到时间线看不出变没变（只有预览里能看出，
                           而预览还得正好停在这一段上）。 */}
                       {track.key === 'overlay' ? (
-                        <span className="clip-badge" data-clip-pip={clip.pip?.anchor || 'right-bottom'}>
+                        <span className="clip-badge" data-clip-pip={clip.pip?.anchor || PIP_DEFAULT_ANCHOR}>
                           {pipAnchor(clip.pip?.anchor).label} {Math.round(clip.pip?.size ?? 30)}%
                         </span>
                       ) : null}
@@ -1541,6 +1617,7 @@ export default function Timeline({
                           {clipSpeed(clip)}x
                         </span>
                       ) : null}
+                      </span>{/* /.clip-badges */}
                     </span>
                   </button>
                 ))}
@@ -1612,6 +1689,17 @@ export default function Timeline({
         </div>
       </div>
 
+      {/* 框选矩形：fixed 定位（视口坐标），与轨道区的滚动位置无关。
+          pointer-events: none —— 它只是一个视觉反馈，挡住指针会让 move 事件收不到。 */}
+      {marquee ? (
+        <div
+          className="wb-marquee"
+          data-marquee="1"
+          data-marquee-hits={marqueeIds.length}
+          style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }}
+        />
+      ) : null}
+
       {/* 右键菜单挂在时间线根节点上：用 fixed 定位，不受轨道区滚动影响 */}
       {menu ? (
         <div
@@ -1636,6 +1724,22 @@ export default function Timeline({
             {menu.clip.enabled === false ? '启用片段' : '停用片段'}
             <kbd>V</kbd>
           </button>
+          {/* 删除片段前移到这一组：双击片段已改为「定位+打开属性」，删除只能靠 Delete 键
+              或右键。放菜单底部要和十来项抢视线，手抖风险也高 —— 这里紧跟「停用片段」
+              （同为改变片段存在性的操作），危险度靠 danger 红字 + Delete 提示 + 锁定轨禁用兜住。 */}
+          <button
+            type="button"
+            className="danger"
+            data-ctx="delete"
+            disabled={trackLocked(menu.clip)}
+            onClick={() => {
+              onRemove(menu.clip.id)
+              setMenu(null)
+            }}
+          >
+            删除片段
+            <kbd>Delete</kbd>
+          </button>
           <button
             type="button"
             disabled={trackLocked(menu.clip)}
@@ -1648,6 +1752,24 @@ export default function Timeline({
           >
             在播放头处分割
             <kbd>Ctrl+B</kbd>
+          </button>
+          <button
+            type="button"
+            disabled={trackLocked(menu.clip) || menu.clip.track === 'audio' || menu.clip.kind === 'image'}
+            data-ctx="detach-audio"
+            title={
+              menu.clip.track === 'audio'
+                ? '它已经在音频轨上了'
+                : menu.clip.kind === 'image'
+                  ? '图片没有声音'
+                  : '把这一段的声音拆到音频轨上：画面留在原轨、声音独立成一条，从此可以分开调'
+            }
+            onClick={() => {
+              if (onDetachAudio) onDetachAudio(menu.clip.id)
+              setMenu(null)
+            }}
+          >
+            分离音频到音频轨
           </button>
           <button
             type="button"
@@ -1786,7 +1908,6 @@ export default function Timeline({
           >
             按场景分割
           </button>
-          <span className="wb-ctxmenu-sep" />
           {/* 画面层级（自由层级）：只对**叠加轨**有意义 —— 主轨是一条顺序链
               （后一段接在前一段后面播放），"谁压住谁"在那里不是一个可选项。
               两段画中画完全重叠时，这条就是唯一能决定上下关系的入口。 */}
@@ -1885,19 +2006,6 @@ export default function Timeline({
               打开文件所在位置
             </button>
           ) : null}
-          <span className="wb-ctxmenu-sep" />
-          <button
-            type="button"
-            className="danger"
-            disabled={trackLocked(menu.clip)}
-            onClick={() => {
-              onRemove(menu.clip.id)
-              setMenu(null)
-            }}
-          >
-            删除片段
-            <kbd>Delete</kbd>
-          </button>
           <button type="button" onClick={() => setMenu(null)}>
             取消
             <kbd>Esc</kbd>

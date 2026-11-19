@@ -1289,6 +1289,27 @@ async function download(entryOrId, deps = {}, onProgress) {
 }
 
 /**
+ * 下一个文件并**落到正式文件名**（`.part` → 目标）。
+ *
+ * 存在的理由：`downloadOne` 只负责把字节搬到 `<dest>.part`，改名与体积校验是
+ * `promote()` 的事 —— 而 `promote` 以前只被模型安装器内部调用。任何"只是想下一份
+ * 文件"的调用方（音乐音效缓存、以后的素材包）都得自己抄一遍 `.part` + rename，
+ * 抄漏一步就是"下完了但读不到"，或者"体积不对也照样放行"。
+ *
+ * @param {string|string[]} urlOrList 候选地址（按顺序试）
+ * @param {string} dest 目标文件的**绝对路径**
+ * @param {(received:number,total:number)=>void} [onProgress]
+ * @param {{proxy?:any, expectBytes?:number}} [opts]
+ */
+async function fetchFile(urlOrList, dest, onProgress, opts = {}) {
+  const expect = Number(opts.expectBytes) || 0
+  await downloadOne(urlOrList, dest, onProgress, opts)
+  /* 续传已经下完、只差改名时 downloadOne 会提前返回，`.part` 仍在 —— promote 照样成立 */
+  promote(`${dest}.part`, dest, expect)
+  return { bytes: sizeOf(dest) }
+}
+
+/**
  * 从本地文件安装。
  *
  * 为什么必须留这条路：下载地址在部分网络下不可达，而"模型"是用户完全可以在别处
@@ -1385,5 +1406,6 @@ module.exports = {
      端口不能从外面塞进来 —— 只有把它们导出，闸门才能驱动真实实现而不是抄一份。 */
   fetchTo,
   downloadOne,
+  fetchFile,
   detectProxy: proxyTunnel.detectProxy
 }

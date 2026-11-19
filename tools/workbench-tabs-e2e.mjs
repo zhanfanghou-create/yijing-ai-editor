@@ -104,7 +104,10 @@ const TABS = [
     key: 'audio',
     label: '音频',
     root: '音频',
-    nodes: ['audio-extract', 'audio-music']
+    /* 2026-11-15：「音乐」从"按类型筛本地素材"改成**预置曲库面板**
+       （清单随包、音频点一次才下），并新增「音效」同款面板。
+       两者共用一个面板组件，靠 `music` 字段分组。 */
+    nodes: ['audio-extract', 'audio-music', 'audio-sfx']
   },
   {
     key: 'transition',

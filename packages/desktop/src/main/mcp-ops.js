@@ -41,6 +41,10 @@ const compound = require('../shared/compound.js')
 const layerMod = require('../shared/layers.js')
 const multicam = require('../shared/multicam.js')
 const region = require('../shared/region.js')
+/* 分离音频：与界面（App.jsx 的「分离音频」）共用同一份实现与同一套拒绝理由 ——
+   否则会出现「人点得出来、agent 调不动」，或者更糟的「人删音频片段会还原原片段音量、
+   agent 删了不还原」。 */
+const detachMod = require('../shared/detachAudio.js')
 const facefx = require('../shared/facefx.js')
 const scenesMod = require('../shared/scenes.js')
 const exportCodec = require('../shared/exportCodec.js')
@@ -52,6 +56,9 @@ const frameEffects = require('../shared/frameEffects.json')
 const textStyles = require('../shared/textStyles.json')
 /* 手写字幕的字体族清单：catalog 要把它给 agent（界面「字幕 → 手写字幕」读的是同一份） */
 const handFonts = require('../shared/handFonts.js')
+/* 预置曲库：catalog 暴露清单、add_clips 的 musicId 走它取文件 ——
+   与界面「音频 → 音乐 / 音效」同一份实现（否则会出现"界面能加、agent 加不了"）。 */
+const musicMod = require('./music')
 /* 字幕预设：与界面共用同一份清单与同一个 planPreset（`add_subtitles` 的 `preset` 参数走它） */
 const subtitlePresets = require('../shared/subtitlePresets.js')
 const pipJson = require('../shared/pip.json')
@@ -288,7 +295,18 @@ function normalizePatch(patch, ctx = {}) {
       case 'pip': {
         const src = raw && typeof raw === 'object' ? raw : {}
         const anchor = PIP_ANCHORS.includes(String(src.anchor)) ? String(src.anchor) : pipJson.defaultAnchor
-        out.pip = { anchor, size: clamp(finite(src.size, pipJson.defaultSize), pipJson.minSize, pipJson.maxSize) }
+        /* offset 是"拖角缩放时钉住对角"用的位移（画布宽/高的百分比）。
+           ⚠️ 不带上它，agent 调 `update_clip {pip:{offset:{x:-20}}}` 会被静默丢掉，
+           接口返回成功、画面纹丝不动 —— 与 textAnim 那个死字段是同一类。 */
+        const off = src.offset && typeof src.offset === 'object' ? src.offset : {}
+        out.pip = {
+          anchor,
+          size: clamp(finite(src.size, pipJson.defaultSize), pipJson.minSize, pipJson.maxSize),
+          offset: {
+            x: clamp(finite(off.x, 0), -100, 100),
+            y: clamp(finite(off.y, 0), -100, 100)
+          }
+        }
         break
       }
       case 'border':
@@ -548,6 +566,18 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
       stickers: (stickerRead.items || []).map((i) => ({ key: i.key, name: i.name, group: i.group })),
       borders: (borderRead.items || []).map((i) => ({ key: i.key, name: i.name, group: i.group })),
       plugins: pluginList.map((p) => ({ id: p.id, name: p.name, kind: p.kind, enabled: p.enabled, images: p.images.length })),
+      /* 预置曲库（界面「音频 → 音乐 / 音效」那 256 条的同一份清单）。
+         agent 拿到 `id` 就能交给 `add_clips` 的 `musicId` 直接落到音频轨 ——
+         界面点「加入」走的是同一条路（ensure → 建片段），不存在"只有界面能做"的动作。
+         这里只给 id / 名字 / 时长 / 分类：整套直链没必要塞进上下文，
+         真下载时主进程自己按 id 查。 */
+      musicGroups: musicMod.CATALOG.cats.map((c) => ({
+        kind: c.kind,
+        key: c.key,
+        label: c.zh,
+        count: musicMod.items().filter((it) => it.kind === c.kind && it.cat === c.key).length
+      })),
+      music: musicMod.items().map((it) => ({ id: it.id, name: it.name, kind: it.kind, cat: it.cat, seconds: it.seconds })),
       stickerError: stickerRead.error || '',
       borderError: borderRead.error || ''
     }
@@ -813,7 +843,20 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     const created = []
     for (const spec of Array.isArray(clips) ? clips : []) {
       let asset = null
-      if (spec.path) asset = await probeOne(spec.path)
+      /* 预置曲库的一条：给 id 就行，先取文件（首次会下载并永久缓存），再当普通素材上轨。
+         与界面「加入」同一条路径 —— 界面那边也是 ensure 完再 addClipFromAsset。
+         ⚠️ 取不到就**报错**，不许静默跳过：agent 会以为片段已经加上了，
+            而时间线上什么都没有（这类"成功但没发生"最难查）。 */
+      if (spec.musicId) {
+        const got = await musicMod.ensure(String(spec.musicId), { userData: userDataDir })
+        if (!got || !got.ok || !got.path) {
+          fail(`这一条音乐没能取到：${(got && got.error) || spec.musicId}`)
+        }
+        asset = await probeOne(got.path)
+        /* 名字用清单里的中文名：`displayName` 会变成片段显示名，
+           不改的话时间线上是 `mus-127`（与界面「加入」出来的中文名对不上）。 */
+        asset = { ...asset, kind: 'audio', name: got.item.name || asset.name, displayName: got.item.name || asset.displayName }
+      } else if (spec.path) asset = await probeOne(spec.path)
       const track = TRACKS.includes(spec.track)
         ? spec.track
         : asset
@@ -940,7 +983,9 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
     const draft = readDraft(draftId)
     const want = new Set((Array.isArray(clipIds) ? clipIds : [clipIds]).filter(Boolean))
     const before = draft.data.clips.length
-    draft.data.clips = draft.data.clips.filter((c) => !want.has(c.id))
+    /* 走 shared 的还原逻辑：删掉的若是"分离出来的音频片段"，原片段必须解静音。
+       直接 filter 的话原片段 gain 永远停在 0 —— 画面在播、完全没声音、没有任何提示。 */
+    draft.data.clips = detachMod.restoreDetached(draft.data.clips, [...want])
     const summary = saveDraft(draft.id, draft.name, draft.data)
     return { summary, removed: before - draft.data.clips.length }
   }
@@ -964,6 +1009,21 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
       if (at !== undefined) clip.start = Math.max(0, finite(at, clip.start))
       clips[i] = clip
       return { summary: saveDraft(draft.id, draft.name, draft.data), clip }
+    }
+
+    if (opKey === 'detach-audio') {
+      /* 把这一段的声音拆到音频轨上：画面片段静音、音频轨多一条同源同区间的片段。
+         逻辑在 shared/detachAudio.js，与界面上的「分离音频」是同一份 ——
+         连"为什么拒绝"的措辞都一样，agent 报的错与用户看到的 toast 能对上。 */
+      const made = detachMod.detachAudio(clips, clipId, { nextId: () => nextId('clip') })
+      if (!made.ok) fail(made.message)
+      draft.data.clips = made.clips
+      return {
+        summary: saveDraft(draft.id, draft.name, draft.data),
+        audio: made.audio.id,
+        source: made.source.id,
+        gain: made.source.gain
+      }
     }
 
     if (opKey === 'split') {
@@ -1153,7 +1213,10 @@ function createOps({ store, userDataDir = '', resourcesPath = process.resourcesP
           path: hit.abs || '',
           start: finite(start, 0) + seq * 0.1,
           duration,
-          pip: { anchor: anchor || pipJson.defaultAnchor, size: size || pipJson.defaultSize }
+          /* 贴纸的默认大小是**小图**（20%），不是 pipJson.defaultSize ——
+             后者现在是 100（拖视频进叠加轨要铺满），照抄会让一枚贴纸变成整屏背景板。
+             与界面贴纸面板给的默认值保持一致（SidePanels 的 StickerPanel）。 */
+          pip: { anchor: anchor || 'right-bottom', size: size || 20 }
         },
         nextId
       )

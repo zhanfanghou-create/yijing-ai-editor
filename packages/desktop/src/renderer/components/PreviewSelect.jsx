@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { poseStyle } from '../../shared/adjust.js'
 import { cssMirror, cssSkew, hasWarp, readEffects, warpTable } from '../../shared/effects.js'
 import { cssCropTransform } from '../../shared/crop.js'
-import { pipBoxCss, PIP_MAX_SIZE, PIP_MIN_SIZE, PIP_ANCHORS } from '../pip.js'
+import { pipBoxCss, PIP_DEFAULT_SIZE, PIP_MARGIN, PIP_MAX_SIZE, PIP_MIN_SIZE, PIP_ANCHORS, pipAnchor } from '../pip.js'
 
 /**
  * 预览框里的**直接操作**（点选 / 拖移 / 四角缩放 / 旋转）。
@@ -98,7 +98,7 @@ function mainBoxStyle(layer, aspectRatio, box) {
 
 /** 画中画选框的样式：与预览里那个盒子同一套（也同一套与导出对应的公式） */
 function pipBoxStyle(item) {
-  const box = pipBoxCss(item.anchor, item.size)
+  const box = pipBoxCss(item.anchor, item.size, item.offset)
   return {
     left: box.left,
     top: box.top,
@@ -168,14 +168,77 @@ function nextPose(mode, drag, pointer, rect) {
     const delta = ((a1 - a0) * 180) / Math.PI
     return { rotate: Number(clamp(drag.rotate + delta, -180, 180).toFixed(1)) }
   }
-  /* 四角缩放：按"指针到中心的距离比"。等比 —— 剪辑里拖角几乎总是想等比，
-     自由变形另有面板（见「画面 → 自由变形」）。 */
+  /* 缩放在 `nextScalePinned` 里（要固定对角，公式长，单独一个函数）。
+     这里只处理"没有角点信息"的兜底：绕中心等比。 */
   const cx = rect.left + w / 2
   const cy = rect.top + h / 2
   const d0 = Math.hypot(drag.start.x - cx, drag.start.y - cy) || 1
   const d1 = Math.hypot(pointer.x - cx, pointer.y - cy)
   const ratio = clamp(d1 / d0, 0.1, 10)
   return { scale: Number(clamp(drag.scale * ratio, 10, 400).toFixed(1)) }
+}
+
+/**
+ * 四角缩放：**固定对角**，而不是围绕中心缩。
+ *
+ * 这是"缩放锚点对齐素材边缘"的实现：拖右下角时左上角必须钉在原地（拖哪个角，
+ * 对角就是锚点）。以前这里按"指针到画布中心的距离比"缩放 —— 中心不动、四边同时
+ * 往里/往外走，用户看到的是"整个画面在缩放"，而他手上的那个角根本没跟着走，
+ * 对不齐任何一条边。
+ *
+ * 不能简单换成 `transform-origin: 右下`：那个做法只对"没旋转、没位移"的裸元素成立，
+ * 而主画面还叠着斜切/镜像/裁剪/自由变形，改原点会让整串变换一起跑偏。
+ * 所以这里老老实实改**数值**：算出新的 scale，再反解 posX/posY 把固定角按回去。
+ *
+ * ⚠️ 旋转不为 0 时放弃"固定角"退回"绕中心"：旋转之后"屏幕上的左上角"不是元素
+ *    自己的左上角，硬固定会让画面一边转一边漂。宁可退化，也不要一个会漂的手势。
+ *
+ * @returns {{scale:number, posX?:number, posY?:number}}
+ */
+function nextScalePinned(drag, pointer, rect, corner) {
+  const W = Math.max(1, rect.width)
+  const H = Math.max(1, rect.height)
+  const s0 = (Number(drag.scale) || 100) / 100
+  const p0x = (Number(drag.posX) || 0) / 100
+  const p0y = (Number(drag.posY) || 0) / 100
+  const rot = Number(drag.rotate) || 0
+
+  /* 按下时元素左上角在画布里的坐标（位移与缩放都以画布为基准，见 mediaStyleOf） */
+  const left0 = W / 2 + p0x * W - (W * s0) / 2
+  const top0 = H / 2 + p0y * H - (H * s0) / 2
+
+  if (Math.abs(rot) > 0.5) {
+    /* 有旋转：退回"到中心距离比"（旧行为），至少方向是对的 */
+    const cx = rect.left + W / 2
+    const cy = rect.top + H / 2
+    const d0 = Math.hypot(drag.start.x - cx, drag.start.y - cy) || 1
+    const d1 = Math.hypot(pointer.x - cx, pointer.y - cy)
+    return { scale: Number(clamp((Number(drag.scale) || 100) * (d1 / d0), 10, 400).toFixed(1)) }
+  }
+
+  /* 被拖角的**对角**坐标（画布内）——它就是锚点 */
+  const fixed = {
+    nw: { x: left0 + W * s0, y: top0 + H * s0 },
+    ne: { x: left0, y: top0 + H * s0 },
+    sw: { x: left0 + W * s0, y: top0 },
+    se: { x: left0, y: top0 }
+  }[corner] || { x: left0, y: top0 }
+  /* 锚点转到视口坐标：指针与它比距离 */
+  const fx = rect.left + fixed.x
+  const fy = rect.top + fixed.y
+  const d0 = Math.hypot(drag.start.x - fx, drag.start.y - fy) || 1
+  const d1 = Math.hypot(pointer.x - fx, pointer.y - fy)
+  const s1 = clamp(s0 * (d1 / d0), 0.1, 4)
+
+  /* 新中心必须让锚点不动：中心 = 锚点 + 半个新尺寸（方向按"锚点在哪一侧"取） */
+  const quarter = { nw: [1, 1], ne: [-1, 1], sw: [1, -1], se: [-1, -1] }[corner] || [-1, -1]
+  const cx1 = fixed.x + quarter[0] * ((W * s1) / 2)
+  const cy1 = fixed.y + quarter[1] * ((H * s1) / 2)
+  return {
+    scale: Number((s1 * 100).toFixed(1)),
+    posX: Number((((cx1 - W / 2) / W) * 100).toFixed(2)),
+    posY: Number((((cy1 - H / 2) / H) * 100).toFixed(2))
+  }
 }
 
 /**
@@ -267,6 +330,46 @@ function nearestAnchor(pointer, rect) {
  */
 export default function SelectionBox({ box, frameRef, target, onPatch, onSnapshot }) {
   const dragRef = useRef(null)
+  /**
+   * 画中画选框的**高度**。
+   *
+   * ⚠️ 不能不给：`.canvas-pip` 的高度是由素材自己撑出来的（`height:auto`），
+   *    而选框此前只拿到了 left/top/width ⇒ 高度 0 ⇒ 四条边里三条贴在一条线上，
+   *    四个角手柄全叠在顶部。用户看到的是"画中画根本没有选框，只有顶上四个小方块"，
+   *    于是"缩放锚点对不上素材边缘"。
+   *    所以要量一次真实高度（百分比），并在素材加载完/换锚点后重测。
+   */
+  const [pipH, setPipH] = useState(null)
+
+  useEffect(() => {
+    if (!box || box.kind !== 'pip' || !target) {
+      setPipH(null)
+      return undefined
+    }
+    const frame = frameRef && frameRef.current
+    if (!frame) return undefined
+    const find = () => frame.querySelector(`[data-pip-id="${target.id}"] [data-pip-box]`)
+    const measure = () => {
+      const el = find()
+      const fh = frame.clientHeight || 1
+      if (!el) return
+      const pct = (el.getBoundingClientRect().height / fh) * 100
+      setPipH((prev) => (prev != null && Math.abs(prev - pct) < 0.25 ? prev : pct))
+    }
+    measure()
+    let ro = null
+    const el = find()
+    if (el && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure)
+      ro.observe(el)
+    }
+    /* 视频的 metadata 是异步到的：首帧量到的高度可能是 0，补一次 */
+    const timer = setTimeout(measure, 320)
+    return () => {
+      if (ro) ro.disconnect()
+      clearTimeout(timer)
+    }
+  }, [box, target, frameRef])
 
   const begin = useCallback(
     (event, mode, corner) => {
@@ -288,6 +391,16 @@ export default function SelectionBox({ box, frameRef, target, onPatch, onSnapsho
           affineInv = null
         }
       }
+      /* 画中画：把盒子的真实像素矩形量下来。缩放要"固定对角"，就必须知道
+         按下那一刻盒子在哪、多大 —— 只靠 size 反推拿不到高度（高度由素材比例定）。 */
+      let pipRect = null
+      if (target.kind === 'pip') {
+        const el = frame.querySelector(`[data-pip-id="${target.id}"] [data-pip-box]`)
+        if (el) {
+          const r = el.getBoundingClientRect()
+          pipRect = { x: r.left - rect.left, y: r.top - rect.top, w: r.width, h: r.height }
+        }
+      }
       if (onSnapshot) onSnapshot()
       dragRef.current = {
         mode,
@@ -299,6 +412,8 @@ export default function SelectionBox({ box, frameRef, target, onPatch, onSnapsho
         scale: Number(item.scale) || 100,
         rotate: Number(item.rotate) || 0,
         size: Number(item.size) || 0,
+        anchor: item.anchor,
+        pipRect,
         moved: false,
         /* 自由变形：拖的是"变形后局部像素坐标"，需要画框尺寸与仿射逆 */
         corner,
@@ -331,20 +446,68 @@ export default function SelectionBox({ box, frameRef, target, onPatch, onSnapsho
         return
       }
       if (drag.target.kind === 'main') {
+        if (drag.mode === 'scale') {
+          /* 固定对角（见 nextScalePinned）：拖哪个角，对角就是锚点 */
+          onPatch(drag.target.id, nextScalePinned(drag, { x: event.clientX, y: event.clientY }, drag.rect, drag.corner))
+          return
+        }
         onPatch(drag.target.id, nextPose(drag.mode, drag, { x: event.clientX, y: event.clientY }, drag.rect))
         return
       }
-      /* 画中画：拖动改锚点（吸到最近的一格），四角改尺寸（按距离比，与主画面同口径） */
+      /* 画中画：拖动改锚点（吸到最近的一格），四角改尺寸 —— 同样**固定对角** */
       if (drag.mode === 'move') {
-        onPatch(drag.target.id, { pip: { anchor: nearestAnchor({ x: event.clientX, y: event.clientY }, drag.rect), size: drag.target.item.size } })
+        onPatch(drag.target.id, {
+          pip: {
+            ...(drag.target.item.pip || {}),
+            anchor: nearestAnchor({ x: event.clientX, y: event.clientY }, drag.rect),
+            size: Number(drag.target.item.size) || PIP_DEFAULT_SIZE
+          }
+        })
         return
       }
-      const cx = drag.rect.left + drag.rect.width / 2
-      const cy = drag.rect.top + drag.rect.height / 2
-      const d0 = Math.hypot(drag.start.x - cx, drag.start.y - cy) || 1
-      const d1 = Math.hypot(event.clientX - cx, event.clientY - cy)
-      const size = clamp(Math.round((drag.size || 30) * (d1 / d0)), PIP_MIN_SIZE, PIP_MAX_SIZE)
-      onPatch(drag.target.id, { pip: { anchor: drag.target.item.anchor, size } })
+      const p = drag.pipRect
+      const W = Math.max(1, drag.boxW)
+      const H = Math.max(1, drag.boxH)
+      const right = drag.corner === 'tr' || drag.corner === 'br'
+      const bottom = drag.corner === 'bl' || drag.corner === 'br'
+      let w1
+      if (p && p.w > 0) {
+        /* 被拖的边跟手：拖右侧时右边跟着指针走，拖左侧时左边 */
+        const px = event.clientX - drag.rect.left
+        w1 = right ? px - p.x : p.x + p.w - px
+      } else {
+        /* 量不到盒子（首帧）时退回"到中心距离比"，至少能动 */
+        const cx = drag.rect.left + drag.rect.width / 2
+        const cy = drag.rect.top + drag.rect.height / 2
+        const d0 = Math.hypot(drag.start.x - cx, drag.start.y - cy) || 1
+        const d1 = Math.hypot(event.clientX - cx, event.clientY - cy)
+        w1 = ((Number(drag.size) || PIP_DEFAULT_SIZE) / 100) * W * (d1 / d0)
+      }
+      w1 = clamp(w1, (W * PIP_MIN_SIZE) / 100, (W * PIP_MAX_SIZE) / 100)
+      const ratio = p && p.w > 0 ? w1 / p.w : 1
+      const h1 = p ? p.h * ratio : 0
+      const size = Math.round((w1 / W) * 100)
+      /* 落到片段上的是**取整后的 size**，盒子的实际宽高也就由它决定 ——
+         反算 offset 必须用这两个数（wNew/hNew），不能用指针对应的 w1/h1：
+         差 0.5% 的取整在 1080 宽画布上就是 5px，而"对角钉住"要求的是**像素级不动**。
+         高度不是自由量（由素材比例撑出来，与导出的 scale=w:-2 同一口径），
+         所以 hNew 由 wNew 乘盒子自身的宽高比推出来，不看指针的纵向位移。 */
+      const wNew = (W * size) / 100
+      const hNew = p && p.w > 0 ? wNew * (p.h / p.w) : 0
+      const x1 = p ? (right ? p.x : p.x + p.w - w1) : 0
+      const y1 = p ? (bottom ? p.y : p.y + p.h - h1) : 0
+      /* 反算 offset：boxOf 给的是"未减自身尺寸的基准"，实际左/上边缘 = 基准 − fx·宽/高
+         （预览靠 translate、导出靠 overlay_w/overlay_h）。要让上面算好的 x1/y1
+         真的落在那里，就把这层差值补进 offset —— 这就是"对角钉住"的全部内容。 */
+      const anchor = pipAnchor(drag.anchor)
+      const m = PIP_MARGIN * W
+      const offset = p
+        ? {
+            x: Number((((x1 - m - anchor.fx * (W - 2 * m - wNew)) / W) * 100).toFixed(2)),
+            y: Number((((y1 - m - anchor.fy * (H - 2 * m - hNew)) / H) * 100).toFixed(2))
+          }
+        : drag.target.item.pip && drag.target.item.pip.offset
+      onPatch(drag.target.id, { pip: { ...(drag.target.item.pip || {}), anchor: drag.anchor, size, offset } })
     }
     const onUp = () => {
       dragRef.current = null
@@ -367,6 +530,19 @@ export default function SelectionBox({ box, frameRef, target, onPatch, onSnapsho
   const fxNow = readEffects(target.item && target.item.effects)
   const warpOn = box.kind === 'main' && Boolean(fxNow && fxNow.warp && fxNow.warp.on)
 
+  /**
+   * 画中画的选框要**贴着素材的四条边**：宽高都按实测来。
+   * 主画面的选框铺满画布（素材本来就铺满），用 boxOf 给的样式即可。
+   *
+   * ⚠️ 必须 `...box.style` 全带上再覆写 height —— 尤其是其中的 `transform`。
+   *    boxOf 给的是"盒子左上角的定位基准"，最终位置还要靠 `translate(-fx%, -fy%)`
+   *    按**自身尺寸**回拉（高度只有这里有）。只取 left/top/width 再把 height 补上，
+   *    等于把回拉那一步丢掉了：中心锚点 + 铺满时选框整体偏到画布右半边，
+   *    右下角手柄跑到画布外（overflow:hidden 裁掉了），于是"手柄在、点不动"。
+   */
+  const style =
+    box.kind === 'pip' && pipH != null ? { ...box.style, height: `${pipH}%` } : box.style
+
   return (
     <div
       className={`canvas-sel canvas-sel-${box.kind}`}
@@ -374,7 +550,7 @@ export default function SelectionBox({ box, frameRef, target, onPatch, onSnapsho
       data-sel-kind={box.kind}
       data-sel-id={target.id}
       data-sel-warp-on={warpOn ? '1' : undefined}
-      style={box.style}
+      style={style}
       /* 拖动整块：点画面内部就能拖（不必精准点到边框） */
       onPointerDown={(event) => begin(event, 'move')}
       /* 双击复位：位置 / 缩放 / 旋转一起回默认。剪辑里"拖歪了"最常见的收场 */

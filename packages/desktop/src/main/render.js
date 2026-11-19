@@ -52,6 +52,8 @@ function borderFileOf(key) {
   return borderIndex.get(want) || ''
 }
 const PIP = require('../shared/pip.json')
+/* 画中画的几何：**与渲染层同一份**（预览 CSS 与这里给的像素框由同一行代码算出） */
+const pipShared = require('../shared/pip.js')
 /* 画面特效的参数轴 —— 素材类的缩放档要在这里解出来（与预览的 --fx-t 同一份） */
 const { fxFamily, fxParamsOf } = require('../shared/fxParams.js')
 /* 倍速的真源：与渲染层**同一份**（各写一份就会有一边漏掉倍速，
@@ -1232,14 +1234,40 @@ function effectsStages({
   return { lines, label: out }
 }
 
-/** `yjai-media://local/<base64url>` 还原成磁盘路径；主进程里也这么解 */
-function pathFromMediaUrl(url) {  const match = /^yjai-media:\/\/local\/([A-Za-z0-9_-]+)$/.exec(String(url || ''))
-  if (!match) return ''
-  try {
-    return Buffer.from(match[1], 'base64url').toString('utf8')
-  } catch {
-    return ''
+/**
+ * 把渲染层给的一个"源"还原成磁盘路径。
+ *
+ * 三种输入都要认，少认一种就有一整类操作永远失败：
+ *   ① `yjai-media://local/<base64url>` —— 素材库里的地址；
+ *   ② **绝对路径**（`C:\…\a.mp4` / `/home/…/a.mp4`）—— 片段上的 `clip.path` 就是它；
+ *   ③ `file://` URL。
+ *
+ * ⚠️ 这里曾经**只认 ①**。而「提取音频」面板传的是 `cut.path || cut.url`，
+ *    本地导入的片段 `clip.path` 一定有值 ⇒ 传进来是 ② ⇒ 正则不匹配 ⇒ 返回空串 ⇒
+ *    主进程立刻回「源文件路径不合法」。表现是"点了提取音频，什么都没发生（或只报一句
+ *    路径不合法）"，而 ffmpeg、模型、权限全都没问题 —— 一条正则把整条链挡在门口。
+ *    从素材库直接拖进来的片段 `path` 可能为空、`url` 是 ①，那条路反而是通的，
+ *    于是同一功能"有时能有时不能"，更难查。
+ */
+function pathFromMediaUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const match = /^yjai-media:\/\/local\/([A-Za-z0-9_-]+)$/.exec(raw)
+  if (match) {
+    try {
+      return Buffer.from(match[1], 'base64url').toString('utf8')
+    } catch {
+      return ''
+    }
   }
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      return decodeURIComponent(raw.replace(/^file:\/\/\/?/i, '').replace(/\//g, path.sep))
+    } catch {
+      return ''
+    }
+  }
+  return path.isAbsolute(raw) ? raw : ''
 }
 
 /** 片段 → ffmpeg 能吃的输入源。本地文件优先，其次是 http(s) 直连 */
@@ -1883,15 +1911,12 @@ function buildPlan({
    *    ripple），画中画若仍按 `clip.start` 对齐，接缝之后就会整体提前 ——
    *    单独看每一处都对，只有"前面加了转场，画中画就错位"才暴露。
    *
-   * 坐标用 overlay 的表达式（main_w / overlay_w …）而不是先算好的像素：
-   * 画中画的高度由素材比例决定，这里拿不到；表达式能在 ffmpeg 内部拿到真实尺寸，
-   * 于是与预览那侧（CSS 用 translate 回退自身尺寸）**逐字对应**。
+   * ⚠️ 坐标走 `shared/pip.js` 的 `boxOf()` —— 与预览**同一行代码**算出来的矩形。
+   *    以前这里自己写一遍 `main_w / overlay_w` 表达式、预览那边写一遍 CSS 公式，
+   *    两边都"看起来对"，只有把成片和预览并排摆着才发现错位。
    */
-  const pipAnchorOf = (key) =>
-    PIP.anchors.find((item) => item.key === key) ||
-    PIP.anchors.find((item) => item.key === PIP.defaultAnchor)
-  const pipSizeOf = (value) =>
-    Math.round(Math.min(PIP.maxSize, Math.max(PIP.minSize, num(value, PIP.defaultSize))))
+  const pipAnchorOf = (key) => pipShared.anchorOf(key)
+  const pipSizeOf = (value) => pipShared.sizeOf(value)
 
   /** 到 raw 时刻为止，主链被转场吃掉的总时长 */
   const shiftAt = (raw) => {
@@ -1920,9 +1945,23 @@ function buildPlan({
     else args.push('-i', source.value)
     const idx = inputIndex++
 
-    const anchor = pipAnchorOf(clip.pip && clip.pip.anchor)
-    const w = Math.max(2, Math.round((width * pipSizeOf(clip.pip && clip.pip.size)) / 100 / 2) * 2)
+    /**
+     * 盒子：与预览同一个 `pipShared.boxOf()`（预览传 100×100 拿百分比，这里传真实像素）。
+     *
+     * ⚠️ `boxOf` 给的是**未减自身尺寸的基准**（左上角候选位置），真正落位还要减去
+     *    盒子自己的宽高 —— 预览用 `translate(-fx%,-fy%)`，这里用 `overlay_w/overlay_h`。
+     *    原因：盒子高度由素材比例决定，构建命令时算不出来（`scale=w:-2` 才刚定下宽度）。
+     *    pad 那条路（混合模式）用 `iw/ih`，同理。
+     *
+     * `w` 取偶数：yuv420p 下宽高奇数会让编码器自己裁一格，预览与成片的边界差一像素。
+     */
+    const box = pipShared.boxOf(clip.pip, width, height)
+    const w = Math.max(2, Math.round(box.w / 2) * 2)
     const m = PIP.margin
+    /* 位移取偶：ffmpeg 的 overlay 坐标可以是奇数，但与缩放后的宽/高保持同奇偶，
+       边缘才不会因为 420 采样出现一列半亮像素 */
+    const offX = Math.round(box.offX / 2) * 2
+    const offY = Math.round(box.offY / 2) * 2
     const opacity = Math.min(1, Math.max(0, num(clip.opacity, 100) / 100))
     const alphaPart = opacity < 0.995 ? `,colorchannelmixer=aa=${round(opacity, 4)}` : ''
     /* 画中画也吃倍速（与主链同一口径，否则"画中画快、主画面慢"） */
@@ -1988,9 +2027,17 @@ function buildPlan({
        * ⚠️ 必须在 **gbrp/gbrap** 空间做：CSS 是按 sRGB 混的，YUV 空间乘出来的颜色
        *    是错的（灰×蓝在 YUV 下得到 rgb(0,66,0)，正确是 rgb(0,0,127)）。
        */
-      const padX = `${m}*${width}+${anchor.fx}*(${width}-${2 * m}*${width}-iw)`
-      const padY = `${m}*${width}+${anchor.fy}*(${height}-${2 * m}*${width}-ih)`
+      /**
+       * pad 的 x/y 用 `iw/ih`（小图自己的尺寸）算同一个基准，
+       * 与 overlay 那条路的 `overlay_w/overlay_h` 等价。
+       * ⚠️ pad 要求输入区落在垫大的画布里，负坐标会被拒 —— 探出画布的部分
+       *    （size>100 或 offset 为负）这里夹到 0，宁可少一块也不要整条链报错。
+       */
+      const padX = `max(0, ${m}*${width}+${box.fx}*(${width}-${2 * m}*${width}-iw)+${offX})`
+      const padY = `max(0, ${m}*${width}+${box.fy}*(${height}-${2 * m}*${width}-ih)+${offY})`
       filters.push(`${videoLabel}format=gbrap,split=2[pipM${i}a][pipM${i}b]`)
+      /* ⚠️ x/y 必须带单引号：`max(0, …)` 里那个逗号会被滤镜图解析器当成"下一个滤镜"
+         的分隔符，整条链会当场报错（而这条分支只在"画中画 + 混合模式"时才走到）。 */
       filters.push(
         `${pipRef}format=gbrap,pad=${width}:${height}:x='${padX}':y='${padY}':color=black@0,` +
           `split=2[pipP${i}a][pipP${i}b]`
@@ -2004,8 +2051,9 @@ function buildPlan({
       )
     } else {
       filters.push(
-        `${videoLabel}${pipRef}overlay=x='${m}*main_w+${anchor.fx}*(main_w-${2 * m}*main_w-overlay_w)'` +
-          `:y='${m}*main_w+${anchor.fy}*(main_h-${2 * m}*main_w-overlay_h)'` +
+        `${videoLabel}${pipRef}overlay=` +
+          `x='${m}*main_w+${box.fx}*(main_w-${2 * m}*main_w-overlay_w)+${offX}'` +
+          `:y='${m}*main_w+${box.fy}*(main_h-${2 * m}*main_w-overlay_h)+${offY}'` +
           `:enable='between(t,${round(t0)},${round(t1)})'${nextLabel}`
       )
     }

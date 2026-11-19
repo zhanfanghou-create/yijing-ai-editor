@@ -366,6 +366,58 @@ await check('字体文件不存在直接报错（否则导出悄悄退回系统�
   return message.slice(0, 34)
 })
 
+/* ------------------------- 预置曲库（agent 侧） -------------------------
+ *
+ * 界面「音频 → 音乐 / 音效」点「加入」= ensure（没缓存就下）→ 建音频片段。
+ * agent 侧必须**同一条路**：`add_clips` 的 `musicId`。这里钉三件事：
+ *   ① 清单真的能从 catalog 拿到（agent 得先知道有哪些 id，不然等于没入口）；
+ *   ② 给一个 id 就能落成**音频轨**片段，名字是清单里的中文名
+ *      （落成 `mus-127` 说明走的是文件名，界面会显示成两回事）；
+ *   ③ 素材库里有一条带 url 的记录 —— url 为空就是"草稿能开、画面全黑"那个老坑。
+ *
+ * ⚠️ 第一次要真下载（约 70KB 的音效），所以**外网不可达时记 skip**：
+ *    按仓里的约定，依赖外网的判据：源不可达记 SKIP，可达但失败才算红。
+ */
+const { reachable } = await import('./net-probe.mjs')
+const { CATALOG: MUSIC_CATALOG } = require('../packages/desktop/src/main/music.js')
+
+await check('catalog 能给 agent 列出预置曲库（id / 名字 / 时长）', () => {
+  const cat = ops.catalog()
+  assert(Array.isArray(cat.music) && cat.music.length === MUSIC_CATALOG.items.length, `music=${(cat.music || []).length}`)
+  assert(Array.isArray(cat.musicGroups) && cat.musicGroups.length === MUSIC_CATALOG.cats.length, `musicGroups=${(cat.musicGroups || []).length}`)
+  const first = cat.music[0]
+  assert(first && /^(sfx|mus)-\d+$/.test(first.id), `首个 id=${first && first.id}`)
+  return `${cat.music.length} 条 / ${cat.musicGroups.length} 个分类`
+})
+
+const SFX_ID = MUSIC_CATALOG.items.find((it) => it.kind === 'sfx').id
+const musicDraftId = (() => {
+  const d = ops.createDraft({ name: '曲库夹具' })
+  return (d.summary || d.draft || d).id
+})()
+
+if (!(await reachable(MUSIC_CATALOG.items.find((it) => it.id === SFX_ID).url, 15000))) {
+  skip('musicId 落成音频轨片段', '音频源不可达')
+  skip('落下来的片段用清单里的中文名', '音频源不可达')
+} else {
+  const added = await ops.addClips({ draftId: musicDraftId, clips: [{ musicId: SFX_ID }] })
+  const row = added && added.added && added.added[0]
+  await check('musicId 落成音频轨片段（不用先给 path）', () => {
+    assert(row, '没有返回 added[0]')
+    assert(row.track === 'audio', `track=${row.track}`)
+    assert(Number(row.duration) > 0, `duration=${row.duration}`)
+    return `${row.track} / ${Number(row.duration).toFixed(2)}s`
+  })
+  await check('落下来的片段用清单里的中文名，且素材记录带可播地址', () => {
+    const saved = store.load(musicDraftId)
+    const clip = saved.data.clips[0]
+    const asset = saved.data.assets[0]
+    assert(!/^(sfx|mus)-\d+$/.test(clip.name), `片段名还是文件名：${clip.name}`)
+    assert(asset && /^yjai-media:\/\//.test(String(asset.url || '')), `asset.url=${asset && asset.url}`)
+    return `${clip.name} · ${String(asset.path).split(/[\\/]/).slice(-2).join('/')}`
+  })
+}
+
 /* ------------------------------ 汇总 ------------------------------ */
 
 try {

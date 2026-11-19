@@ -161,6 +161,21 @@ function fxCssVars(key, fallbackMs) {
 }
 
 /**
+ * 鱼眼（fx-fisheye）在**预览侧**的 SVG 位移强度。
+ *
+ * 位移贴图 fisheye-disp.png 是按 `scale = 0.25` 编码的（角落归一化位移 0.1 =
+ * 0.25 × 通道偏差 0.4），所以 0.25 恰好还原出设计位移量。导出侧 ffmpeg 用
+ * `lenscorrection=k1=t`：**|t| 越大畸变越强**；预览要跟它同向，scale 必须随 |t| 变。
+ * 以 t=-0.45（默认档）对应 scale=0.25 为基准，线性缩放：
+ *   t=-0.34 → 0.1892   t=-0.45 → 0.25   t=-0.56 → 0.3111
+ * ⚠️ 必须读参数串（完整键），不能只按族键取默认 —— 否则三档还是一模一样。
+ */
+function fisheyeScale(key) {
+  const t = Math.abs(Number(fxParamsOf(key).t) || 0)
+  return Number(((0.25 * t) / 0.45).toFixed(4))
+}
+
+/**
  * 动画时长（毫秒）。
  *
  * 优先级：族有 d 轴 → 轴值；否则用族表的 durationMs；再否则全局默认。
@@ -187,5 +202,6 @@ module.exports = {
   fxKeyOf,
   fxCombos,
   fxCssVars,
-  fxDurationMs
+  fxDurationMs,
+  fisheyeScale
 }

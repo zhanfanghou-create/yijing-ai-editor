@@ -393,10 +393,12 @@ button:disabled {
   font-size: 11px;
 }
 
-/* 字段下方的一句说明（导出面板的"只影响导出"这类提示） */
+/* 字段下方的一句说明（导出面板的"只影响导出"这类提示）
+   faint(#6c6c72) 在面板底 #302f36 上只有 2.54:1，正文远低于 WCAG 4.5:1；
+   改消费 muted(#9a9aa0) → 4.73:1。令牌数值不动。 */
 .hint {
   margin: 0 0 10px;
-  color: var(--faint);
+  color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
 }
@@ -660,6 +662,16 @@ button:disabled {
   cursor: grabbing;
 }
 
+/* 旋转手柄视觉只有 9×9（参考尺寸，不能改），但这么小的目标极难命中。
+   用透明伪元素把左右/下方热区扩到 25px 宽、20px 高，鼠标好点；
+   向上只扩 3px（手柄贴画布顶边，画布 overflow 会裁掉更多），
+   不引入新色值、不动视觉尺寸与定位。 */
+.canvas-sel-rot::before {
+  content: '';
+  position: absolute;
+  inset: -3px -8px -8px;
+}
+
 /**
  * 素材按**裁切**填满画布（`cover` 而不是 `contain`）。
  * 为什么是裁：比例是"画布形状"，切到 1:1 时 16:9 的素材应当被裁掉左右、
@@ -695,19 +707,23 @@ button:disabled {
   line-height: 1.7;
 }
 
+/* 调色角标只留这一处定义（旧的那处已删）。
+   ⚠️ 曾有两处 .canvas-badge：第一处给 top:10px、第二处给 bottom:10px，
+   绝对定位元素 top/bottom 同时生效且 height:auto ⇒ 被拉伸成一条竖条盖住画面左侧。
+   现统一为「贴底 + 不设 top + 显式高度内容自适应」，并保留最高 z-index
+   （字幕叠加层 3 / 特效覆盖层 4 都画在画布上，角标是界面信息不能被内容盖住）。 */
 .canvas-badge {
   position: absolute;
   left: 10px;
-  top: 10px;
-  /* z-index 显式给到最上层：字幕叠加层（3）与特效覆盖层（4）都画在画布上，
-     角标是界面自己的信息，不能被内容盖住 */
+  bottom: 10px;
   z-index: 5;
   padding: 3px 9px;
-  border-radius: 8px;
-  background: rgba(8, 10, 24, 0.78);
-  color: var(--muted);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
   font-size: 11px;
   backdrop-filter: blur(6px);
+  pointer-events: none;
 }
 
 .transport .timecode {
@@ -876,7 +892,9 @@ button:disabled {
 .media-meta small {
   display: block;
   margin-top: 3px;
-  color: var(--faint);
+  /* 素材分辨率/时长/大小是挑片依据，faint 在卡片底 #29282d 上仅 2.80:1；
+     改 muted → 5.23:1，字号仍 10px。 */
+  color: var(--muted);
   font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -976,6 +994,12 @@ input[type='range']::-webkit-slider-thumb {
   background: var(--violet);
   border: 2px solid var(--panel);
   cursor: pointer;
+}
+
+/* 滑杆本体的 outline:none 让键盘聚焦后无任何可见提示；
+   把焦点环画在 thumb 上（滑杆真正被操作的位置），复用现成 --state-ring。 */
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--state-ring);
 }
 
 .kv-list {
@@ -1157,19 +1181,22 @@ input[type='range']::-webkit-slider-thumb {
   );
 }
 
+/* 选中态用全应用唯一强调色（--violet），与预览画布选框 .canvas-sel 同色 ——
+   注释见 .canvas-sel：「在预览里选中什么、时间线上就选中什么，两处视觉反馈必须一致」。
+   10-02 基线曾把这里写成白框（照抄了白色播放头），兑现不了那条承诺。 */
 .clip.selected {
-  box-shadow: inset 0 0 0 2px #ffffff;
+  box-shadow: inset 0 0 0 2px var(--violet);
 }
 
 /**
  * 多选集合里的**其余**几段（Ctrl + 点选）。
  *
- * 比主选中弱一档：主选中是 2px 实心白框，多选的同伴是 1px 半透明框。
+ * 比主选中弱一档：主选中是 2px 实心紫框，多选的同伴是 1px 半透明紫框。
  * 两个必须能一眼分开 —— 右栏、检查器、快捷键作用的对象是**主选中**，
  * 画成一样的话用户分不清"我现在改的是哪一段"。
  */
 .clip.multi {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(195, 107, 245, 0.72);
 }
 
 /**
@@ -1511,6 +1538,20 @@ input[type='range']::-webkit-slider-thumb {
   );
   pointer-events: none;
   z-index: 2;
+}
+
+/* 框选矩形（在轨道空白处按住拉出来）。
+   fixed 定位：.wb-tltracks 是横向滚动容器，画在它里面要一路补偿 scrollLeft，
+   拖到边缘自动滚动时框会跟着抖。颜色用强调蓝（与吸附紫、播放头白都不冲突），
+   半透明填充让人能看清框住了哪几段。 */
+.wb-marquee {
+  position: fixed;
+  z-index: 60;
+  border: 1px solid #6ba3ff;
+  border-radius: 2px;
+  background: rgba(107, 163, 255, 0.14);
+  box-shadow: 0 0 0 1px rgba(107, 163, 255, 0.18);
+  pointer-events: none;
 }
 
 /* ============================== 弹窗 ============================== */
@@ -2519,11 +2560,15 @@ input[type='range']::-webkit-slider-thumb {
   will-change: opacity, transform, clip-path;
 }
 
+/* 必须和 .canvas-frame 主画面层同为 cover。
+   ⚠️ contain 时 1:1 / 9:16 画布放 16:9 素材，转场交叠那一段会从"铺满"突然变成
+   "上下留黑边"，转场结束又跳回铺满 —— 而成片两段是同一种裁法、没有黑边跳变。
+   预览与成片口径不同的根因就在这里，详见 .canvas-frame 那条注释。 */
 .canvas-xfade img,
 .canvas-xfade video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
 }
 
@@ -2560,6 +2605,16 @@ input[type='range']::-webkit-slider-thumb {
   position: absolute;
   display: block;
   overflow: hidden;
+  /*
+   * 只有盒子本身接指针（外层 `.canvas-pip-layer` 是 `inset:0` 铺满画布的定位容器，
+   * 它必须 `pointer-events: none`，否则整块画布都被它挡住、主画面永远点不到）。
+   *
+   * ⚠️ 这一行是**上层素材能不能被选中/拖动**的唯一开关：
+   *    没有它，点画中画命中的是底下的主画面 —— 预览里点不动它，
+   *    右栏的「画中画」分组也就永远不出现（那一组只在选中叠加轨片段时渲染），
+   *    用户看到的现象是"上层素材加了但调不了"。
+   */
+  pointer-events: auto;
 }
 
 /*
@@ -2863,10 +2918,14 @@ input[type='range']::-webkit-slider-thumb {
 
 .canvas-fx.fx-scan,
 .fx-demo-art.fx-scan {
-  /* 1px 线 + (n-1)px 间隙；位移正好走一格，循环处才看不出来 */
+  /* 1px 线 + (n-1)px 间隙；位移正好走一格，循环处才看不出来。
+     ⚠️ 必须是**暗线**：成片侧 drawgrid 用 c=black@0.35 是压暗扫描线（CRT 暗纹），
+     曾用 92% 浅线 ⇒ 预览是亮纹、成片是暗纹，明暗方向正好相反。
+     保留 --fx-h 线色相（h 轴是"线色"），明度压到 12%、alpha 对齐 0.35，
+     这样不同线色的卡在预览里仍分得开，又与成片同为压暗方向。 */
   background: repeating-linear-gradient(
     0deg,
-    hsl(var(--fx-h, 0) 24% 92% / 0.2) 0 1px,
+    hsl(var(--fx-h, 0) 45% 12% / 0.35) 0 1px,
     transparent 1px calc(var(--fx-n, 4) * 1px)
   );
   background-size: 100% calc(var(--fx-n, 4) * 1px);
@@ -3077,11 +3136,25 @@ input[type='range']::-webkit-slider-thumb {
 
 /* --------------------------- 轨道角标 --------------------------- */
 
-/* 调色角标：贴在片段右下角，不参与布局（否则会改变 clip-inner 的宽度） */
-.clip-badge {
+/* 角标行：把同一个片段的多个属性角标收进一个 flex 容器横向排开。
+   ⚠️ 以前每个 .clip-badge 都 position:absolute 到 right:3px/bottom:2px，
+   一个片段同时有调色+特效+变速时全部叠在同一像素点、只露出 DOM 里最后一个 ——
+   用户看不出这段还叠了什么。现在角标是 flex item，彼此错列。 */
+.clip .clip-inner .clip-badges {
   position: absolute;
   right: 3px;
   bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  /* 覆盖 .clip .clip-inner span 的 overflow:hidden —— 角标行允许向右伸出去 */
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+/* 角标本体：不再自己绝对定位，位置交给 .clip-badges 容器 */
+.clip-badge {
+  flex: none;
   padding: 0 4px;
   height: 13px;
   line-height: 13px;
@@ -3116,20 +3189,6 @@ input[type='range']::-webkit-slider-thumb {
   pointer-events: none;
   white-space: nowrap;
   z-index: 3;
-}
-
-/* 预览画布上的调色角标 */
-.canvas-badge {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(6px);
-  pointer-events: none;
 }
 
 /* ---------- 使用指引弹窗（.guide 骨架） ---------- */

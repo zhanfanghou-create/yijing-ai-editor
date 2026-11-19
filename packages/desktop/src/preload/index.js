@@ -35,6 +35,32 @@ contextBridge.exposeInMainWorld('yjai', {
     set: (key, value) => ipcRenderer.invoke('settings:set', key, value)
   },
 
+  /**
+   * 自动更新。
+   *
+   * `check()` 失败时返回 `{ok:false, reason}` 而**不是抛错** —— 界面据此保持安静，
+   * 不把"今天没连上网"做成弹窗。`install()` 成功后主进程会在几百毫秒内退出自己，
+   * 所以调用方不要指望它的返回值一定送得回来（渲染层应在调用前就切到"正在安装"）。
+   */
+  update: {
+    check: () => ipcRenderer.invoke('update:check'),
+    download: (payload) => ipcRenderer.invoke('update:download', payload),
+    install: (payload) => ipcRenderer.invoke('update:install', payload),
+    /** 下载进度（0-100）。返回取消订阅函数 */
+    onProgress: (cb) => {
+      if (typeof cb !== 'function') return () => {}
+      const handler = (_event, payload) => {
+        try {
+          cb(payload || {})
+        } catch {
+          /* 渲染层自己的异常不该把监听器带崩 */
+        }
+      }
+      ipcRenderer.on('update:progress', handler)
+      return () => ipcRenderer.removeListener('update:progress', handler)
+    }
+  },
+
   /** 本地草稿：列表 / 覆盖保存 / 读取 / 删除，文件落在 userData/drafts */
   draft: {
     list: () => ipcRenderer.invoke('draft:list'),
@@ -105,6 +131,28 @@ contextBridge.exposeInMainWorld('yjai', {
    */
   stickers: {
     catalog: () => ipcRenderer.invoke('sticker:catalog')
+  },
+
+  /**
+   * 预置音乐 / 音效。
+   *
+   * 清单不进这里 —— 它是随包的静态 JSON，渲染层直接 import 就有（断网也在）。
+   * 这里只有两个动作：
+   *   · status()  问"哪些已经缓存在本机了"（判据是磁盘上有没有文件，主进程说了算）；
+   *   · ensure(id) 要一首：本机有就直接给地址，没有才下，下完**永久留着**。
+   *
+   * ⚠️ 只接受清单里的 id，不接受 URL、不接受路径：让渲染层塞任意地址进来
+   *    等于给它一个"从任意来源往磁盘写文件"的入口。
+   */
+  music: {
+    status: () => ipcRenderer.invoke('music:status'),
+    ensure: (id) => ipcRenderer.invoke('music:ensure', { id: String(id || '') }),
+    /** 下载进度订阅，返回退订函数（与 models.onProgress 同一套约定） */
+    onProgress: (handler) => {
+      const listener = (_event, payload) => handler(payload)
+      ipcRenderer.on('music:progress', listener)
+      return () => ipcRenderer.removeListener('music:progress', listener)
+    }
   },
 
   /**

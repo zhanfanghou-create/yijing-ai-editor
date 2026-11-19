@@ -328,7 +328,12 @@ async function main() {
     check('6. 处理完按钮恢复可点（不是一直挂在「处理中…」）', enabledAgain)
 
     /* ---------- 3. 产物进素材库：离开这一页也能找到 ---------- */
-    await page.locator('[data-wb-node="audio-music"]').click()
+    /* 判据落在「素材 → 本地」而不是原来的「音频 → 音乐」：
+       2026-11-15 起「音乐」是**预置曲库面板**（清单 + 试听），不再列本地素材；
+       而这条断言问的是"降噪产物有没有进素材库"，本地那一页才是它的归宿。 */
+    await page.locator('[data-wb-tab="media"]').click()
+    await sleep(400)
+    await page.locator('[data-wb-node="local"]').click()
     await sleep(1200)
     const rows = await page.locator('text=· 降噪').count().catch(() => 0)
     check('7. 素材库里真的多了一条「… · 降噪」记录', rows >= 1, `命中 ${rows} 处`)

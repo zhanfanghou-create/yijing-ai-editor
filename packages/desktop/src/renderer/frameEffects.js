@@ -15,7 +15,10 @@
  *    闸门 check-frame-effects 会从源码侧再钉一遍，防止有人后来加了 filter 类。
  */
 import table from '../shared/frameEffects.json' with { type: 'json' }
-import { fxFamily, fxCssVars, fxDurationMs } from '../shared/fxParams.js'
+import { fxFamily, fxCssVars, fxDurationMs, fisheyeScale } from '../shared/fxParams.js'
+
+/** 鱼眼预览位移强度（真源在 shared/fxParams.js，这里只做渲染层出口） */
+export { fisheyeScale }
 
 export const FRAME_EFFECTS = table.effects
 const BY_KEY = Object.fromEntries(FRAME_EFFECTS.map((item) => [item.key, item]))

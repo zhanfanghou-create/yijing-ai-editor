@@ -163,6 +163,158 @@ const GATES = [
     count: /已校验\s*(?<t>\d+)\s*条相对导入/
   },
   {
+    id: 'music-library',
+    name: '静态·预置音乐音效（清单完整性 · 缓存只认磁盘 · 面板与主进程接线）',
+    argv: [NODE, 'tools/check-music-library.mjs'],
+    // 稳定数字 38 = 12（清单：条数/唯一性/直链形态/时长/中文名/分类覆盖/重名）
+    //   + 10（缓存纯逻辑：路径 · 只认文件 · 索引清理 · 占用统计）
+    //   + 16（接线：左栏两节点 → App 透传 → 面板分支 → IPC → preload → 不点不下载）。
+    //
+    // 为什么它必须存在：这套功能的失效方式**全是静默的** ——
+    //   · 清单 id 撞车 ⇒ 两首共用一份缓存文件，点第二首播第一首；
+    //   · allowedMedia.add 排在 describeMedia 之后 ⇒ 缓存成功但播放 403，
+    //     表现是"下载完成、点了没反应"；
+    //   · 面板在 useEffect 里预取 ⇒ 一打开「音乐」就偷偷跑几百 MB。
+    // 三者都不会抛错、不影响构建，任何"页面不报错"的断言都放它们过。
+    expected: 38,
+    marker: /MUSIC_LIBRARY_OK/,
+    count: /MUSIC_LIBRARY_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'music-library-e2e',
+    name: '客户端 E2E（预置曲库：不点不下载 · 点一下真缓存 · 真出声 · 音效是另一份清单）',
+    argv: [NODE, 'tools/music-library-e2e.mjs'],
+    // 稳定数字 14 = 2(前置：清单/electron) + 4(面板渲染) + 1(不点不下载)
+    //   + 4(点一下 → 已缓存 / 本地地址 / currentTime 在走 / 播放态)
+    //   + 1(音效另一份清单) + 1(加入音频轨) + 1(无页面报错)。
+    //
+    // 为什么不能只靠上面的静态闸门：静态能证明"面板读了清单、ensure 只写在点击回调里"，
+    // 但证不了三件事 ——
+    //   · 卡片**真的**渲染出来了（清单对、过滤条件错，界面就是空的）；
+    //   · 点一下**真的**落盘并**真的**出声（`setPlaying` 写完就为真，声音可以一点没有
+    //     —— 所以判据取 `<audio>` 的 currentTime，不取 state）；
+    //   · 「音乐 / 音效」是两份不同清单（分组字段没透传时两页一模一样，且都不报错）。
+    //
+    // ⚠️ 依赖外网：音频源不可达时，下载与播放那 4 条记 SKIP（不是红）。
+    //    判据是 `reachable()`，"可达但下不下来"仍然算失败。
+    expected: 14,
+    marker: /MUSIC_LIB_E2E_OK/,
+    count: /MUSIC_LIB_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'audio-preview',
+    name: '静态·声音效果进预览（淡入淡出斜坡 · 节点计划 · 四处接线 · 界面文案）',
+    argv: [NODE, 'tools/check-audio-preview.mjs'],
+    // 稳定数字 35 = 7(淡入淡出数学：中点 / 淡出起点 / 叠加取小 / 夹取 / 边界 / 导出仍是 afade)
+    //   + 14（节点计划：中性 / 声像三档 / 增强六段 / 电话·机器人·电台 / 导出专属两项
+    //          / 倍频程→Q / 位深曲线 / 签名稳定）
+    //   + 14（接线：合成器投影 4 字段 · fade 折进 gain · Stage 三分支 · 依赖只放标量
+    //          / 拆链 · 引擎 createMediaElementSource / 声道分离 / 系数来源 / 中性早退
+    //          / 永久放弃 / 电平表 / vite 白名单 / 面板文案）
+    //
+    // 为什么它必须存在：这一整组的失效方式**全是静默的** ——
+    //   面板能拖、脏点亮、数字在变，而预览里一点声音变化都没有；成片反而是对的。
+    //   声音比画面更难发现（画面错了一眼能看出来，声音错了要逐段对比才听得出）。
+    expected: 35,
+    marker: /AUDIO_PREVIEW_OK/,
+    count: /AUDIO_PREVIEW_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'audio-preview-e2e',
+    name: '客户端 E2E（淡入淡出实测音量轨迹 · 声像左右声道 RMS · 花栗鼠不接管）',
+    argv: [NODE, 'tools/audio-preview-e2e.mjs'],
+    // 稳定数字 18 = 3(前置：ffmpeg / 素材 / electron) + 1(夹具)
+    //   + 5(淡入淡出：起点 0 / 爬升 / 满音量 / 淡出下降 / 不超 1)
+    //   + 1(中性不接管) + 3(声像：接管 / 左右 RMS / 拆链)
+    //   + 2(人声增强：接管 / 不重复乘音量) + 2(变声：花栗鼠不接管 / 机器人接管)
+    //   + 1(无页面报错)。
+    //
+    // 为什么不能只靠静态闸门：静态能证明"计划算得对、代码接了线"，
+    // 但证不了三件事 ——
+    //   · 音量真的随时间变化（判据取播放过程中的 `el.volume` 轨迹，不是赋值语句跑过）；
+    //   · 左右声道真的分了（判据取链路末端电平表实测的 L/R RMS，
+    //     不是"状态里存了 -100"）；
+    //   · 做不到的那两个（花栗鼠 / 低沉）**没有**偷偷接管元素。
+    expected: 18,
+    marker: /AUDIO_PREVIEW_E2E_OK/,
+    count: /AUDIO_PREVIEW_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
+    id: 'update-rules',
+    name: '静态·自动更新的纯逻辑（版本比较 · 选资产 · 校验值 · 交接参数）',
+    argv: [NODE, 'tools/check-update-rules.mjs'],
+    // 稳定数字 21 = 9(版本：v 前缀 / 后缀不污染三段 / 两段不猜 / 1.10>1.9 / 同版本 /
+    //          补丁位 / 同版本不算新 / 旧版本不算新 / 远端串解析不出来不提示)
+    //   + 7(校验值与资产：剥 sha256: / 非 sha256 不硬塞 / SHASUMS 按名取且容忍 `*` 与 `./dist/`
+    //          / 不在表里返回空 / 只认同名资产 / digest 翻译 / 找到 SHASUMS 地址)
+    //   + 2(describeRelease：新版号 + newer=true / 没正式安装包判 no-asset)
+    //   + 2(交接：命令行四个参数 / 同一份信息也走环境变量)
+    //   + 1(体积按 1024 进制一位小数，与设置页同口径)
+    //
+    // 为什么这 21 条值钱：这一族的失效**全是"静默不更新"** —— 用户不会报 bug，
+    // 只会觉得"这软件从来不提示新版本"。已踩过的两个真坑就长在这里：
+    //   · `isNewer` 内部把**版本对象**再 parse 一次 ⇒ `[object Object]` ⇒ 永远判"不是新版"；
+    //   · `formatSize` 期望值手算成 180.3（实为 180.2）—— 修的是期望值不是实现，
+    //     因为"按规格算"才是判据，"按被测函数算"等于自己证明自己。
+    expected: 21,
+    marker: /UPDATE_RULES_OK/,
+    count: /UPDATE_RULES_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'close-to-tray-e2e',
+    name: '客户端 E2E（点叉缩到通知栏 · 托盘能叫回来 · 设置关掉后真退出）',
+    argv: [NODE, 'tools/close-to-tray-e2e.mjs'],
+    // 稳定数字 15 = 3(启动态：窗口可见 / 托盘真建起来 / 菜单里有「退出」)
+    //   + 4(点叉后：进程活着 / 窗口没销毁 / 已隐藏 / 是隐藏而非最小化)
+    //   + 1(缩下去托盘还在) + 2(叫回来：重新可见 / 拿到焦点)
+    //   + 1(设置选「退出程序」后点叉真的关窗) + 1(全程无页面异常)
+    //   + 3(另一个实例：点叉仍缩下去 / 托盘「退出」真能退 / 退出码 0)。
+    //
+    // 为什么必须真机：这一改**改掉了用户最熟悉的那个操作**，而三种失效都不报错 ——
+    //   ① 拦截没接上（点叉直接退出，用户以为"没保存就没了"）；
+    //   ② 拦得太死（托盘的「退出」也退不掉，只能去任务管理器杀）——
+    //      成因是 `before-quit` 触发的 close 又被 `preventDefault` 取消，
+    //      所以 `quitting` 标志是这条链上不可省的一环；
+    //   ③ 叫不回来（窗口藏了、托盘不响应，软件变成孤儿进程）。
+    // 判据只取消费端：`isVisible()` / `isDestroyed()` / `isMinimized()` / `isFocused()`、
+    // Tray 运行时快照，以及调 `__yjaiTrayShow()` / `__yjaiTrayExit()` 之后的可见性与存活性
+    // （两个钩子调的都是托盘菜单**自己**的处理器，不是平行实现）。
+    // ⚠️ Electron **没有** `isSkipTaskbar()`（只有 setter）⇒ 第 7 条改判
+    // `isMinimized() === false`：hide 与 minimize 是两件事，最小化的窗口还占任务栏。
+    // ⚠️ 焦点不能"睡 600ms 再读"：单独跑绿、经 verify 串行跑红过 —— 改轮询 6s。
+    expected: 15,
+    marker: /TRAY_E2E_PASSED/,
+    count: /TRAY_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 4 * 60 * 1000
+  },
+  {
+    id: 'update-e2e',
+    name: '客户端 E2E（检查更新弹窗 → 真下载 → 校验 sha256 → 点安装后退出 / 坏包不过夜）',
+    argv: [NODE, 'tools/update-e2e.mjs'],
+    // 稳定数字 16 = 场景 A 10（弹窗出来 / 写的是「当前版本 -> 9.9.9」/ 显示体积 /
+    //          进度条出现 / 出现「立即重启并安装」/ 进度到 100 / 落在 userData/updates/<版本>/
+    //          / 字节数与发布源一致 / sha256 一致 / 点安装后应用退出）
+    //   + 场景 B 4（坏校验也能走到弹窗 / 弹窗明写原因 / **坏包没留在磁盘上** / 应用没退出）
+    //   + 场景 C 2（没有校验值时**不阻断** / 但界面必须照实说"没有提供校验值"）。
+    //
+    // 为什么场景 B 必须存在：校验不过却把文件留在盘上，下次会被当"已下载"直接复用 ——
+    // 于是用户永远装不上，且每次重试都"看起来在下载"。所以判据要的是**文件不存在**，
+    // 不是"报了错"。
+    // 为什么场景 C 必须存在：`download()` 在没有 sha256 时会放行（镜像常把 digest 抹掉，
+    // 硬拦等于没法更新），这条分支的注释写着"界面照实提示"—— 加上这条断言之前，
+    // 界面其实**什么都没说**，等于让用户以为校验过了。文案与实现不一致，只有闸门能钉住。
+    // 发布源是本机 http 假服务（`YJAI_UPDATE_API` / `YJAI_UPDATE_REPO` 覆盖），
+    // 全程不碰外网 —— 这条闸门在断网机器上也必须绿。
+    // 场景 A 的第 10 条（应用退出）与"安装器真的装完"是两件事：交接成功与否由
+    // `installer-silent` 那一道单独钉，这里只钉"覆盖前先把占文件的进程退掉"。
+    expected: 16,
+    marker: /UPDATE_E2E_PASSED/,
+    count: /UPDATE_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 5 * 60 * 1000
+  },
+  {
     id: 'imports-selftest',
     name: '自证·导入/绑定校验器本身有效（夹具）',
     argv: [NODE, 'tools/check-imports.selftest.mjs'],
@@ -635,7 +787,11 @@ const GATES = [
     // 这四条不变式错法**都不报错**：换源不换起点 / 源入点归零 / 倍速守恒（2 倍速 + 新素材
     // 10s ⇒ 占位上限 5s）/ 新素材更长时不撑大占位 / 探测失败不动时长 / 无 url 不给补丁。
     // 界面上看不出问题，只有拿数字对才抓得到 —— 所以必须抽成纯函数才能测。
-    expected: 77,
+    // 77 → 79：+2 条「默认铺满」。默认 size=30 / 上限 60 / 锚点 right-bottom 时，
+    // 上层素材永远只占画面一角，而且用户怎么拖都拖不满 —— 这是**规格**问题，
+    // 不是操作问题。判据直接算左边缘（铺满 ⇒ 0）与宽度（= 整幅），
+    // 期望值来自几何定义，不拿 boxOf 反算。
+    expected: 79,
     marker: /COMPOSITE_SELFTEST_PASSED/,
     count: /COMPOSITE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
@@ -907,7 +1063,7 @@ const GATES = [
   },
   {
     id: 'tray-runtime',
-    name: '客户端 E2E（托盘运行时：实例真建起来 / 有面积 / 菜单两项 / 关闭语义没被改成 hide）',
+    name: '客户端 E2E（托盘运行时：实例真建起来 / 有面积 / 菜单两项 / 收尾通道可用）',
     argv: [NODE, 'tools/tray-runtime-e2e.mjs'],
     // 稳定数字 8。上面那道 app-icon-wiring 读的是**源码文本**（`new Tray(` 在不在、
     // 路径字面量对不对、files 白名单），这道读的是**主进程里的活对象**。
@@ -915,8 +1071,11 @@ const GATES = [
     // new Tray 抛异常被吞，编辑器照常启动，静态闸门照样全绿 —— 用户那边只是"没有托盘"。
     // 反向验过：把 build/icon.ico 挪走，第 2/3/4/5/6/7 条立刻红，报错是
     // `Failed to load image from path '...build\icon.ico'`；放回去归零。
-    // 第 8 条盯的是"托盘把 close 改成 hide"——那会让全套 E2E 挂在进程不退出上，
-    // 对用户则是"点了叉关不掉"，必须单独有一条拦。
+    // 第 8 条原先是"托盘把 close 改成 hide"的反向护栏（名字写着「关闭语义没被改成 hide」）。
+    // 2026-11-15 产品决定改了：点叉**默认缩到托盘**，那条护栏的前提没了。
+    // 更要紧的是它从来**证不了**自己写的话 —— 判据用 `app.close()`，那是杀进程、
+    // 不走 close 事件，close 怎么改它都绿。现在第 8 条只声称"收尾通道可用"（防止套件挂死），
+    // 真实退出路径交给 close-to-tray-e2e 的第 11 条（设置改「退出程序」）与第 14 条（托盘「退出」）。
     expected: 8,
     marker: /TRAY_RUNTIME_E2E_OK/,
     count: /TRAY_RUNTIME_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
@@ -1332,7 +1491,13 @@ const GATES = [
     // 抓手能被 elementFromPoint 命中（20，旧的假抓手必红）/ 按下不吸到指针中心（21）/
     // 抓手上拖 90px 换算成秒（22，用 BASE_DPS=46×zoom 这个规格常量算期望，
     // 不拿被测函数反算）/ 越界夹到 0（23）/ 拖动不许挪动片段（24，负对照）。
-    expected: 24,
+    // 24 → 29（2026-11-14）：G 段「轨道空白 = 选择 / 框选」。
+    // 起因是 Jason 报"鼠标不移动到播放条上不应该是拖动效果，应该是选择或者框选"：
+    // 空白处也走 startScrub，整片轨道都是拖动语义，`is-scrubbing` 的
+    // `cursor: ew-resize !important` 还把所有光标盖掉。五条分工：
+    // 空轨可用（25）/ 按下不进拖动语义（26）/ 矩形真的画出来且有命中（27）/
+    // 松手真的多选（28，少了这条"画了没落到选中"也算绿）/ 标尺仍然能拖播放头（29，负对照）。
+    expected: 29,
     marker: /TIMELINE_NAV_E2E_OK/,
     count: /TIMELINE_NAV_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -2144,6 +2309,29 @@ const GATES = [
     timeoutMs: 6 * 60 * 1000
   },
   {
+    id: 'pip-edit-e2e',
+    name: '客户端 E2E（上层素材：默认铺满 / 选框贴边 / 拖角钉对角 / 右栏调整生效 / 分离音频）',
+    argv: [NODE, 'tools/pip-edit-e2e.mjs'],
+    // 稳定数字 22。为什么这五件事必须各自有判据（它们全都是"看着有、其实没接"）：
+    //   ① 上层素材只占画面一角 —— 默认 size=30 / 上限 60 / 锚点右下，怎么拖都铺不满；
+    //      这是**规格**问题，不是操作问题，判据只能量像素（盒宽 = 画布宽、左边缘贴 0）。
+    //   ② 拖角绕**中心**缩 —— 被拖的边跟手了，对角也在动；判据是"对角像素不动"。
+    //   ③ 选框拿不到盒子高度（高 0）或丢了 transform（整体偏到画布外）——
+    //      症状都是"四个手柄叠在一条线上 / 手柄在但点不动"，只能靠矩形比对抓。
+    //   ④ 右栏对叠加轨开放的调色/调节，预览那条链是**第三份手抄实现**，
+    //      只抄了特效 ⇒ 滑杆能动、脏点亮、数字在变，画面一像素不动；
+    //      而导出侧走 describeLayer 全字段，成片反而是对的。
+    //      所以同时断言"打到了上层"和"没串到主画面"（少了后一条，打到哪一层都算绿）。
+    //   ⑤ 分离音频：要么没入口，要么分出去了原片段还在响（同一段声音两遍），
+    //      要么删掉音频片段后原片段永远静音（画面在播、完全没声、毫无提示）。
+    // 判据一律读消费端：getBoundingClientRect（像素）、computed filter/opacity、
+    //   时间线片段 DOM 上的 data-clip-gain / data-clip-detached。
+    expected: 22,
+    marker: /PIP_EDIT_OK/,
+    count: /PIP_EDIT_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/,
+    timeoutMs: 6 * 60 * 1000
+  },
+  {
     id: 'curve-speed',
     name: '客户端 E2E（曲线变速：预设 / 拖点 / 时间线占位 / preview playbackRate / 按标记卡点）',
     argv: [NODE, 'tools/curve-speed-e2e.mjs'],
@@ -2558,7 +2746,10 @@ const GATES = [
     //   （textStyle/sticker/material/pluginTab…）相同 ⇒ 报红；手风琴父子关系不算。
     // 95 → 96（2026-11-09 晚）：「字幕」下新增「字幕预设」节点（857 款口播动态排版）。
     //   左栏每加一个节点这一格就 +1 —— 断言总数 = 11（全局）+ 节点数。
-    expected: 96,
+    // 96 → 97（2026-11-15）：「音频」下新增「音效」节点（与「音乐」共用预置曲库面板，
+    //   靠节点上的 `music` 字段分组）。同日「音乐」从"筛本地音频素材"改成曲库面板，
+    //   于是 `music` 也进了区分字段表 —— 否则"同屏判重"会把这两个入口判成重复。
+    expected: 97,
     marker: /WORKBENCH_TREE_CHECK_OK/,
     count: /WORKBENCH_TREE_CHECK_STATS\s+ok=(?<p>\d+)\s+total=(?<t>\d+)\s+problems=(?<f>\d+)/
   },
@@ -2823,7 +3014,10 @@ const GATES = [
     //   加完节点没改这张表，B 段「左栏没有表外节点」当场把新节点判成"混进了没人点的东西"。
     //   这正是把期望值写死在脚本里（不从 AssetTree import）的价值 —— 从被测表取期望，
     //   多一个入口它也会跟着"通过"。
-    expected: 256,
+    // 256 → 258（2026-11-15「音频」页加「音效」节点）：**没有新标签**，1 节点×2 = 2。
+    //   同一轮「音乐」从"筛本地素材"换成预置曲库面板，两页中栏都是真内容
+    //   （日志里 audio-music 424 字 / audio-sfx 607 字），"非空壳"是真过的。
+    expected: 258,
     marker: /TABS_E2E_OK/,
     count: /TABS_E2E_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },
@@ -2937,6 +3131,88 @@ const GATES = [
     expected: 7,
     marker: /PREVIEW_FX_SELFTEST_OK/,
     count: /PREVIEW_FX_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'polish',
+    name: '静态·查缺补漏 10 项交互/视觉修复的接线（角标/转场/鱼眼/扫描线/选中色/双击/播完停/标记/帮助跳转）',
+    argv: [NODE, 'tools/check-polish.mjs'],
+    // 稳定数字 11 = 视觉 6 项（角标拉伸拆成"数值判据+接线判据"两条，共 7 条：
+    //   视觉1 角标 / 视觉2 转场 / 视觉3a 鱼眼数值 / 视觉3b 鱼眼接线 /
+    //   视觉4 扫描线 / 视觉5 角标 flex / 视觉6 选中色）+ 交互 4 条。
+    // 判据读源码/CSS 文本、期望值写死在脚本里，负对照（真实源码改坏一处）已验红在对的条目。
+    // 为什么是静态：这 10 项大多是 CSS 接线/类名/属性，真机 E2E 由各自既有闸门覆盖
+    //   （preview-effects / workbench-buttons / timeline-play），这里钉的是"别被改回去"。
+    expected: 11,
+    marker: /POLISH_OK/,
+    count: /POLISH_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'polish-selftest',
+    name: '自证·查缺补漏判据可分辨（正控制组全绿 · 每处改坏一条都红在对的断言上）',
+    argv: [NODE, 'tools/check-polish.mjs', '--selftest'],
+    // 稳定数字 19 = 5 条正控制组 + 14 条反控制组/判据自身（纯逻辑，不起 Electron）。
+    // 每处修复都有"改坏一处必须红在它自己那条"的负对照 —— 证明判据不是恒绿/自证。
+    expected: 19,
+    marker: /POLISH_SELFTEST_OK/,
+    count: /POLISH_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'draft-view',
+    name: '静态·首页草稿视图切换接线（真按钮/data-view/is-list 真改布局/进剪辑契约未破坏）',
+    argv: [NODE, 'tools/check-draft-view.mjs'],
+    // 稳定数字 5 = 5 条静态判据：state 默认 grid / 两个真按钮接 onClick / 容器切 is-list /
+    //   is-list 真把 4 列网格改单列 / .home-draft-card 进剪辑契约仍在。
+    // 背景：网格·列表两图标原是纯装饰（CSS 备了 cursor:pointer 却没接 onClick），点了没反应。
+    // 判据读源码文本、期望值写死；负对照（装饰版/摆设 class）见 selftest。
+    expected: 5,
+    marker: /DRAFT_VIEW_OK/,
+    count: /DRAFT_VIEW_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'draft-view-selftest',
+    name: '自证·首页草稿视图切换判据可分辨（正控制组全绿 · 装饰版/摆设 class 等改坏一条都红在对的断言）',
+    argv: [NODE, 'tools/check-draft-view.mjs', '--selftest'],
+    // 稳定数字 11 = 5 条正控制组 + 6 条负控制组（state 初值/按钮 onClick/纯装饰/容器 class/is-list 单列/卡片 onClick）。
+    expected: 11,
+    marker: /DRAFT_VIEW_SELFTEST_OK/,
+    count: /DRAFT_VIEW_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'consistency',
+    name: '静态·跨屏一致性（首页框架色=工作台中性灰阶同源 · 右键删除项前移 · 无重复分隔线）',
+    argv: [NODE, 'tools/check-consistency.mjs'],
+    // 稳定数字 5 = 框架色令牌 5 项全=规格值 / 无废弃偏紫冷黑残留 / 品牌紫强调保留 /
+    //   右键删除项前移（停用之后、前 1/2、danger+data-ctx 在）/ 无连续分隔线。
+    // 期望值来自工作台 workbench.css :root 的中性灰阶规格，不从 home.css 推导。
+    expected: 5,
+    marker: /CONSISTENCY_OK/,
+    count: /CONSISTENCY_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'consistency-selftest',
+    name: '自证·跨屏一致性判据可分辨（正控制组全绿 · 框架色回退/紫灰残留/删除项回底/双分隔线都判红）',
+    argv: [NODE, 'tools/check-consistency.mjs', '--selftest'],
+    // 稳定数字 10 = 5 正控制组 + 5 负控制组。
+    expected: 10,
+    marker: /CONSISTENCY_SELFTEST_OK/,
+    count: /CONSISTENCY_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'ui-polish',
+    name: '静态·UI 精修判据（对比度 9 处消费 muted 且独立复算 ≥4.5:1 · 交互 13 处按压/焦点/热区接线）',
+    argv: [NODE, 'tools/check-ui-polish.mjs'],
+    expected: 22,
+    marker: /UI_POLISH_OK/,
+    count: /UI_POLISH_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'ui-polish-selftest',
+    name: '自证·UI 精修判据可分辨（正控制组全绿 · 改回 faint/令牌改暗/删按压规则都判红）',
+    argv: [NODE, 'tools/check-ui-polish.mjs', '--selftest'],
+    // 稳定数字 25 = 22 正控制组 + 3 负控制组。
+    expected: 25,
+    marker: /UI_POLISH_SELFTEST_OK/,
+    count: /UI_POLISH_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
     id: 'preview-aspect',
@@ -3338,7 +3614,11 @@ const GATES = [
     //   四条：catalog 给出 family+path / 写入并**落盘可读回** /
     //   中文家族名必须报错（渲染层会静默忽略）/ 不存在的路径必须报错
     //   （导出侧会悄悄退回系统字体）。后两条是负对照，缺了这两条等于没验。
-    expected: 19,
+    // 19 → 22（2026-11-15）：预置曲库补上了 agent 侧入口（`add_clips` 的 `musicId`）。
+    //   三条：catalog 能列出 256 条 id / 给 id 就落成音频轨片段 / 片段名是中文且
+    //   素材记录带 `yjai-media://` 地址（url 为空就是"草稿能开、画面全黑"那个老坑）。
+    //   ⚠️ 第一次要真下载，外网不可达时这三条记 skip（源不可达 ≠ 功能坏了）。
+    expected: 22,
     marker: /MCP_GAP_OPS_OK/,
     count: /MCP_GAP_OPS_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
   },

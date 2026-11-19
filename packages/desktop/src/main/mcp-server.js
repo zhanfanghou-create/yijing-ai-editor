@@ -239,7 +239,7 @@ const TOOLS = {
 
   yijing_add_clips: {
     ...S(
-      '把音视频/图片追加到时间线。track：video=主轨、overlay=叠加轨（画中画）、audio=音频轨。不给 duration 就用素材真实时长；offset 是从素材第几秒开始取。每段还能带 patch 直接套调色/特效/位置（省一次 update）。',
+      '把音视频/图片追加到时间线。track：video=主轨、overlay=叠加轨（画中画）、audio=音频轨。不给 duration 就用素材真实时长；offset 是从素材第几秒开始取。每段还能带 patch 直接套调色/特效/位置（省一次 update）。预置曲库的一条可以直接给 musicId（取值查 yijing_catalog 的 music），首次会自动下载并永久缓存到本机 —— 与界面「音频 → 音乐 / 音效」点「加入」完全同一条路径。',
       {
         draftId: str('目标草稿 id'),
         clips: {
@@ -249,6 +249,7 @@ const TOOLS = {
             type: 'object',
             properties: {
               path: str('素材绝对路径'),
+              musicId: str('预置曲库的 id（如 mus-127 / sfx-1489，查 yijing_catalog 的 music）。给了它就不需要 path —— 没缓存过会自动下载'),
               track: str('video / overlay / audio'),
               start: num('时间线起点（秒），默认 0'),
               duration: num('片段时长（秒），省略用素材真实时长'),
@@ -403,10 +404,10 @@ const TOOLS = {
 
   yijing_timeline_op: {
     ...S(
-      '时间线结构操作。op：move（换轨/挪时间）、split（at 处切开）、trim（from/to 掐头去尾）、duplicate（复制到自身之后）、group/ungroup（组合）、compound（合成复合片段）/expand（拆开）、multicam（多机位）/cut（切机位）、region-copy/region-paste/region-delete/region-trim（时间区域操作）、reorder（挪到某个时间点）、layer（叠加轨上移/下移一层，to 或 name 给 up/down）。',
+      '时间线结构操作。op：move（换轨/挪时间）、split（at 处切开）、trim（from/to 掐头去尾）、duplicate（复制到自身之后）、group/ungroup（组合）、compound（合成复合片段）/expand（拆开）、multicam（多机位）/cut（切机位）、region-copy/region-paste/region-delete/region-trim（时间区域操作）、reorder（挪到某个时间点）、layer（叠加轨上移/下移一层，to 或 name 给 up/down）、detach-audio（把这一段的声音拆到音频轨上：原片段静音、音频轨多一条同源同区间的片段，删掉音频片段会把原片段音量还原）。',
       {
         draftId: str('草稿 id'),
-        op: str('move/split/trim/duplicate/group/ungroup/compound/expand/multicam/cut/region-copy/region-paste/region-delete/region-trim/reorder/layer'),
+        op: str('move/split/trim/duplicate/group/ungroup/compound/expand/multicam/cut/region-copy/region-paste/region-delete/region-trim/reorder/layer/detach-audio'),
         clipId: str('目标片段 id'),
         clipIds: { type: 'array', items: { type: 'string' }, description: '批量操作的片段 id' },
         at: num('时间点（秒）：split 的切点 / cut 的位置 / paste 的落点 / reorder 的新起点'),

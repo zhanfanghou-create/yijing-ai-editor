@@ -3,22 +3,30 @@
  *
  * 基准画布 1220x720，几处关键尺寸是逐像素量出来的，改之前先读注释里的实测值：
  *
- *   侧栏宽 236 / 底 #303033          主区底 #1A1A20 / 左右内边距 24
+ *   侧栏宽 236 / 底 #303030          主区底 #1C1C1C / 左右内边距 24
  *   顶栏高 56                        品牌方块 50x50 / 落在 y53..103
- *   导航项   高 48 / 项间距 56 / 选中底 #444447
+ *   导航项   高 48 / 项间距 56 / 选中底 #3B3B3B
  *            图标墨迹 20x20 落 x42..61（纯白）；文字墨迹左沿 x80
- *   工具卡   图标 48x48 底 #2C2C31    周期 112px / 标题带 42 / 文字带 23
+ *   工具卡   图标 48x48 底 #262626    周期 112px / 标题带 42 / 文字带 23
+ *
+ * ⚠️ 框架底色在 2026-11-19 从中性灰阶统一：旧值（#1A1A20 / #303033 / #2C2C31 /
+ *   #444447 / #403748）是**偏紫冷黑**——工作台 workbench.css 早在 10-22 就整批弃用了
+ *   这套色（"偏紫看着高级，但放到白色素材缩略图旁显脏、与灰阶素材色温打架"），
+ *   首页却还留着，于是从首页进剪辑器时全屏色温跳变。现在首页框架色与工作台同源：
+ *   主区 #1C1C1C / 侧栏 #303030（= --wb-bar）/ 卡片 #262626（= --wb-panel）/ 选中 #3B3B3B（= --wb-card）。
+ *   ⚠️ 只中性化"框架底色"；品牌紫强调（--h-accent、工具卡/模板卡的渐变封面）保留 ——
+ *   工作台也用紫作强调色（--wb-accent），紫不是问题，偏紫的**灰**才是。
  *
  * 装饰图一律用 CSS 渐变与内联 SVG 重绘，不用任何第三方位图素材。
  * 左栏导航图标是自绘 SVG（见 ownIcons.jsx 与 MAPPING.json 里 set:'home' 的条目）。
  */
 
 .home {
-  --h-bg: #1a1a20;
-  --h-rail: #303033;
-  --h-tile: #2c2c31;
-  --h-nav-on: #444447;
-  --h-login: #403748;
+  --h-bg: #1c1c1c;
+  --h-rail: #303030;
+  --h-tile: #262626;
+  --h-nav-on: #3b3b3b;
+  --h-login: #3b3b3b;
   --h-text: #e8e8e9;
   --h-muted: #9a9aa0;
   --h-dim: #75757b;
@@ -136,6 +144,12 @@
   background: #3a3a3f;
 }
 
+/* 切换栏目按下瞬间的反馈：选中态要点击后才变，这里用纯 filter 补一档按压感，
+   不动配色令牌、不改布局，选中态(data-active)依然由自己的规则接管。 */
+.home-nav-item:active {
+  filter: brightness(0.92);
+}
+
 .home-nav-item[data-active='true'] {
   background: var(--h-nav-on);
   /* 参考里选中项的字比未选中白一档：未选中项墨迹峰值 229（≈ #E8E8E9），
@@ -210,7 +224,7 @@
   background-repeat: no-repeat, no-repeat;
   background-position: right center, left top;
   background-size: auto 100%, 100% 100%;
-  /* ⚠️ 参考这一格**没有外发光**：卡外 y696 起就是侧栏底色 #303033。
+  /* ⚠️ 参考这一格**没有外发光**：卡外 y696 起就是侧栏底色 #303030。
      原来那层 `0 8px 20px` 的青光会一路渗到 y708，于是「卡片高度」会被量成 103 而不是 90，
      而且它在网格差异图上正是那块最大的红。 */
 }
@@ -753,7 +767,7 @@
 }
 
 .home-tools-more:hover {
-  background: #4a4a50;
+  background: #4a4a4a;
 }
 
 .home-sec-head {
@@ -845,15 +859,40 @@
 .home-viewswitch {
   display: inline-flex;
   align-items: center;
-  gap: 14px;
+  gap: 4px;
   color: var(--h-muted);
 }
 
-.home-viewswitch svg {
+/* 视图切换是真实可点的按钮，不是装饰图标。热区给到 24px，鼠标与键盘都能操作。 */
+.home-view-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
 }
 
-.home-viewswitch svg[data-on='true'] {
+.home-view-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.home-view-btn:focus-visible {
+  outline: 1px solid var(--h-text);
+  outline-offset: 1px;
+}
+
+/* 网格/列表切换的按压反馈：纯 transform，缩到 0.92 给出"按下"的即时感，
+   24px 热区与 focus 环都不受影响。 */
+.home-view-btn:active {
+  transform: scale(0.92);
+}
+
+.home-view-btn[data-on='true'] {
   color: var(--h-text);
 }
 
@@ -886,7 +925,9 @@
 .home-empty-text {
   margin: 0 0 40px;
   font-size: 13px;
-  color: var(--h-dim);
+  /* 空态引导语是新用户的第一条指引，dim(#75757b) 在主区底 #1c1c1c 上仅 3.72:1；
+     改 muted → 6.09:1。令牌数值不动（首页框架色仍是对齐工作台的中性灰）。 */
+  color: var(--h-muted);
 }
 
 /* ===================== 二级页（草稿 / 模板 / 工具箱） ===================== */
@@ -913,7 +954,8 @@
 
 .home-page-sub {
   font-size: 13px;
-  color: var(--h-dim);
+  /* 二级页副标题，dim 3.72:1 → muted 6.09:1；与 20px 的 h2 仍有字级层级差。 */
+  color: var(--h-muted);
 }
 
 .home-page-actions {
@@ -956,7 +998,7 @@
 }
 
 .home-draft-row:hover {
-  background: #34343a;
+  background: #343434;
 }
 
 .home-draft-open {
@@ -1045,7 +1087,13 @@
 }
 
 .home-draft-card:hover {
-  background: #34343a;
+  background: #343434;
+}
+
+/* 进入剪辑的主入口，按下给一档轻微缩放反馈；
+   transform 只作用视觉，不改网格里卡片的占位。 */
+.home-draft-card:active {
+  transform: scale(0.99);
 }
 
 .home-draft-card-art {
@@ -1069,7 +1117,34 @@
 .home-draft-card em {
   font-style: normal;
   font-size: 11px;
-  color: var(--h-dim);
+  /* 草稿修改时间：dim 在卡片底 #262626 上 3.31:1 → muted 5.41:1，
+     与 13px/550 的 b 形成字号+字色双层级。 */
+  color: var(--h-muted);
+}
+
+/* 列表视图：同一份 DOM 换成横向行，名称与元信息并排，扫名字更快。
+   只改布局不改类名 / onClick —— check-preview-aspect 依旧能点 .home-draft-card 进剪辑。 */
+.home-draft-cards.is-list {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.home-draft-cards.is-list .home-draft-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+}
+
+.home-draft-cards.is-list .home-draft-card-art {
+  flex: 0 0 46px;
+  width: 46px;
+  height: 34px;
+  margin-bottom: 0;
+}
+
+.home-draft-cards.is-list .home-draft-card b {
+  flex: 1 1 auto;
 }
 
 /* ---- AI 模板 ---- */
@@ -1095,7 +1170,7 @@
 }
 
 .home-tpl:hover {
-  background: #34343a;
+  background: #343434;
 }
 
 /* 预览位：外框铺该能力的色调，里面是「按模板比例取景」的缩略镜位。
@@ -1191,7 +1266,7 @@
 }
 
 .home-cap:hover {
-  background: #34343a;
+  background: #343434;
 }
 
 .home-cap-ico {
@@ -1223,7 +1298,8 @@
 .home-cap-text em {
   font-style: normal;
   font-size: 11px;
-  color: var(--h-dim);
+  /* 能力卡描述，dim 3.31:1 → muted 5.41:1。 */
+  color: var(--h-muted);
 }
 
 /* 首页里的拖拽遮罩沿用 App 的 .drop-veil，这里只补一层底色适配 */

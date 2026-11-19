@@ -57,7 +57,7 @@ import {
 
 export const WB_TABS = [
   { key: 'media', label: '素材', Icon: IconMedia, hint: '本地导入的素材' },
-  { key: 'audio', label: '音频', Icon: IconMusic, hint: '提取音频与本地音乐' },
+  { key: 'audio', label: '音频', Icon: IconMusic, hint: '提取音频、音乐与音效' },
   { key: 'text', label: '文字', Icon: IconText, hint: '标题、花字与文字模板' },
   /* 「贴纸」：内置 140 枚表情/手势/装饰贴纸（Apache-2.0，随包离线）。
      它排在「文字」之后，因为两者都是"叠在画面上的元素"；素材是本地文件、

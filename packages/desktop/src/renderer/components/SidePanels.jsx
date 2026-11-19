@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconMic, IconPlugin, IconPlus, IconRefresh, IconSearch, IconSparkle, IconTrash, IconWand } from '../icons.jsx'
+import { IconAddSquare, IconAlert, IconCheck, IconCoins, IconDownload, IconExternal, IconFolder, IconMic, IconMusic, IconPause, IconPlay, IconPlugin, IconPlus, IconRefresh, IconSearch, IconSparkle, IconTrash, IconVolume, IconWand } from '../icons.jsx'
 import { isDesktop } from '../platform.js'
 /* 内置边框库：清单进程内缓存，预览层（Stage.jsx）用的是同一份 */
 import { borderCatalog, ensureBorderCatalog, resetBorderCatalog } from '../borderCatalog.js'
@@ -7,6 +7,8 @@ import { borderCatalog, ensureBorderCatalog, resetBorderCatalog } from '../borde
 import { loadStickerCatalog, resetStickerCatalog } from '../stickerIndex.js'
 /* 模板：数据在 shared/templates.json，翻译成片段的纯函数在 shared/templates.js */
 import { groupsOf as templateGroups, listTemplates, templatesOfGroup } from '../../shared/templates.js'
+/* 预置音乐 / 音效清单：随包发布，**断网也能浏览**（音频本体点一次才下，见 main/music.js） */
+import MUSIC_CATALOG from '../../shared/musicCatalog.json'
 /* 智能包装：词库判定 + 成套方案都在 shared/packaging.js（纯逻辑，可脱机自测） */
 import {
   PACK_LEVELS,
@@ -173,6 +175,8 @@ export default function SidePanels(props) {
     onDetectFace,
     /* 提取音轨这类本地工具要把产物放回素材库 */
     onAddAsset,
+    /* 「提取音频」页的第二个动作：把声音直接拆到音频轨（与右键「分离音频」同一条路径） */
+    onDetachAudio,
     /* 参与导出的片段（App 已按轨道开关 / 停用状态结算过）。
        缺省回退 clips：这样旧的调用点不传也不会崩，只是拿全量。 */
     renderClips = null,
@@ -183,6 +187,8 @@ export default function SidePanels(props) {
     playhead = 0,
     /* 「插件」左栏三项（我的插件 / 我的边框 / 我的贴纸）共用一个面板，靠它分 */
     pluginTab = 'mine',
+    /* 「音频 → 音乐 / 音效」共用同一个面板，靠它分（'music' | 'sfx'） */
+    musicGroup = 'music',
     /* 插件装/删/启停之后 +1。贴纸与边框面板用它当 React key 强制重挂载 ——
        那两个面板都是"有缓存就不重拉"，不清掉就会"插件页说装好了、边框页还是 24 款"。 */
     packsVersion = 0,
@@ -256,8 +262,13 @@ export default function SidePanels(props) {
         selectedClip={selectedClip}
         activeClip={activeClip}
         onAddAsset={onAddAsset}
+        onDetachAudio={onDetachAudio}
       />
     )
+  }
+  /* 「音频 → 音乐 / 音效」：预置曲库。清单在本地、音频点一次才下（永久缓存） */
+  if (mode === 'music-library') {
+    return <MusicPanel group={musicGroup} onAddToTimeline={onAddToTimeline} />
   }
   if (mode === 'stock') return <StockPanel assets={assets} onAddToTimeline={onAddToTimeline} />
   /* 智能抠像：本机人像分割，产物是一条透明素材（图片 PNG / 视频 WebM-alpha） */
@@ -1158,7 +1169,7 @@ function SubtitleTools({ clips, selectedClip, onImportSubtitle, onExportSubtitle
  * 走的是本机 ffmpeg（`media.extractAudio`），不联网、不消耗任何额度 ——
  * 开源版所有面板都是这一类：能用本机算力做完的事就在本机做完。
  */
-function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
+function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset, onDetachAudio }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [dnBusy, setDnBusy] = useState(false)
@@ -1318,6 +1329,26 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
               {busy ? '提取中…' : '提取音轨'}
             </button>
           </div>
+          {/* 两种结果分两个按钮，因为它们导向不同去处：
+              提取音轨 = 进素材库（以后要用得再拖一次），
+              分离到音频轨 = 当场在片段下面长出一条同区间的音频片段。
+              以前只有前一种，用户以为"分离不了"——其实是他要的那件事根本没入口。 */}
+          <div className="list-item">
+            <div className="grow">
+              <strong>分离到音频轨</strong>
+              <small>画面留在原轨，声音独立成一条，可单独调音量 / 淡入淡出</small>
+            </div>
+            <button
+              className="btn"
+              type="button"
+              disabled={!cut || !onDetachAudio || cut.track === 'audio' || cut.kind === 'image'}
+              onClick={() => cut && onDetachAudio && onDetachAudio(cut.id)}
+              data-detach-audio
+              title="把这一段的声音拆到音频轨上（原片段自动静音，删掉音频片段会还原）"
+            >
+              分离音频
+            </button>
+          </div>
         </div>
       ) : (
         <div className="empty">先在时间线上选中一个片段（或把播放头放到它上面）再提取。</div>
@@ -1353,6 +1384,260 @@ function ExtractAudioPanel({ selectedClip, activeClip, onAddAsset }) {
       </div>
       <div className="wb-muted-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
         素材很干净时开了会显得发闷，它适合噪声大到听不清词的情况。
+      </div>
+    </Shell>
+  )
+}
+
+/* ------------------------------ 音乐 / 音效 ------------------------------ */
+
+/** 秒 → `0:07` / `2:14`（曲库里比"7.0s"更像一张曲目表） */
+function clockText(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+function mbText(bytes) {
+  const n = Number(bytes) || 0
+  if (!n) return '0 MB'
+  return n >= 1024 * 1024 * 1024 ? `${(n / 1024 / 1024 / 1024).toFixed(1)} GB` : `${Math.round(n / 1024 / 1024)} MB`
+}
+
+/**
+ * 预置曲库（「音频 → 音乐 / 音效」共用）。
+ *
+ * 与"在线曲库"的区别只有一条：**清单在本地，音频点一次才下**。
+ *   · 打开面板不发任何网络请求 —— 断网时分类、名字、时长照样都在（只是试听不了）；
+ *   · 点某一条试听 → 那一首下到 `userData/music-cache/`，之后永久留在本机，
+ *     再点就是本地读（毫秒级）。不预热、不预下载整包：117 首音乐约 470MB，
+ *     "预置"的意思是"随手能挑"，不是"偷偷占掉半张硬盘"。
+ *   · 判断"缓存过没有"只认主进程报回来的磁盘状态（`music:status`），
+ *     面板自己**不猜** —— 猜的结果是重装/换目录后一堆"已缓存"其实点不出声。
+ *
+ * ⚠️ 试听走一个 `<audio>` 元素，`src` 是主进程给的 `yjai-media://` 地址。
+ *    那个协议会把文件流式吐出来（支持 Range），所以长音乐不用等整首下完就能播。
+ */
+function MusicPanel({ group = 'music', onAddToTimeline }) {
+  const kind = group === 'sfx' ? 'sfx' : 'music'
+  const cats = useMemo(
+    () => (Array.isArray(MUSIC_CATALOG.cats) ? MUSIC_CATALOG.cats.filter((c) => c.kind === kind) : []),
+    [kind]
+  )
+  const [cat, setCat] = useState(cats[0] ? cats[0].key : '')
+  /* 切到「音效」时分类表整体换了一套，旧的选中项可能不存在 —— 不修就会看到空列表 */
+  useEffect(() => {
+    if (cats.length && !cats.some((c) => c.key === cat)) setCat(cats[0].key)
+  }, [cats, cat])
+
+  const [cache, setCache] = useState({})
+  const [usage, setUsage] = useState({ count: 0, bytes: 0 })
+  /* 正在下的那几条：`{ [id]: percent }` */
+  const [jobs, setJobs] = useState({})
+  const [playing, setPlaying] = useState('')
+  const [note, setNote] = useState('')
+  const audioRef = useRef(null)
+
+  const refresh = useCallback(async () => {
+    const res = await window.yjai?.music?.status?.().catch(() => null)
+    if (res && res.ok) {
+      setCache(res.map || {})
+      setUsage(res.usage || { count: 0, bytes: 0 })
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const off = window.yjai?.music?.onProgress?.((payload) => {
+      if (!payload || !payload.id) return
+      setJobs((prev) => ({ ...prev, [payload.id]: Math.max(0, Math.min(100, Number(payload.percent) || 0)) }))
+    })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [refresh])
+
+  /* 切分类 / 换页签时停掉正在播的那首：留着播会让"我在听哪一首"完全错位 */
+  useEffect(() => {
+    const el = audioRef.current
+    if (el) el.pause()
+    setPlaying('')
+  }, [kind, cat])
+
+  const list = useMemo(
+    () => (Array.isArray(MUSIC_CATALOG.items) ? MUSIC_CATALOG.items.filter((it) => it.kind === kind && it.cat === cat) : []),
+    [kind, cat]
+  )
+
+  const ensureOne = useCallback(
+    async (item) => {
+      if (!window.yjai?.music?.ensure) {
+        setNote('试听需要桌面端（浏览器预览里没有本地缓存）')
+        return null
+      }
+      setJobs((prev) => ({ ...prev, [item.id]: prev[item.id] ?? 0 }))
+      const res = await window.yjai.music.ensure(item.id).catch(() => null)
+      setJobs((prev) => {
+        const next = { ...prev }
+        delete next[item.id]
+        return next
+      })
+      if (!res || !res.ok) {
+        setNote((res && res.error) || '这一条没能取到，检查一下网络后再点一次')
+        return null
+      }
+      setCache((prev) => ({ ...prev, [item.id]: { cached: true } }))
+      refresh()
+      return res.asset || null
+    },
+    [refresh]
+  )
+
+  const audition = useCallback(
+    async (item) => {
+      const el = audioRef.current
+      setNote('')
+      if (playing === item.id) {
+        if (el) el.pause()
+        setPlaying('')
+        return
+      }
+      if (jobs[item.id] != null) return /* 正在下这一条，别开第二个下载 */
+      const asset = await ensureOne(item)
+      if (!asset || !el) return
+      el.src = asset.url
+      el.currentTime = 0
+      /* ⚠️ 必须等 play() 真的 resolve 才算"在播"。
+         负对照实测过：协议层回 403 时 play() 会 reject，而"先 setPlaying 再 catch"
+         的写法会让卡片一直显示暂停图标 —— 用户看到的是"正在播放"、
+         耳朵里一点声音没有，还找不到原因（提示条那行字很容易被忽略）。 */
+      try {
+        await el.play()
+        setPlaying(item.id)
+      } catch {
+        setPlaying('')
+        setNote('这一段放不出来（文件可能被占用或读取被拒绝）')
+      }
+    },
+    [ensureOne, jobs, playing]
+  )
+
+  const addToTimeline = useCallback(
+    async (item) => {
+      const asset = await ensureOne(item)
+      if (!asset) return
+      onAddToTimeline?.(asset)
+      setNote(`已放进音频轨：${item.name}`)
+    },
+    [ensureOne, onAddToTimeline]
+  )
+
+  const cachedCount = list.filter((item) => cache[item.id] && cache[item.id].cached).length
+
+  return (
+    <Shell>
+      {/* 单个播放器复用：每张卡各建一个 <audio> 会在切分类时积一堆不出声的元素 */}
+      <audio
+        ref={audioRef}
+        data-music-audio="1"
+        onEnded={() => setPlaying('')}
+        onError={() => setNote('这一段放不出来（文件可能被占用）')}
+        style={{ display: 'none' }}
+      />
+
+      <div className="wb-music-head" data-music-panel={kind}>
+        <span className="wb-music-title">{kind === 'sfx' ? '音效库' : '音乐库'}</span>
+        <span className="pill" data-music-usage={usage.count || 0}>
+          本机已缓存 {usage.count || 0} 条 · {mbText(usage.bytes)}
+        </span>
+      </div>
+
+      <div className="wb-sp-tabs" data-sp-tabs>
+        {cats.map((c) => {
+          const n = MUSIC_CATALOG.items.filter((it) => it.kind === kind && it.cat === c.key).length
+          return (
+            <button
+              key={c.key}
+              type="button"
+              className={`wb-sp-tab ${cat === c.key ? 'active' : ''}`}
+              data-music-cat={c.key}
+              onClick={() => setCat(c.key)}
+            >
+              {c.zh} <i>{n}</i>
+            </button>
+          )
+        })}
+      </div>
+
+      {note ? (
+        <div className="wb-muted-sm" data-music-note="1" style={{ margin: '8px 0', lineHeight: 1.6 }}>
+          {note}
+        </div>
+      ) : null}
+
+      <div className="wb-music-grid" data-music-grid={cat}>
+        {list.map((item) => {
+          const st = cache[item.id] || null
+          const pct = jobs[item.id]
+          const isPlaying = playing === item.id
+          const seconds = st && st.seconds ? st.seconds : item.seconds
+          return (
+            <div
+              className={`wb-music-card ${isPlaying ? 'playing' : ''}`}
+              key={item.id}
+              data-music-card={item.id}
+              data-music-kind={item.kind}
+              data-music-cached={st && st.cached ? '1' : '0'}
+              data-music-playing={isPlaying ? '1' : '0'}
+              data-music-progress={pct == null ? '' : String(pct)}
+            >
+              <button
+                type="button"
+                className="wb-music-play"
+                data-music-audition={item.id}
+                title={isPlaying ? '停止试听' : '试听（第一次点击会下载这一首）'}
+                onClick={() => audition(item)}
+              >
+                {isPlaying ? <IconPause size={14} /> : <IconPlay size={14} />}
+              </button>
+              <div className="wb-music-meta">
+                <strong>{item.name}</strong>
+                <small>
+                  {clockText(seconds)}
+                  {item.en ? ` · ${item.en}` : ''}
+                </small>
+                {pct != null ? (
+                  <span className="wb-music-bar" data-music-bar="1">
+                    <i style={{ width: `${pct}%` }} />
+                  </span>
+                ) : null}
+              </div>
+              {st && st.cached ? (
+                <span className="wb-music-cached" data-music-badge="cached" title="已缓存在本机，之后试听不再联网">
+                  <IconCheck size={12} />
+                </span>
+              ) : (
+                <span className="wb-music-cloud" data-music-badge="remote" title="还没下载——点试听或加入时才取">
+                  <IconDownload size={12} />
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn small"
+                data-music-add={item.id}
+                title="放到音频轨（第一次点会先取这一首）"
+                onClick={() => addToTimeline(item)}
+              >
+                <IconPlus size={13} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="wb-muted-sm" style={{ marginTop: 10, lineHeight: 1.6 }}>
+        {kind === 'sfx'
+          ? `本类 ${list.length} 条，其中 ${cachedCount} 条已在本机。音效点一下就落一行，配合画面上的动作点使用。`
+          : `本类 ${list.length} 条，其中 ${cachedCount} 条已在本机。音乐拖到音频轨后可裁长度、调音量、做淡入淡出。`}
       </div>
     </Shell>
   )
@@ -4038,27 +4323,27 @@ function ExportPanel({
           /* 音量包络（关键帧）。导出侧拼成 ffmpeg 的 volume 表达式；
              少带它 = 预览里听得到渐弱、成片里从头到尾一个音量。 */
           volumeKf: clip.volumeKf || null,
-          /* 修复类三件（**导出阶段**生效，界面上标了「导出时应用」）：
-             视频降噪 / 视频防抖 / 音频降噪。 */
+          /* 音频降噪（**只在导出时生效**：afftdn 要频谱统计，预览侧没有等价节点）。
+             视频降噪 / 视频防抖同理（hqdn3d / deshake 要逐帧分析）。 */
           denoise: clip.denoise ?? 0,
           stabilize: clip.stabilize ?? 0,
           audioDenoise: clip.audioDenoise ?? 0,
-          /* 人声增强 + 变声（同样是导出阶段）。这两个字段 2026-11-02 之前**根本没进载荷**：
-             检查器里滑杆拖了、变声 chip 点了、预览照旧（预览本来就不做），
-             成片也照旧 —— 三处都不报错，只有 export-contract 的"导出读了渲染层没发"
-             那条静态契约能抓到。别删这两行。 */
+          /* 人声增强 + 变声：**预览与导出都生效**（预览走 shared/audioGraph.js 的节点计划）。
+             这两个字段 2026-11-02 之前**根本没进载荷**：检查器里滑杆拖了、变声 chip 点了、
+             成片照旧 —— 只有 export-contract 的"导出读了渲染层没发"那条静态契约能抓到。 */
           voiceBoost: clip.voiceBoost ?? 0,
           voiceFx: clip.voiceFx || 'none',
           /* 倒放：导出侧拼 ffmpeg 的 reverse / areverse（预览靠 sourceTimeAt 反向取帧）。
              载荷里少带这一个布尔 = 面板上开关亮了、成片照旧正放。 */
           reverse: clip.reverse === true,
           /* 立体声平衡（-100 左 / 0 居中 / +100 右）。导出侧拼 pan 滤镜；
-             预览因为浏览器不能按声道分增益，只标注不生效（见 RightPanel 的提示）。 */
+             预览侧把元素接进 WebAudio，用左右两个增益做同一件事（系数同源）。 */
           pan: clip.pan ?? 0,
           /* 关键帧表（位置/缩放/旋转/不透明度的时间曲线）。导出侧用它拼
              ffmpeg 的表达式（`t` 为片段内时间），与预览同一个线性插值函数。 */
           keyframes: clip.keyframes || null,
-          /* 片段级淡入 / 淡出（秒）—— afade 只吃这几个数 */
+          /* 片段级淡入 / 淡出（秒）。导出侧 afade 只吃这几个数；
+             预览侧走 composite 的 `fadeGainAt`（同一条线性斜坡），两边同一个形状。 */
           fadeIn: clip.fadeIn ?? 0,
           fadeOut: clip.fadeOut ?? 0,
           /* 字幕：**正文 + 样式 key + 有没有 assetId** 三个都得带。

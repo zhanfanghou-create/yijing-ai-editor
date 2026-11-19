@@ -444,7 +444,12 @@ function exportsOf(file, depth = 0) {
    * 「导出的名字不存在」—— 名字明明存在，是检查器自己看不懂，
    * 于是一条**假红**会逼着人去改一份本来没错的代码。
    */
-  for (const m of text.matchAll(/module\.exports\s*=\s*\{([\s\S]*?)\}/g)) {
+  /* ⚠️ 这一段必须用 `body`（已剥注释），不能用 `text`。
+     导出对象里只要夹一行注释（块注释或行注释都算），按 `,` 切开后那一段就成了
+     「注释尾巴 + 键名」，以 `/` 开头，`^([A-Za-z_$][\w$]*)` 匹配不上 ⇒ 键名没进集合，
+     调用方被判「导出的名字不存在」。名字明明在，是检查器被注释挡住，
+     一条假红会逼人改本来没错的代码。 */
+  for (const m of body.matchAll(/module\.exports\s*=\s*\{([\s\S]*?)\}/g)) {
     for (const part of m[1].split(',')) {
       const raw = part.trim()
       if (!raw) continue
@@ -455,7 +460,7 @@ function exportsOf(file, depth = 0) {
     }
   }
   // `exports.foo = ...` / `module.exports.foo = ...`
-  for (const m of text.matchAll(/(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g)) names.add(m[1])
+  for (const m of body.matchAll(/(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g)) names.add(m[1])
 
   cache.set(abs, names)
   return names
@@ -593,7 +598,10 @@ function localBindings(text) {
   }
   // `(a, b) =>` 与 `function f(a, b)` 两处参数列表
   for (const m of body.matchAll(/\(([^()]*)\)\s*=>/g)) addFromPattern(m[1])
-  for (const m of body.matchAll(/function\s*[A-Za-z_$]*\s*\(([^()]*)\)/g)) addFromPattern(m[1])
+  /* ⚠️ 函数名**必须允许数字**：`function sha256Of(file)` 用 `[A-Za-z_$]*` 只能吃到
+     `sha`，后面紧跟 `2` 匹配不上 `\(` ⇒ 整个函数头被跳过，它的形参一个都收不到。
+     实测代价：`sha256Of` 的 `file` 被报成自由变量（2026-11-15，自动更新模块）。 */
+  for (const m of body.matchAll(/function\s*(?:[A-Za-z_$][\w$]*)?\s*\(([^()]*)\)/g)) addFromPattern(m[1])
   for (const m of body.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g)) add(m[1])
   for (const m of body.matchAll(/(?:import|export)\s*\{([^}]*)\}/g)) {
     for (const part of m[1].split(',')) {
@@ -739,7 +747,7 @@ function plainParamNames(body) {
    * （services/pricing.js）。原实现在这里靠"全库并集"兜住了，
    * 收紧作用域之后必须自己认全。
    */
-  for (const m of body.matchAll(/function\s*[A-Za-z_$]*\s*\(((?:[^()]|\([^()]*\))*)\)/g)) addFrom(m[1])
+  for (const m of body.matchAll(/function\s*(?:[A-Za-z_$][\w$]*)?\s*\(((?:[^()]|\([^()]*\))*)\)/g)) addFrom(m[1])
   return names
 }
 
@@ -860,6 +868,22 @@ function propNamesOf(text) {
 function jsxTablesOf(text) {
   const tags = new Set()
   const attrs = new Set()
+  /**
+   * 静态类名（`className="update-to"`）按连字符拆开，**每一段都进白名单**。
+   *
+   * 为什么必须单独收：闸门的自由变量扫描用的是 `[a-z][A-Za-z0-9_]*`，
+   * 它不认连字符 ⇒ `update-to` 会被切成 `update` 与 `to` 两个"标识符"，
+   * 而 `to` 在全文件找不到声明，于是被报成自由变量（2026-11-15 实测，
+   * 同一天先报的是 `arrow`，我把类名换成驼峰后它又报 `to` —— 说明改名只是
+   * 把问题挪个地方）。类名是**开放集合**（每加一个 UI 元素就多几个），
+   * 不可能靠声明穷举，只能在这里整段收进来。
+   *
+   * 用**原文**扫而不是 `body`：`stripNoise` 抹 JSX 属性值时并不彻底
+   * （实测留下 `update-to""` 这种残形），拿它当输入反而漏。
+   */
+  for (const m of text.matchAll(/(?:className|class)\s*=\s*"([^"{}]*)"/g)) {
+    for (const part of m[1].split(/[\s\-]+/)) if (part) attrs.add(part)
+  }
   const body = stripNoise(text)
   /* ⚠️ 属性部分必须允许 `{...}` 分组（且允许一层嵌套）：JSX 里
    * `onClick={() => onChange(item.key)}` 含 `=>`（一个 `>`），
@@ -1288,7 +1312,8 @@ for (const file of files) {
         if (process.env.YJAI_DEBUG_FREE) {
           console.error(
             `[debug] ${rel} :: ${name}  prop=${propNames.has(name)} hard=${hard.has(name)} ` +
-              `plain=${plainParams.has(name)} bind=${bindings.has(name)} index=${m.index}`
+              `plain=${plainParams.has(name)} bind=${bindings.has(name)} index=${m.index} ` +
+              `head=${JSON.stringify(scanBody.slice(Math.max(0, m.index - 30), m.index + 30))}`
           )
         }
         reported.add(name)

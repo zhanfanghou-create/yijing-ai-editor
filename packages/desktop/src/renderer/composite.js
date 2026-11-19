@@ -31,8 +31,9 @@ import { pipOf } from './pip.js'
 import { textStyleDef } from './textStyles.js'
 /* 关键帧插值（预览与导出共用的唯一口径，见 shared/effects.js） */
 import { readKeyframes, hasKeyframes, keyframeValue } from '../shared/effects.js'
-/* 音量包络：预览每帧把插值结果乘进 <video>.volume，导出写成 ffmpeg 的 volume 表达式 */
-import { hasVolumeKf, readVolumeKf, volumeAt } from '../shared/audio.js'
+/* 音量包络：预览每帧把插值结果乘进 <video>.volume，导出写成 ffmpeg 的 volume 表达式。
+   淡入淡出同一份：`fadeGainAt` 与导出侧 `afade` 都是线性斜坡（见 shared/audio.js）。 */
+import { fadeGainAt, hasVolumeKf, readVolumeKf, volumeAt } from '../shared/audio.js'
 /* 画面层级（自由层级）：层叠比较器与导出侧**同一份**（主进程require的是它） */
 import { compareLayers, readZ } from '../shared/layers.js'
 
@@ -280,6 +281,15 @@ function describeLayer(clip, assets, t, options = {}) {
   const baseGain = Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100
   const volumeKf = readVolumeKf(clip.volumeKf)
   const gain = hasVolumeKf(volumeKf) ? volumeAt(volumeKf, local, baseGain) : baseGain
+  /**
+   * 淡入淡出（属性面板「音频」页的两条滑杆）。
+   *
+   * ⚠️ 以前这两条滑杆**只有导出认**：面板能拖、时间线上脏点亮、成片里真有淡入，
+   *    预览却一点变化都没有，界面上也没写「仅导出」—— 属于最坏的那类静默失效。
+   *    导出侧是 `afade`（默认 `tri` = 线性），所以这里乘的也必须是直线斜坡。
+   * ⚠️ 倒放片段的 audible() 已经把增益压到 0，这里乘不乘都一样，不必特判。
+   */
+  const fade = fadeGainAt(clip, local, Number(clip.duration) || 0)
   return {
     id: clip.id,
     clipId: clip.id,
@@ -308,7 +318,15 @@ function describeLayer(clip, assets, t, options = {}) {
     /* 片段音量（属性面板的音量滑杆 + 音量包络）。⚠️ 以前它只进导出、不进预览：
        滑杆改了 clips 里的 gain，成片真的变小声，预览一点没变。
        ⚠️ 倒放片段在预览里被压到 0（浏览器不能反放声音，见上面 audible 的说明）。 */
-    gain: audible(clip, gain),
+    gain: audible(clip, gain * fade),
+    /* 声音效果（声像 / 人声增强 / 变声 / 降噪）—— 原样带过去，由 shared/audioGraph.js
+       编成 WebAudio 节点接在预览的元素上。
+       ⚠️ 这四个字段以前**只有导出认**：面板能调、脏点亮、滑杆动，预览里一点听不出来。
+          和 `face` / `hsl` 同一类陷阱 —— 这里是那份投影的白名单，漏一行就整段断掉。 */
+    pan: clip.pan,
+    voiceBoost: clip.voiceBoost,
+    voiceFx: clip.voiceFx,
+    audioDenoise: clip.audioDenoise,
     /* 倒放（预览靠 sourceTimeAt 反向取帧；这里把标记带给组件，用来提示"预览静音"） */
     reverse: isReversed(clip),
     /* 自由裁剪框（裁剪 + 铺满）。真源换算在 shared/crop.js，导出读的是同一个字段 */
@@ -463,43 +481,32 @@ export function compositeAt(clips, assets, playhead, options = {}) {
       ownerId: clip.ownerId || '',
       url: asset?.url || clip.url || '',
       sourceTime: sourceTimeAt(clip, t),
-      gain: audible(clip, hasVolumeKf(vkf) ? volumeAt(vkf, localAudio, base) : base),
+      gain: audible(clip, hasVolumeKf(vkf) ? volumeAt(vkf, localAudio, base) : base) *
+        fadeGainAt(clip, localAudio, Number(clip.duration) || 0),
+      /* 音频轨上的配乐/配音同样有这四个效果（面板对音频轨也开放） */
+      pan: clip.pan,
+      voiceBoost: clip.voiceBoost,
+      voiceFx: clip.voiceFx,
+      audioDenoise: clip.audioDenoise,
       speed: clipRateAt(clip, t),
       keepPitch: clip.keepPitch !== false,
       reverse: isReversed(clip)
     }
   })
 
-  /* 叠加轨（画中画）：同样取全部 */
+  /* 叠加轨（画中画）：同样取全部。
+     ⚠️ 这里**复用 describeLayer**，不另写一份字段清单。
+        以前是手抄一份（只有 effects / opacity / gain / speed），于是右栏对画中画开放的
+        调色、调节、美颜、曲线、色轮、分区 HSL、裁剪、位置/缩放/旋转、关键帧、边框
+        全部**没有进预览** —— 滑杆能动、脏点亮、数字在变，画面一像素不动，
+        而导出侧（buildPlan）也是各自为政。现在两头都从同一份投影取字段，
+        以后给片段加能力只需要改 describeLayer 一处。 */
   const pip = layerOrder(list.filter((item) => item.track === 'overlay' && spansAt(item, t)))
     .map((clip) => {
-      const asset = assetOf(clip, pool)
-      const url = asset?.url || clip.url || ''
-      if (!url) return null
-      const localPip = Math.max(0, t - num(clip.start))
-      const pipVkf = readVolumeKf(clip.volumeKf)
-      const pipBase = Number.isFinite(Number(clip.gain)) ? Number(clip.gain) : 100
-      return {
-        id: clip.id,
-        clipId: clip.id,
-        ownerId: clip.ownerId || '',
-        /* 素材 id：预览画质要按它决定"这一层用不用代理文件"（代理只换 url，不换素材） */
-        assetId: clip.assetId || '',
-        url,
-        kind: clip.kind || asset?.kind || 'video',
-        sourceTime: sourceTimeAt(clip, t),
-        /* 画中画的层级：两段画中画完全重叠时，唯一能决定谁压住谁的就是它 */
-        z: readZ(clip),
-        ...pipOf(clip),
-        opacity: Number.isFinite(Number(clip.opacity)) ? Number(clip.opacity) : 100,
-        gain: audible(clip, hasVolumeKf(pipVkf) ? volumeAt(pipVkf, localPip, pipBase) : pipBase),
-        speed: clipRateAt(clip, t),
-        keepPitch: clip.keepPitch !== false,
-        reverse: isReversed(clip),
-        /* 画中画也吃「效果」（圆角/蒙版/抠像/描边/阴影/斜切/混合）——
-           真源同一份，导出侧 render.js 的 pip 链用的是同一组换算。 */
-        effects: clip.effects || null
-      }
+      const layer = describeLayer(clip, pool, t, { visible: true, role: 'pip' })
+      /* 没有可播地址的层不渲染：渲染一个空 src 的 <video> 只会留一块黑 */
+      if (!layer.url) return null
+      return { ...layer, ...pipOf(clip) }
     })
     .filter(Boolean)
 

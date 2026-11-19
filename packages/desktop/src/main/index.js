@@ -63,6 +63,10 @@ const subtitleTable = require('../shared/subtitle')
 const stickers = require('./stickers')
 /* 内置边框库：同一套读取器（materialPack.js），素材由 tools/gen-borders.py 生成 */
 const borders = require('./borders')
+/* 预置音乐 / 音效：清单随包（shared/musicCatalog.json），音频本体点一次下一首、永久缓存 */
+const music = require('./music')
+/** 自动更新：检测 / 下载 / 交接给安装器（见 update.js 顶部那三段分工） */
+const updater = require('./update')
 /* 本地插件（素材包）：清单校验在 shared/pluginPack.js，落盘在 plugins.js */
 const plugins = require('./plugins')
 const facefx = require('./facefx')
@@ -506,6 +510,41 @@ function activeRecordGrant(scope) {
 
 const HEADLESS = process.env.YJAI_NO_WINDOW === '1'
 
+/**
+ * 是否正在**真退出**（而不是"用户点了窗口的叉"）。
+ *
+ * 关窗缩到通知栏之后，"窗口没了"不再等于"进程该退" —— 必须有这个标志区分
+ * 三种退出源：托盘菜单「退出」、`app.quit()`（系统关机/任务管理器结束任务不做数）、
+ * 以及更新交接时的主动退出。没有它，`before-quit` 触发的 close 会被拦下来，
+ * 应用永远退不掉（这是"改了 close 之后关不掉"这类缺陷的唯一成因）。
+ */
+let quitting = false
+
+/** 更新交接时调用：先落盘用户数据，再真的退出（安装器随后覆盖安装） */
+function quitForUpdate() {
+  quitting = true
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.session.flushStorageData()
+    } catch {
+      /* 刷不动也不能卡住退出 */
+    }
+    try {
+      win.destroy()
+    } catch {
+      /* 已销毁就忽略 */
+    }
+  }
+  app.exit(0)
+  /* 实测（skill 记录）：创建过窗口之后 app.exit(0) 可能立即返回而进程继续存活，
+     主进程不死，安装器的 closeRunningApp 就会认为"旧版本还在跑"。补一刀。 */
+  try {
+    process.kill(process.pid, 'SIGKILL')
+  } catch {
+    /* 平台不支持 SIGKILL 就靠上面那次 exit */
+  }
+}
+
 function createWindow() {
   nativeTheme.themeSource = 'dark'
 
@@ -661,6 +700,58 @@ function createWindow() {
     }
   })
 
+  /**
+   * 关窗 = 缩到通知栏（设置项 `closeToTray`，缺省开）。
+   *
+   * 这改变了原来"点叉就是退出"的语义，所以两条放行条件是必须的，缺一条就出事：
+   *   ① `quitting`：托盘「退出」、`app.quit()`、更新交接的主动退出都要能真退 ——
+   *      否则 `before-quit` 引发的 close 又被拦回来，应用永远关不掉；
+   *   ② 用户显式关掉这个选项（`closeToTray === false`）。
+   *
+   * ⚠️ **无窗模式（`YJAI_NO_WINDOW=1`）刻意不再放行**。
+   *    一开始这里有一条 `HEADLESS` 短路，理由是"全靠关窗口结束进程的套件会挂"——
+   *    复查后发现那个理由不成立：Playwright 的 `app.close()` 是**杀进程**，
+   *    不经过 `close` 事件；而 `app.quit()` 那条路已经被 `before-quit` 兜住。
+   *    留着它反而让闸门测不到"默认行为"（变成"配了才生效"），等于没测。
+   */
+  mainWindow.on('close', (event) => {
+    if (quitting) return
+    const settings = readSettings()
+    if (settings.closeToTray === false) return
+    event.preventDefault()
+    try {
+      mainWindow.hide()
+    } catch {
+      /* 隐藏失败也不能让关闭流程卡住 */
+    }
+    try {
+      mainWindow.setSkipTaskbar(true)
+    } catch {
+      /* 非 Windows 平台可能不支持，忽略 */
+    }
+    /* 第一次缩下去时给一句话解释，否则"点叉没关掉"会被当成 bug。
+       用托盘气泡而不是系统通知：不抢焦点、不需要通知权限。 */
+    if (!settings.closeToTrayHinted) {
+      try {
+        if (tray && !tray.isDestroyed() && typeof tray.displayBalloon === 'function') {
+          tray.displayBalloon({
+            title: '艺镜AI剪辑仍在运行',
+            content: '窗口已缩到右下角通知区，点托盘图标可以叫回来；要彻底退出请用托盘菜单的「退出」。'
+          })
+        }
+      } catch {
+        /* 气泡失败不影响任何功能 */
+      }
+      try {
+        const next = readSettings()
+        next.closeToTrayHinted = true
+        writeSettings(next)
+      } catch {
+        /* 记不住就每次提示，可以接受 */
+      }
+    }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -680,9 +771,15 @@ function createWindow() {
 /**
  * 右下角托盘（Windows 通知区）。
  *
- * 只加「多一个入口」这一件事，**刻意不改关闭语义**：点窗口的叉仍然是退出，托盘随之消失。
- * 不改的理由是硬的 —— 全套 E2E 闸门都靠关闭窗口来结束进程，一旦把 close 改成 hide，
- * 它们会集体挂在"进程不退出"上；而对用户来说"点了叉关不掉"是比"没有托盘"严重得多的缺陷。
+ * ⚠️ 2026-11-15 起，点窗口的叉**默认缩到这里**（`closeToTray`，见 `mainWindow.on('close')`）。
+ * 这段注释原来写的是「刻意不改关闭语义：点叉仍然是退出」，并给了两条理由，复查后两条都不成立：
+ *   ① "全套 E2E 都靠关窗口结束进程，改成 hide 会集体挂住" —— Playwright 的 `app.close()`
+ *      是**杀进程**，根本不走 close 事件；真正会挂的是 `app.quit()` 那条路，而它已被
+ *      `before-quit` 置的 `quitting` 兜住。
+ *   ② "点了叉关不掉比没有托盘更严重" —— 这句成立，所以拦截必须**有出口**：
+ *      托盘菜单的「退出」与更新交接的主动退出都走 `quitting`。
+ * 于是托盘的定位也变了：它不是"多一个入口"，而是**缩下去之后唯一的退出口**，
+ * 菜单里必须有「退出」，`TRAY_MENU_LABELS` 那道闸门（`tray-runtime`）钉着这一点。
  *
  * ⚠️ 图标路径与窗口 icon 用同一个 `../../build/icon.ico`，该文件由
  *   electron-builder.yml 的 files 显式随包（见那条注释）。
@@ -711,6 +808,13 @@ function createTray() {
       createWindow()
       return
     }
+    /* 缩到托盘时摘掉了任务栏图标，叫回来必须装回去 —— 不然窗口明明在前面，
+       任务栏里却没有它，切走之后就再也点不到（只剩托盘一条路）。 */
+    try {
+      mainWindow.setSkipTaskbar(false)
+    } catch {
+      /* 平台不支持就忽略 */
+    }
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
@@ -728,6 +832,33 @@ function createTray() {
 
   /* Windows 上左键单击托盘图标 = 把窗口叫到前面；右键才是菜单 */
   tray.on('click', show)
+
+  /**
+   * 只读/可调用的自检钩子（生产逻辑不消费它）。
+   *
+   * 存在理由：闸门要证明"缩到托盘之后**真的**能叫回来"，而托盘图标在系统通知区里，
+   * Playwright 点不到它。这个钩子调用的就是托盘菜单与左键单击走的**同一个** `show()`，
+   * 所以它证明的是真实路径，不是一条平行实现。
+   */
+  app.__yjaiTrayShow = show
+
+  /**
+   * 托盘「退出」的自检钩子（生产逻辑不消费它）。
+   *
+   * 为什么需要：缩到托盘之后，「退出」是**唯一正经的退出口**。它一旦被 close 拦截
+   * 吃掉（`quitting` 忘了置位就是这种结果），用户点了没反应、只能去任务管理器杀进程 ——
+   * 这比"没缩到托盘"难受得多，而且没有任何报错。托盘图标在系统通知区里，
+   * Playwright 点不到，所以留这个钩子。
+   *
+   * ⚠️ 调的是**菜单项自己的 click**（`menu.items` 里那一项），不是另写一遍 `app.quit()`：
+   * 菜单模板被改坏、条目被吃掉时，这里会如实返回"没有退出项"，闸门才分辨得出来。
+   */
+  app.__yjaiTrayExit = () => {
+    const item = menu.items.find((it) => it.type !== 'separator' && it.label === '退出')
+    if (!item || typeof item.click !== 'function') return { ok: false, why: '托盘菜单里没有可用的「退出」' }
+    item.click()
+    return { ok: true }
+  }
 }
 
 /**
@@ -833,6 +964,87 @@ function registerIpc() {
     settings[key] = value
     writeSettings(settings)
     return true
+  })
+
+  /* ------------------------------ 自动更新 ------------------------------ */
+
+  /**
+   * 查有没有新版本。
+   *
+   * 失败一律 `ok:false` 且**不弹窗** —— 断网、公司代理、GitHub 被拦都是常态，
+   * 把"查不到"做成报错弹窗，用户每天开机都要被吓一次。
+   * 界面只在 `ok && newer` 时才提示。
+   */
+  ipcMain.handle('update:check', async () => {
+    try {
+      return await updater.check({ currentVersion: appVersion() })
+    } catch (e) {
+      return { ok: false, reason: 'internal', error: String((e && e.message) || e) }
+    }
+  })
+
+  /**
+   * 下载更新包。
+   *
+   * 进度节流规则与音乐缓存那条一致（百分比没变不发、200ms 内不发、**末帧一定发**）：
+   * 不节流时一次 180MB 下载会往渲染层丢几百条 IPC，渲染层跟着重排，
+   * 表现是"下载时整个界面在抖"。
+   */
+  ipcMain.handle('update:download', async (event, payload) => {
+    const version = String((payload && payload.version) || '')
+    const asset = payload && payload.asset
+    if (!asset || !asset.url) return { ok: false, error: '没有可用的安装包地址' }
+    let lastAt = 0
+    let lastPct = -1
+    const send = (channelPayload) => {
+      if (!event.sender || event.sender.isDestroyed()) return
+      event.sender.send('update:progress', channelPayload)
+    }
+    try {
+      const res = await updater.download({
+        asset,
+        shasumUrl: payload.shasumUrl,
+        version,
+        userData: app.getPath('userData'),
+        /* ⚠️ 这里**不要**传 `models.detectProxy()`：它是 async，不 await 就是传了个
+           Promise 进下载器，`proxyTunnel.agentFor()` 拿着它建 agent 会抛
+           `The "options" or "port" or "path" argument must be specified`
+           （2026-11-15 由 update-e2e 实测抓到的第一条真缺陷）。
+           传 undefined 让 `fetchFile` 自己探一次，语义上也是对的：
+           代理只有一处判定，别在两个地方各探一次。 */
+        onProgress: (received, total) => {
+          const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0
+          const now = Date.now()
+          const done = pct >= 100
+          if (!done && pct === lastPct) return
+          if (!done && now - lastAt < 200) return
+          lastAt = now
+          lastPct = pct
+          send({ percent: pct, received, total })
+        }
+      })
+      /* 末帧：无论节流怎么算，收尾一定补一条 100%，否则进度条永远停在 97% */
+      if (res && res.ok) send({ percent: 100, received: Number(asset.size) || 0, total: Number(asset.size) || 0 })
+      return res
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) }
+    }
+  })
+
+  /**
+   * 启动安装器并退出自己。
+   *
+   * 覆盖目标 = **当前 exe 所在目录**（不是默认目录）：用户可能装在 D 盘，
+   * 更新装到默认位置会变成两份软件，桌面快捷方式还指着旧的那份。
+   */
+  ipcMain.handle('update:install', async (_event, payload) => {
+    const installerPath = String((payload && payload.path) || '')
+    const installDir = path.dirname(process.execPath)
+    try {
+      return await updater.handoff({ installerPath, installDir, onQuit: quitForUpdate })
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) }
+    }
   })
 
 
@@ -1383,6 +1595,76 @@ function registerIpc() {
   ipcMain.handle('sticker:catalog', async () => packPayload(stickerCatalog()))
 
   ipcMain.handle('border:catalog', async () => packPayload(borderCatalog()))
+
+  /* ───────────────── 预置音乐 / 音效 ─────────────────
+   *
+   * 清单（分类、名字、时长、直链）随安装包走，**断网也能浏览**；
+   * 音频本体不在包里：用户点某一条试听时才开始下，下完永久留在
+   * `userData/music-cache/`，之后每次点都是本地读 —— 不再走网络。
+   *
+   * 为什么不做"进面板就预热"或"整包预下载"：117 首音乐约 470MB。
+   * 预置的意义是"清单摆在那儿随手能挑"，不是"偷偷占掉半张硬盘"。
+   */
+
+  ipcMain.handle('music:status', async () => {
+    const res = music.statusOf({ userData: app.getPath('userData') })
+    return { ok: true, root: res.root, usage: res.usage, map: res.map }
+  })
+
+  ipcMain.handle('music:ensure', async (event, payload) => {
+    const id = String((payload && payload.id) || '')
+    const userData = app.getPath('userData')
+
+    /* 进度推送必须节流：一首 4MB 的音乐在快网上会连续触发几十次，
+       每次都往渲染层丢一条 IPC，渲染层重排一次 —— 表现是"下载时界面一顿一顿"。
+       规则：百分比没变不发；两次之间不足 200ms 不发；**最后一帧一定发**
+       （不发的后果是进度条永远停在 97%，看着像卡死）。 */
+    let lastAt = 0
+    let lastPct = -1
+    const res = await music.ensure(id, {
+      userData,
+      onProgress: (received, total) => {
+        const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0
+        if (pct === lastPct) return
+        const now = Date.now()
+        if (pct !== 100 && now - lastAt < 200) return
+        lastAt = now
+        lastPct = pct
+        if (event.sender && !event.sender.isDestroyed()) {
+          event.sender.send('music:progress', { id, received, total, percent: pct })
+        }
+      }
+    })
+
+    if (!res || !res.ok || !res.path) {
+      return { ok: false, error: (res && res.error) || '下载失败' }
+    }
+    /* ⚠️ 必须走**本文件的** `describeMedia`（它内部会 `allowedMedia.add`），
+       不要换成 `media.describeMedia` —— 后者只读元信息、不登记白名单，
+       于是 URL 有了但协议层回 403，表现是"缓存好了、点了没声音"（静默失效第 ④ 类）。
+       这里也不另写一行 `allowedMedia.add`：登记点只有 describeMedia 一个，
+       写两处只会让人以为其中一处不可省（负对照实测：删掉那行，播放照样成功）。 */
+    const described = describeMedia(res.path)
+    if (!described) return { ok: false, error: '文件已缓存但读不出来（可能被占用）' }
+    const item = res.item || {}
+    return {
+      ok: true,
+      cached: true,
+      fresh: Boolean(res.fresh),
+      musicId: String(item.id || ''),
+      asset: {
+        ...described,
+        kind: 'audio',
+        /* 名字用清单里的中文名，不是 `mus-127.mp3` —— 落到音频轨后片段上显示的就是它 */
+        name: String(item.name || described.name),
+        displayName: String(item.name || described.displayName),
+        duration: Number(res.seconds) > 0 ? Number(res.seconds) : Number(item.seconds) || 0,
+        /* 出处：右栏与素材库都用得到，也便于以后换源时对账 */
+        musicId: String(item.id || ''),
+        musicCat: String(item.catZh || '')
+      }
+    }
+  })
 
   /* ───────────────── 本地插件（素材包） ─────────────────
    *
@@ -2151,6 +2433,12 @@ if (!gotLock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
+  })
+
+  app.on('before-quit', () => {
+    /* 真退出（托盘「退出」/ 系统关机 / 更新交接）—— 关窗拦截必须让路，
+       否则 quit 会被 close 的 preventDefault 取消掉 */
+    quitting = true
   })
 
   app.on('window-all-closed', () => {

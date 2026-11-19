@@ -146,6 +146,17 @@
       ]
     },
     {
+      "id": "audio.music-library",
+      "name": "预置音乐/音效：清单随包、点一次下载并永久缓存，加入音频轨（界面与 agent 同一条路径）",
+      "ui": [
+        "components/SidePanels.jsx|button|放到音频轨（第一次点会先取这一首）"
+      ],
+      "mcp": [
+        "yijing_catalog",
+        "yijing_add_clips"
+      ]
+    },
+    {
       "id": "clip.delete",
       "name": "删片段 / 清空时间线",
       "ui": [
@@ -540,6 +551,18 @@
         "yijing_denoise_audio",
         "yijing_models"
       ]
+    },
+    {
+      "id": "audio.detach",
+      "name": "分离音频（把片段的声音拆到音频轨上，画面与声音各自可调）",
+      "ui": [
+        "components/SidePanels.jsx|button|把这一段的声音拆到音频轨上（原片段自动静音，删掉音频片段会还原）",
+        "components/Timeline.jsx|ctx|分离音频到音频轨"
+      ],
+      "mcp": [
+        "yijing_timeline_op"
+      ],
+      "note": "两侧都走 shared/detachAudio.js 的同一个 detachAudio()：连拒绝理由（音频轨已锁 / 已经分离过 / 没有源文件）的措辞都是同一句。删除时的还原也共用 restoreDetached()，所以 mcp 的 delete_clips 与界面的删除行为一致。"
     }
   ],
   "uiOnly": [
@@ -642,6 +665,14 @@
     {
       "ui": "components/Timeline.jsx|ctx|取消",
       "why": "关菜单。"
+    },
+    {
+      "ui": "components/Dialogs.jsx|button|点窗口的叉之后缩到右下角通知区，正在跑的任务不中断。要彻底退出请右键托盘图标选「退出」。",
+      "why": "本机 GUI 行为偏好（关窗=缩托盘，还是关窗=退出）。agent 没有『点窗口的叉』这个动作，也不该替用户决定常驻形态；它要做的事（建草稿/剪辑/导出）在两种形态下完全一致。"
+    },
+    {
+      "ui": "components/Dialogs.jsx|button|点窗口的叉就直接退出程序（没有正在导出的任务时用这个更干脆）",
+      "why": "同上，是同一枚开关的另一档。真正的『退出软件』对 agent 来说也不该存在：那会把它自己刚跑的活杀掉。"
     }
   ]
 }

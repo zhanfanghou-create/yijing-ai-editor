@@ -93,6 +93,12 @@ import {
   setCut as setMulticamCut,
   ungroupMulticam
 } from '../shared/multicam.js'
+/* 分离音频：与 agent 侧（mcp-ops 的 timeline-op detach-audio / delete-clips）同一份实现。
+   拒绝理由的措辞也只在这里写一次 —— 界面上弹的 toast 与 MCP 返回的错误是同一句。 */
+import {
+  detachAudio as sharedDetachAudio,
+  restoreDetached as sharedRestoreDetached
+} from '../shared/detachAudio.js'
 import {
   ACTIONS,
   clampZoom,
@@ -116,6 +122,7 @@ import Stage from './components/Stage.jsx'
 import Inspector, { CAPTION_TAB, inspectorTabsFor } from './components/Inspector.jsx'
 import Timeline from './components/Timeline.jsx'
 import { AboutDialog, GuideDialog, SettingsDialog } from './components/Dialogs.jsx'
+import { UpdateDialog } from './components/UpdateDialog.jsx'
 import Splitter from './components/Splitter.jsx'
 import { IconClose, IconMenu } from './icons.jsx'
 import './workbench.css'
@@ -261,6 +268,20 @@ export default function App() {
   const fsSeqRef = useRef(0)
   /** 硬件加速开关（设置值）。实际生效值在 info.hardwareAcceleration 上，两者可能不同 */
   const [hardwareAcceleration, setHardwareAcceleration] = useState(true)
+
+  /**
+   * 自动更新。
+   *
+   * `updateInfo` 非空 = 弹窗打开（内容就是主进程查回来的那份 release 摘要）。
+   * 查询失败**不设任何状态**：断网、代理、GitHub 被拦都是常态，
+   * 把它做成提示只会让用户每天被吓一次。
+   *
+   * `skippedUpdate` 记住用户点过「稍后提醒」的那个版本：同一个版本不再自动弹，
+   * 但手动「检查更新」仍然能看到 —— 否则用户点一次稍后就再也收不到提示。
+   */
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [autoUpdate, setAutoUpdate] = useState(true)
+  const [closeToTray, setCloseToTray] = useState(true)
 
   /**
    * 画面比例（画布形状）。
@@ -624,6 +645,78 @@ export default function App() {
      整棵树白屏、页面只留一行 TDZ 报错）。见 previewCompositeRef 赋值处。 */
 
   /**
+   * 查更新（自动与手动共用一条路径）。
+   *
+   * `silent:true`（自动检查）时什么都不提示：查不到是常态，提示只会变成噪音。
+   * `silent:false`（用户点的「检查更新」）必须有反馈，否则用户不知道点没点上。
+   */
+  const checkUpdate = useCallback(
+    async (options = {}) => {
+      const silent = options.silent !== false
+      let res = null
+      try {
+        res = await window.yjai.update.check()
+      } catch {
+        res = null
+      }
+      if (!res || !res.ok) {
+        if (!silent) toast('暂时查不到更新，请检查网络后重试')
+        return res
+      }
+      if (!res.newer) {
+        if (!silent) toast(`已是最新版本 v${res.current}`)
+        return res
+      }
+      /* 「稍后提醒」记的是版本号：同一个版本不再自动弹，手动查仍能看到 */
+      const skipped = await getSetting('skippedUpdate', '')
+      if (silent && String(skipped || '') === String(res.version)) return res
+      /* 先把别的弹窗收掉：更新提示要压在设置/关于之上，两个 Modal 叠着会
+         出现"点关闭关掉了下面那个"的错乱 */
+      setDialog(null)
+      setUpdateInfo(res)
+      return res
+    },
+    [toast]
+  )
+
+  /**
+   * 启动后自动查一次。
+   *
+   * 两个条件必须同时满足，缺一个都会变成骚扰：
+   *   · `info.packaged`：开发模式跑的是源码，版本号取自 package.json，与线上同源 ——
+   *     它一查就会喊"有新版本"，那是噪音而不是信息；
+   *   · `autoUpdate`：用户明确关掉了就不再查（设置里可以再打开）。
+   * 延迟 8 秒是因为启动瞬间正在读草稿、生成代理、初始化预览，这时再叠一次
+   * 网络请求只会让首屏更慢。
+   */
+  useEffect(() => {
+    if (!info || !info.packaged) return undefined
+    if (!autoUpdate) return undefined
+    let cancelled = false
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      checkUpdate({ silent: true })
+    }, 8000)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [info, autoUpdate, checkUpdate])
+
+  const changeAutoUpdate = useCallback((next) => {
+    const value = Boolean(next)
+    setAutoUpdate(value)
+    setSetting('autoUpdate', value).catch(() => {})
+  }, [])
+
+  const changeCloseToTray = useCallback((next) => {
+    const value = Boolean(next)
+    setCloseToTray(value)
+    /* 主进程**每次关窗都重新读 settings**，所以改完立刻生效，不需要重启 */
+    setSetting('closeToTray', value).catch(() => {})
+  }, [])
+
+  /**
    * 预览专用的素材表：把"已经在代理里就绪"的视频素材换成代理 url。
    * ⚠️ 只在预览里用它；导出与草稿存储仍然用 `assets`（原片）。
    */
@@ -814,6 +907,8 @@ export default function App() {
         savedTimelineName,
         savedKeymap,
         savedHwAccel,
+        savedAutoUpdate,
+        savedCloseToTray,
         draftList
       ] = await Promise.all([
         appInfo(),
@@ -822,6 +917,11 @@ export default function App() {
         getSetting('timelineName', '时间线01'),
         getSetting('keymap', null),
         getSetting('hardwareAcceleration', true),
+        /* 自动检查更新：缺省**开**（商业软件的通行做法）。关掉之后只有手动
+           「检查更新」才查 —— 这不影响任何本地功能，纯粹是联网意愿。 */
+        getSetting('autoUpdate', true),
+        /* 关窗缩到通知栏：缺省**开**（这是 Jason 要的默认行为）。 */
+        getSetting('closeToTray', true),
         listDrafts()
       ])
 
@@ -830,6 +930,8 @@ export default function App() {
       setProjectName(savedProject || '未命名项目')
       setTimelineName(String(savedTimelineName || '时间线01'))
       setHardwareAcceleration(savedHwAccel !== false)
+      setAutoUpdate(savedAutoUpdate !== false)
+      setCloseToTray(savedCloseToTray !== false)
 
       /**
        * 自定义键位以**主进程 settings 为准**，localStorage 只是首屏的即时缓存。
@@ -1251,11 +1353,19 @@ export default function App() {
              * 旧草稿里没这个字段，同样是 0/不设上限，与改动前行为一致。
              */
             sourceDuration: Number(asset.duration) || 0,
-            /* 画中画的默认位置：右下角、占画布宽度 30%。
-               给默认值是必要的 —— 否则用户第一次加画中画时 pip 是 undefined，
-               预览与导出各按各的兜底，两边位置可能不一样。 */
+            /* 画中画的默认位置与大小，按**素材性质**分开给：
+               · 视频 / 图片素材拖进叠加轨 = 按比例铺满预览窗（size 100、居中）；
+                 以前一律给 30% + 右下角，用户拖进来的第一眼就是一个小窗，
+                 必须先手动放大一次才算能用 —— 这正是"只占画中画一部分"的由来。
+               · 贴纸 = 一枚小图（20% + 右下角）。贴纸是装饰，铺满屏成了背景板。
+               给默认值是必要的：否则 pip 是 undefined，预览与导出各按各的兜底。 */
             ...(track === 'overlay'
-              ? { pip: { anchor: PIP_DEFAULT_ANCHOR, size: PIP_DEFAULT_SIZE } }
+              ? {
+                  pip:
+                    asset.source === 'sticker'
+                      ? { anchor: 'right-bottom', size: 20 }
+                      : { anchor: PIP_DEFAULT_ANCHOR, size: PIP_DEFAULT_SIZE }
+                }
               : null)
           }
         ]
@@ -1487,7 +1597,12 @@ export default function App() {
           // 源片总长：右端修剪的上限。缺了它就能把片段拖得比素材还长，导出时尾部是黑帧
           sourceDuration: Number(asset.duration) || 0,
           ...(targetTrack === 'overlay'
-            ? { pip: { anchor: PIP_DEFAULT_ANCHOR, size: PIP_DEFAULT_SIZE } }
+            ? {
+                pip:
+                  asset.source === 'sticker'
+                    ? { anchor: 'right-bottom', size: 20 }
+                    : { anchor: PIP_DEFAULT_ANCHOR, size: PIP_DEFAULT_SIZE }
+              }
             : null)
         }
       ])
@@ -1552,6 +1667,44 @@ export default function App() {
   }, [])
 
   /**
+   * 批量选中（时间线框选）。
+   *
+   * 与 `selectClip` 的分工：那个按"点中一个"结算（含组合展开、Ctrl 取反），
+   * 这个是"框住了一片"—— 顺序由时间线给，主选中取第一段（右栏要有个主体）。
+   * 传空数组 = 取消选中（框选落空时与点空白同义）。
+   */
+  const selectClips = useCallback((ids) => {
+    const list = clipsRef.current
+    const valid = (Array.isArray(ids) ? ids : []).filter((id) => list.some((item) => item.id === id))
+    if (!valid.length) {
+      setSelection(null)
+      return
+    }
+    const primary = list.find((item) => item.id === valid[0])
+    setSelection({
+      type: 'clip',
+      clipId: valid[0],
+      assetId: (primary && primary.assetId) || '',
+      clipIds: valid
+    })
+  }, [])
+
+  /**
+   * 删掉一条分离出来的音频片段时，把原片段的音量**还回去**。
+   *
+   * 不还的话会出现一个说不清的状态：音频轨上的那条没了、原片段的 gain 还是 0 ⇒
+   * 画面在播、完全没声音，而片段上一点提示都没有（用户会以为音频被删坏了）。
+   * 这是"分离"这个动作的另一半，必须一起做。
+   *
+   * ⚠️ 实现放在 `shared/detachAudio.js`，agent 侧（`mcp-ops` 的 delete_clips）
+   *    调的是同一个函数 —— 否则会出现"人删了会还原、agent 删了不还原"。
+   */
+  const restoreDetached = useCallback(
+    (list, goneIds) => sharedRestoreDetached(list, goneIds),
+    []
+  )
+
+  /**
    * 删除片段。锁定轨上的片段拒删 —— 与参考一致，锁定拦的是结构性编辑；
    * 拒绝时明确说一句，不能"点了没反应"。
    */
@@ -1562,7 +1715,7 @@ export default function App() {
         toast.bad(`「${target.track}」轨道已锁定，解除锁定后才能删除片段`)
         return
       }
-      commitClips((list) => list.filter((item) => item.id !== clipId))
+      commitClips((list) => restoreDetached(list, [clipId]))
       setSelection((current) => {
         if (!current) return current
         /* 多选集里也有它 ⇒ 从集合里摘掉，而不是只判断"主选中是不是它" */
@@ -1576,7 +1729,7 @@ export default function App() {
         return { ...current, clipId: current.clipId === clipId ? ids[ids.length - 1] : current.clipId, clipIds: ids }
       })
     },
-    [commitClips, toast]
+    [commitClips, restoreDetached, toast]
   )
 
   /** 停用 / 启用片段：位置时长都不动，只是退出预览与导出（可逆） */
@@ -2341,6 +2494,42 @@ export default function App() {
   const splitClip = useCallback(() => {
     splitClipAt(selection?.clipId || '', playhead)
   }, [playhead, selection, splitClipAt])
+
+  /**
+   * 分离音频：把视频片段里的声音拆成**音频轨上的一条独立片段**。
+   *
+   * 与「提取音频」的区别是刻意的两件事：
+   *   · 提取音频 = 从源里抽一个 m4a 进素材库（之后要自己拖到音频轨）；
+   *   · 分离音频 = 当场在原片段下面长出一条同区间的音频片段，画面与声音立刻能分开调。
+   * 用户说的"不能成功分离为单独音视频轨"指的是后者 —— 它以前根本不存在。
+   *
+   * 三个必须做对的点：
+   *   ① 新片段**引用同一个源文件**（不复制、不转码）：导出时音频轨走 `[N:a]`，
+   *      对视频文件同样成立，所以分离出来的片段天然有声、零等待；
+   *   ② 原片段要**静音**（gain=0），否则同一条声音会响两遍（差几毫秒，听起来像回声），
+   *      而且用户在音频轨上做的淡入淡出会与主链原声打架；
+   *   ③ 记 `detachedFrom`，用来判重与撤销：再点一次不该长出第二条，
+   *      删掉音频片段后原片段的 gain 也要能恢复（见 removeClips 里的还原）。
+   */
+  const detachAudio = useCallback(
+    (clipId) => {
+      const result = sharedDetachAudio(clipsRef.current, clipId, {
+        nextId: () => nextId('clip'),
+        lockedTracks: trackStateRef.current.locked
+      })
+      /* 拒绝理由的措辞在 shared 里只有一份（MCP 侧报错用的是同一句），
+         这里只负责弹给用户看，不另写一套说法。 */
+      if (!result.ok) {
+        toast.bad(result.message)
+        return false
+      }
+      commitClips(() => result.clips)
+      setSelection({ type: 'clip', clipId: result.audio.id, clipIds: [result.audio.id], assetId: result.audio.assetId })
+      toast.good('已分离到音频轨：画面与声音现在可以分开调')
+      return true
+    },
+    [commitClips, nextId, toast]
+  )
 
   /**
    * 按场景分割（右键菜单）。
@@ -3719,7 +3908,7 @@ export default function App() {
           toast.bad(`「${blocked.track}」轨道已锁定，整组删除被拒；先解锁或取消组合`)
           return
         }
-        commitClips((list) => list.filter((item) => !ids.includes(item.id)))
+        commitClips((list) => restoreDetached(list, ids))
         setSelection(null)
         toast.good(`已删除一个组合（${ids.length} 段）；想只删其中一段请先取消组合`)
         return
@@ -4006,6 +4195,10 @@ export default function App() {
             textStyleGroup={currentNode.textStyle ?? null}
             stickerGroup={currentNode.sticker ?? null}
             templateGroup={currentNode.template ?? null}
+            /* 「音频 → 音乐 / 音效」：同一块面板，靠这个字段分曲库还是音效库。
+               漏了这一行 → 点「音效」看到的是音乐（面板拿不到分组就退回默认值），
+               而两页长得几乎一样，很容易被当成"音效库没做" */
+            musicGroup={currentNode.music || 'music'}
             onApplyTemplate={applyTemplate}
             /* 「插件」：左栏三项（我的插件 / 我的边框 / 我的贴纸）共用一个面板 */
             pluginTab={currentNode.pluginTab || 'mine'}
@@ -4050,6 +4243,8 @@ export default function App() {
             onAddToTimeline={addClipFromAsset}
             /* 本地工具（如「提取音频」）要把产物放回素材库 */
             onAddAsset={addAsset}
+            /* 「提取音频」页的第二个动作：不落素材库，直接把声音拆到音频轨 */
+            onDetachAudio={detachAudio}
             onSplitEvenly={splitEvenly}
             onCloseGaps={closeGaps}
             onClearTextTrack={clearTextTrack}
@@ -4316,7 +4511,10 @@ export default function App() {
             onClearMarkers={() => setMarkers([])}
             onStepMarker={(dir) => {
               const next = stepMarker(markers, playhead, dir)
-              if (next === null) return
+              /* 到头时给提示，与快捷键 prevMarker/nextMarker 同一口径。
+                 以前按钮这里直接 return，MarkersBar 上看它一直可点（只有零标记才禁用），
+                 停在最后一个标记再点就毫无反应，用户以为按钮坏了。 */
+              if (next === null) return toast(dir < 0 ? '播放头之前没有标记' : '播放头之后没有标记')
               setPlayhead(next)
             }}
             onToggleClipEnabled={toggleClipEnabled}
@@ -4362,6 +4560,8 @@ export default function App() {
             /* ⚠️ 第二个参数（`{additive}`）必须透传：Ctrl + 点选的多选态全靠它，
                漏掉就变成"按了 Ctrl 也只是一次普通选中"（多选彻底失效，而界面看不出来）。 */
             onSelect={(clip, options) => selectClip(clip, options)}
+            /* 时间线框选：框住一片片段后一次性给集合（右栏取第一段） */
+            onSelectMany={selectClips}
             onRemove={removeClip}
             onClear={() => {
               commitClips([])
@@ -4370,6 +4570,7 @@ export default function App() {
             }}
             onSplit={splitClip}
             onSplitClipAt={(clipId) => splitClipAt(clipId, playhead)}
+            onDetachAudio={detachAudio}
             onUndo={undo}
             onRedo={redo}
             onImport={handlePickMedia}
@@ -4466,7 +4667,11 @@ export default function App() {
                     : key === 'audio'
                       ? 'audio'
                       : 'media'
+            /* 与 EditorTabs.onChange 同一落地口径：切标签的同时把左栏选中项也落到
+               该标签第一个带面板的二级节点。以前只 setWbTab，中栏退回素材列表、
+               左栏没有任何高亮 —— "去试试 → 音频"点进去看着像跳错页。 */
             setWbTab(tab)
+            setWbNode(defaultNodeOf(tab))
           }}
         />
       ) : null}
@@ -4499,10 +4704,26 @@ export default function App() {
           onPreviewQualityChange={changePreviewQuality}
           onHardwareAccelerationChange={changeHardwareAcceleration}
           onRestart={restartApp}
+          /* 行为偏好：关窗缩到通知栏 / 启动时自动查更新 */
+          closeToTray={closeToTray}
+          onCloseToTrayChange={changeCloseToTray}
+          autoUpdate={autoUpdate}
+          onAutoUpdateChange={changeAutoUpdate}
+          onCheckUpdate={() => checkUpdate({ silent: false })}
         />
       ) : null}
 
-      {dialog === 'about' ? <AboutDialog info={info} onClose={() => setDialog(null)} /> : null}
+      {dialog === 'about' ? (
+        <AboutDialog info={info} onClose={() => setDialog(null)} onCheckUpdate={() => checkUpdate({ silent: false })} />
+      ) : null}
+
+      {updateInfo ? (
+        <UpdateDialog
+          info={updateInfo}
+          onClose={() => setUpdateInfo(null)}
+          onSkip={(version) => setSetting('skippedUpdate', version).catch(() => {})}
+        />
+      ) : null}
 
       {dragging ? (
         <div className="drop-veil" aria-hidden="true">

@@ -119,6 +119,9 @@ export default function Home({
   onNewDraft
 }) {
   const [nav, setNav] = useState('create')
+  /* 最近草稿的视图模式。默认网格：卡片预览更直观，也保持与既有 E2E
+     （check-preview-aspect 点 .home-draft-card 进剪辑）一致。列表模式给草稿多时快速扫名字。 */
+  const [draftView, setDraftView] = useState('grid')
   const bridge = isDesktop && typeof window !== 'undefined' ? window.yjai : null
 
   /* 在线画布的地址（唯一真源）。拿不到就不渲染这一项 —— 见 NAV 的注释。 */
@@ -290,13 +293,35 @@ export default function Home({
                 <section className="home-drafts-sec">
                   <div className="home-sec-head is-draft">
                     <h3>最近草稿</h3>
-                    <span className="home-viewswitch">
-                      <IconGridView size={16} data-on="true" />
-                      <IconListView size={16} />
+                    <span className="home-viewswitch" role="group" aria-label="最近草稿视图切换">
+                      <button
+                        type="button"
+                        className="home-view-btn"
+                        data-view="grid"
+                        data-on={draftView === 'grid' ? 'true' : 'false'}
+                        aria-pressed={draftView === 'grid'}
+                        title="网格视图"
+                        aria-label="网格视图"
+                        onClick={() => setDraftView('grid')}
+                      >
+                        <IconGridView size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="home-view-btn"
+                        data-view="list"
+                        data-on={draftView === 'list' ? 'true' : 'false'}
+                        aria-pressed={draftView === 'list'}
+                        title="列表视图"
+                        aria-label="列表视图"
+                        onClick={() => setDraftView('list')}
+                      >
+                        <IconListView size={16} />
+                      </button>
                     </span>
                   </div>
                   {drafts.length ? (
-                    <div className="home-draft-cards">
+                    <div className={`home-draft-cards${draftView === 'list' ? ' is-list' : ''}`} data-view={draftView}>
                       {drafts.slice(0, 4).map((draft) => (
                         <button
                           key={draft.id}

@@ -37,6 +37,7 @@ import {
   IconLayers,
   IconMusic,
   IconFolder,
+  IconVolume,
   IconImageBoost,
   IconLibrary,
   IconScissors,
@@ -227,7 +228,13 @@ export const WB_TREE = {
     items: [
       /* 提取音频**不走 AI**：本地 ffmpeg 抽音轨，接不接模型都能用 */
       { key: 'audio-extract', label: '提取音频', Icon: IconScissors, caret: true, panel: 'extract-audio' },
-      { key: 'audio-music', label: '音乐', Icon: IconMusic, caret: true, kinds: ['audio'] }
+      /* 「音乐 / 音效」是**预置曲库**，不是"我导入的音频列表"：
+         清单（分类 / 名字 / 时长）随包走，断网也能翻；音频本体点一次才下、下完永久留着
+         （见 shared/musicCatalog.json 与 main/music.js）。
+         自己导入或"提取音频"产出的音频仍然在「素材 → 本地」里，两处不混。
+         `music` 字段是面板的分组键，SidePanels 靠它决定显示曲库还是音效库。 */
+      { key: 'audio-music', label: '音乐', Icon: IconMusic, panel: 'music-library', music: 'music' },
+      { key: 'audio-sfx', label: '音效', Icon: IconVolume, panel: 'music-library', music: 'sfx' }
     ]
   },
   transition: {

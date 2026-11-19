@@ -304,7 +304,13 @@ export function SettingsDialog({
   /* 预览画质：full 原片 / smooth 720p 代理 / fast 540p 代理。
      只影响预览取哪个文件，导出永远用原片（见 shared/proxy.js 的说明）。 */
   previewQuality = 'full',
-  onPreviewQualityChange
+  onPreviewQualityChange,
+  /* 行为偏好：关窗缩到通知栏（缺省开）/ 启动后自动查更新（缺省开） */
+  closeToTray = true,
+  onCloseToTrayChange,
+  autoUpdate = true,
+  onAutoUpdateChange,
+  onCheckUpdate
 }) {
   /* 先看 App 有没有指定落点，没有才默认「通用」。`useState` 只在首次挂载取值，
      而弹窗是「关掉就卸载」的（`{dialog === 'settings' ? … : null}`），
@@ -634,6 +640,55 @@ export function SettingsDialog({
         </div>
       </Field>
 
+      {/* 关窗行为。缺省是「缩到通知栏」—— 文案必须同时写清**怎么彻底退出**，
+          否则用户点叉没关掉、又不知道去哪退，会以为软件卡住了。
+          ⚠️ 这一项由主进程在 close 事件里读 settings 决定，改完立刻生效、不用重启。 */}
+      <Field label="关闭窗口时" hint="缩到通知栏后，用右下角托盘图标可以随时叫回来">
+        <div className="seg" data-settings-closetotray>
+          <button
+            type="button"
+            className={closeToTray ? 'active' : ''}
+            data-closetotray="tray"
+            onClick={() => onCloseToTrayChange && onCloseToTrayChange(true)}
+            title="点窗口的叉之后缩到右下角通知区，正在跑的任务不中断。要彻底退出请右键托盘图标选「退出」。"
+          >
+            缩到通知栏
+          </button>
+          <button
+            type="button"
+            className={!closeToTray ? 'active' : ''}
+            data-closetotray="quit"
+            onClick={() => onCloseToTrayChange && onCloseToTrayChange(false)}
+            title="点窗口的叉就直接退出程序（没有正在导出的任务时用这个更干脆）"
+          >
+            退出程序
+          </button>
+        </div>
+      </Field>
+
+      {/* 自动查更新。关掉只影响"启动后查一次"，本地功能一律不受影响，
+          这一点必须写出来 —— 否则用户会以为关掉它就得手动处理什么。 */}
+      <Field label="自动检查更新" hint="启动后查一次有没有新版本；关掉也可以在「关于我们」里手动查">
+        <div className="seg" data-settings-autoupdate>
+          <button
+            type="button"
+            className={autoUpdate ? 'active' : ''}
+            data-autoupdate="on"
+            onClick={() => onAutoUpdateChange && onAutoUpdateChange(true)}
+          >
+            开启
+          </button>
+          <button
+            type="button"
+            className={!autoUpdate ? 'active' : ''}
+            data-autoupdate="off"
+            onClick={() => onAutoUpdateChange && onAutoUpdateChange(false)}
+          >
+            关闭
+          </button>
+        </div>
+      </Field>
+
       <div className="section-title">
         <span>运行环境</span>
       </div>
@@ -754,7 +809,7 @@ export function SettingsDialog({
  * 现在「帮助」是真下拉（使用指引 / 关于），「关于」补成真实现：
  * 版本、运行环境、数据目录都取自主进程 `app:info`，不是写死的字符串。
  */
-export function AboutDialog({ info, onClose }) {
+export function AboutDialog({ info, onClose, onCheckUpdate }) {
   const rows = [
     ['版本', info?.version ? `v${info.version}` : '—'],
     ['运行环境', info?.packaged ? '正式安装版' : '开发模式'],
@@ -773,9 +828,16 @@ export function AboutDialog({ info, onClose }) {
       desc="艺镜AI剪辑 · AI 短剧与视频创作工具"
       onClose={onClose}
       footer={
-        <button className="btn primary" type="button" onClick={onClose} data-about="close">
-          知道了
-        </button>
+        <>
+          {/* 手动查更新：自动查是启动后 8 秒，用户想立刻知道时走这里。
+              查不到/已最新都会给一句 toast（关掉自动检查的人只剩这一条路）。 */}
+          <button className="btn ghost" type="button" onClick={() => onCheckUpdate && onCheckUpdate()} data-about="check-update">
+            检查更新
+          </button>
+          <button className="btn primary" type="button" onClick={onClose} data-about="close">
+            知道了
+          </button>
+        </>
       }
     >
       <div className="about-rows" data-about="rows">

@@ -48,6 +48,12 @@ export default defineConfig({
         /* 字幕预设：panel 要 presetsOfGroup/describePreset/planPreset，MCP catalog 读同一份。
            漏了这一行 ⇒ 整个「字幕预设」面板白屏（857 款一张卡都不出来）。 */
         /shared[\\/]subtitlePresets\.js$/,
+        /* 画中画的几何：预览与导出**共用** shared/pip.js 的 boxOf()。
+           漏了这一行 ⇒ 渲染层拿到空对象，pipBoxCss 抛 TypeError、整个预览白屏。 */
+        /shared[\\/]pip\.js$/,
+        /* 分离音频：界面（App.jsx）与 agent（mcp-ops 的 timeline-op）共用同一份。
+           漏了这一行 ⇒ detachAudio 是 undefined，"分离音频"按钮点下去直接抛错。 */
+        /shared[\\/]detachAudio\.js$/,
         /shared[\\/]reverse\.js$/,
         /* 节拍检测：检查器里的「按音频检测」要调它。
            漏了这一行 ⇒ detectBeats 是 undefined，按钮点下去直接抛 TypeError，
@@ -125,7 +131,16 @@ export default defineConfig({
            漏了这一行 ⇒ isNeutral 是 undefined，检查器一渲染就抛错（右栏白屏），
            或者更糟：buildLutGpu 拿到空对象 ⇒ 传一张空表进纹理 ⇒ 整幅画面变黑，
            而时间线、面板、按钮看上去全都正常。 */
-        /shared[\\/]hslBands\.js$/
+        /shared[\\/]hslBands\.js$/,
+        /* 音频效果节点计划：渲染层的预览音频链路要按它建 WebAudio 节点，
+           主进程侧不需要（导出直接读 shared/audio.js）。漏了这一行 ⇒
+           planOf 是 undefined，`previewAudio.apply()` 里一调就抛 TypeError，
+           表现是"给片段调了声像/人声增强，播放时整段没声"——不报错、不白屏。 */
+        /shared[\\/]audioGraph\.js$/,
+        /* 更新规则（版本比较 / 资产挑选 / 安装器交接参数）：弹窗要显示体积、
+           要判断"这个版本是不是比当前新"。漏了这一行 ⇒ formatSize 是 undefined，
+           弹窗一开就抛错（整块界面不渲染），而主进程那边完全正常。 */
+        /shared[\\/]updateRules\.js$/
       ]
     },
     outDir: 'dist-renderer',
