@@ -55,6 +55,38 @@ function aspectRatioOf(key) {
 }
 
 /**
+ * 素材宽高 → 最接近的比例 key（导入素材时自动定画面比例）。
+ *
+ * ⚠️ 为什么按"归一化后的宽高比距离"而不是"分辨率差"：
+ *   竖屏 1080×1920 与横屏 1920×1080 的像素总数相同，按面积比根本分不出来；
+ *   只有把宽高约到最简比再比，9:16 才能稳稳落到 9:16、而不是被 16:9 抢走。
+ *
+ * 判定：先算素材宽高比 r=w/h，再对每个候选比例算 |log(r/r0)|（**对数距离**，
+ * 这样"1:2 与 9:16 谁更接近 3:4"在放大缩小一侧是对称的，不会出现
+ * 1:100 与 100:1 因为算术差而偏心）。距离相同取表里靠前的（顺序即偏好）。
+ *
+ * @param {number} width  素材像素宽
+ * @param {number} height 素材像素高
+ * @returns {string} 最接近的比例 key（非法输入回落 DEFAULT_ASPECT）
+ */
+function closestAspectFor(width, height) {
+  const w = Number(width)
+  const h = Number(height)
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return DEFAULT_ASPECT
+  const ratio = w / h
+  let best = ASPECTS[0]
+  let bestDist = Infinity
+  for (const item of ASPECTS) {
+    const dist = Math.abs(Math.log(ratio / (item.w / item.h)))
+    if (dist < bestDist) {
+      best = item
+      bestDist = dist
+    }
+  }
+  return best.key
+}
+
+/**
  * 基准分辨率 + 画面比例 → 成片尺寸。宽高都取偶数
  * （ffmpeg 的 yuv420p 要求偶数，奇数会在编码那一步报 "width not divisible by 2"）。
  *
@@ -106,5 +138,6 @@ module.exports = {
   aspectOf,
   normalizeAspect,
   aspectRatioOf,
+  closestAspectFor,
   outputSizeFor
 }

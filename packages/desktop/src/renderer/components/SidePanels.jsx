@@ -4526,11 +4526,18 @@ function ExportPanel({
             data-export-resolution="1"
             onChange={(event) => setResolution(event.target.value)}
           >
-            {EXPORT_RATE.RESOLUTIONS.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.width} × {item.height}
-              </option>
-            ))}
+            {EXPORT_RATE.RESOLUTIONS.map((item) => {
+              /* 显示**按当前画面比例结算后的真实尺寸**，不是档位基准（基准恒为横向 16:9）。
+                 以前下拉里永远写着 1920 × 1080，用户导入竖屏、摘要条明明写着 1080×1920，
+                 下拉却还是横的两个数 —— 看起来就像"选了尺寸却没按尺寸导出"。
+                 两处都用 outputSizeFor，与摘要条和中转给主进程的 sizeOut 同一份算术。 */
+              const real = outputSizeFor(item.width, item.height, aspect)
+              return (
+                <option key={item.id} value={item.id} data-w={real.width} data-h={real.height}>
+                  {item.id.toUpperCase()} · {real.width} × {real.height}
+                </option>
+              )
+            })}
           </select>
         </label>
 

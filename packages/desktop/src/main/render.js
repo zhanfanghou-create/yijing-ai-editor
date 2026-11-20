@@ -1973,7 +1973,30 @@ function buildPlan({
       ? ''
       : `trim=start=${round(offset)}:duration=${round(dur * pipRate)},${speed.setptsExpr(pipRate, round)}${reverse.videoReversePart(clip)},`
 
-    filters.push(`${pipCurve || `[${idx}:v]`}${seek}scale=${w}:-2,setsar=1,fps=${fpsArg},format=${pixFmt}${alphaPart}[pipin${i}]`)
+    /**
+     * ⚠️ 画中画流的 PTS 必须**平移到显示窗口起点 t0**，不能停在 0。
+     *
+     * 这段代码活了很久都是 `fps` 之后直接进效果链 —— 流的 PTS 从 0 开始，
+     * 但 enable 窗口是 [t0, t1]（t0 = clip.start - 转场位移）。于是在 t0>0 时：
+     *   · 画中画流在成片 t=dur 就 EOF（它只有 dur 秒），
+     *   · 而窗口要到 t1=t0+dur 才结束，
+     *   · overlay 默认 eof_action=repeat ⇒ 最后一帧被反复叠加 t0 秒。
+     * 画中画默认铺满画布，看起来就是"成片中间整幅画面卡死不动" —— 不是主链坏了，
+     * 是一层静止的画中画盖在上面。素材比窗口短时更早开始定格。
+     *
+     * 音频画中画早就做对了：bed 链用 `adelay=${delay}:all=1`（2129/2160 行）平移到 t0。
+     * 这里补上视频侧的等价操作：`setpts=PTS-STARTPTS+t0/TB`。放在 fps 之后 —— fps
+     * 把 PTS 归一成从 0 开始的等间隔序列，再整体平移最干净；曲线变速分支的 concat
+     * 同样归零，一并覆盖。图片分支（-loop）也是从 0 起，同样需要这段平移。
+     *
+     * 平移后画中画流占 [t0,t1]，与窗口同起同止，enable 结束时流也刚好 EOF ——
+     * repeat 的那点帧落在 enable 之外，看不见，定格消失。
+     */
+    const pipShift = `,setpts=PTS-STARTPTS+${round(t0)}/TB`
+    filters.push(
+      `${pipCurve || `[${idx}:v]`}${seek}scale=${w}:-2,setsar=1,fps=${fpsArg},format=${pixFmt}${alphaPart}` +
+        `${pipShift}[pipin${i}]`
+    )
     /**
      * 画中画同样吃效果链（圆角/蒙版/抠像/描边/阴影）。
      * ⚠️ 遮罩走**运行时 geq**（不预生成 PNG）：画中画的高度由素材比例决定，

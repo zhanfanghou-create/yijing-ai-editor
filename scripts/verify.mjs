@@ -3215,6 +3215,43 @@ const GATES = [
     count: /UI_POLISH_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
   },
   {
+    id: 'aspect-follow',
+    name: '静态·画面比例跟随（导入竖屏素材自动切 9:16 + 导出下拉显示按比例的结算尺寸）',
+    argv: [NODE, 'tools/check-aspect-follow.mjs'],
+    // 稳定数字 19 = 7 纯函数 + 9 接线（App 导入两道守卫 / 下拉 outputSizeFor）+ 3 结算尺寸。
+    // 期望写死（1080×1920 等），不从被测函数反算；负对照见 selftest。
+    expected: 19,
+    marker: /ASPECT_FOLLOW_OK/,
+    count: /ASPECT_FOLLOW_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'aspect-follow-selftest',
+    name: '自证·比例跟随判据可分辨（写死基准尺寸/缺守卫/拿像素总量分不清横竖都判红）',
+    argv: [NODE, 'tools/check-aspect-follow.mjs', '--selftest'],
+    expected: 23,
+    marker: /ASPECT_FOLLOW_SELFTEST_OK/,
+    count: /ASPECT_FOLLOW_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
+    id: 'pip-freeze',
+    name: '画中画卡死闸门（画中画 PTS 平移到窗口起点 + 真机导出抽帧数静止段）',
+    argv: [NODE, 'tools/check-pip-freeze.mjs'],
+    // 稳定数字 11 = 7 静态（buildPlan 字符串/音视频对称/负对照）+ 4 真机。
+    // 真机抽帧判据读**成片像素**：窗口内静止帧对 ≤1。真实源码负对照（去掉 pipShift）
+    // 实测红在这一条（旧版 3 对静止 / 修复版 0 对）。无 ffmpeg 走 exit 2 = SKIP。
+    expected: 11,
+    marker: /PIP_FREEZE_OK/,
+    count: /PIP_FREEZE_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)\s+skip=(?<s>\d+)/
+  },
+  {
+    id: 'pip-freeze-selftest',
+    name: '自证·画中画卡死判据可分辨（旧链无 +t0 平移被判红）',
+    argv: [NODE, 'tools/check-pip-freeze.mjs', '--selftest'],
+    expected: 7,
+    marker: /PIP_FREEZE_SELFTEST_OK/,
+    count: /PIP_FREEZE_SELFTEST_STATS\s+total=(?<t>\d+)\s+pass=(?<p>\d+)\s+fail=(?<f>\d+)/
+  },
+  {
     id: 'preview-aspect',
     name: '客户端 E2E（预览区画面比例：七个比例逐个点，画布真的换形状）',
     argv: [NODE, 'tools/check-preview-aspect.mjs'],

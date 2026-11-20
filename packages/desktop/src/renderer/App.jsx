@@ -75,7 +75,7 @@ import * as proxyTable from '../shared/proxy.js'
 /* 录音配音：麦克风在渲染层采，落盘在主进程（recording:save） */
 import Recorder from './components/Recorder.jsx'
 /** 画面比例真源（与导出共用同一份表） */
-import { DEFAULT_ASPECT, normalizeAspect } from '../shared/aspect.js'
+import { DEFAULT_ASPECT, normalizeAspect, closestAspectFor } from '../shared/aspect.js'
 /** 导出规格（分辨率档）：它现在是**草稿属性**，与画面比例同一套持久化 */
 import { DEFAULT_RESOLUTION, readResolution } from '../shared/exportRate.js'
 /** 复合片段：新建 / 展开 / 解除。展开这一支是预览与导出**同一个出口** */
@@ -2619,6 +2619,27 @@ export default function App() {
       // 里 set 前缀那条注释）。是真实影片 E2E 第一次真的按下了「导入」才逼出来的。
       setWbTab('media')
       setWbNode(defaultNodeOf('media'))
+      /**
+       * 导入素材时自动把画面比例切到素材的形状（竖屏素材 → 9:16）。
+       *
+       * ⚠️ 两个守卫都不能省：
+       *   ① **时间线还空着**才自动切 —— 用户已经在编排片段了，说明比例是他自己的选择，
+       *      这时来了个新素材就把整个画布变形，等于偷偷改了他的项目。
+       *   ② **当前仍是默认 16:9**才切 —— 用户主动切过 1:1 就是要用 1:1，
+       *      导入任何素材都不该把它改回去。
+       * 两条都满足时，取第一张有有效宽高的**视频**素材定比例（图片不要定，
+       * 图片可能是横的 logo、却混在竖屏素材批里）；纯音频（无宽高）自然跳过。
+       */
+      if (clips.length === 0 && aspect === DEFAULT_ASPECT) {
+        const guide = assets.find((item) => item.width > 0 && item.height > 0 && item.kind === 'video')
+        if (guide) {
+          const next = closestAspectFor(guide.width, guide.height)
+          if (next !== aspect) {
+            setAspect(next)
+            toast.good(`已按素材自动设为 ${next} 比例`)
+          }
+        }
+      }
       const skipped = (rows || []).length - list.length
       toast.good(
         skipped > 0
@@ -2627,7 +2648,7 @@ export default function App() {
       )
       return assets
     },
-    [toast]
+    [toast, clips.length, aspect]
   )
 
   const handlePickMedia = useCallback(async () => {
